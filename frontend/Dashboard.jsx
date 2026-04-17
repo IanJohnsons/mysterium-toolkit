@@ -1546,7 +1546,7 @@ const MysteriumDashboard = () => {
           <SettlementHistoryCard backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
 
           {/* Node Quality — sourced from Mysterium Discovery API */}
-          <NodeQualityCard nodeQuality={metrics.nodeQuality} nodeStatus={metrics.nodeStatus} backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} nodeUrl={metrics._node_toolkit_url || null} />
+          <NodeQualityCard nodeQuality={metrics.nodeQuality} nodeStatus={metrics.nodeStatus} backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} nodeUrl={metrics._fleet_node && metrics._node_id ? null : (metrics._node_toolkit_url || null)} />
 
           {/* Earnings History — daily/weekly/monthly/all bar chart */}
           <EarningsHistoryCard backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
@@ -4139,7 +4139,7 @@ const NodeQualityCard = ({ nodeQuality: q, nodeStatus, backendUrl, authHeaders, 
           <button
             onClick={handleTest}
             disabled={testing}
-            className="px-2 py-1 text-xs font-semibold uppercase tracking-wider bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 rounded hover:bg-cyan-500/30 transition disabled:opacity-50"
+            className="px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-normal bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 rounded hover:bg-cyan-500/30 transition disabled:opacity-50"
             title="Live probe via Mysterium Discovery network — bypasses 10-minute cache"
           >
             {testing ? '⟳ Checking…' : '⚡ Discovery Check'}
