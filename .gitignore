@@ -1,0 +1,38 @@
+# ── Configuration & secrets ─────────────────────────────────────────────────
+config/setup.json
+config/.env
+config/.agreed
+.env
+
+# ── Databases ────────────────────────────────────────────────────────────────
+config/*.db
+config/*.db-shm
+config/*.db-wal
+config/earnings_history.json
+config/uptime_log.json
+config/node_identity.txt
+
+# ── Runtime ──────────────────────────────────────────────────────────────────
+logs/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# ── Frontend build ───────────────────────────────────────────────────────────
+dist/
+node_modules/
+.build/index-CzfZoJJ4.js
+
+# ── OS / editor ──────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# ── Keep config/ dir but not its contents ───────────────────────────────────
+!config/.gitkeep
+!config/nodes.json.example

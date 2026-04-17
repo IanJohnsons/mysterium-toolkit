@@ -1,0 +1,42 @@
+{
+  "nodes": [
+    {
+      "id": "vps",
+      "label": "My VPS Node",
+      "url": "http://localhost:4449",
+      "toolkit_url": "http://localhost:5000",
+      "toolkit_api_key": "YOUR_VPS_DASHBOARD_API_KEY"
+    },
+    {
+      "id": "laptop",
+      "label": "Home Laptop Node",
+      "url": "http://YOUR_HOME_PUBLIC_IP:4449",
+      "toolkit_url": "http://YOUR_HOME_PUBLIC_IP:5000",
+      "toolkit_api_key": "YOUR_LAPTOP_DASHBOARD_API_KEY"
+    }
+  ]
+}
+
+// ── Field reference ──────────────────────────────────────────────────────────
+// id              Unique identifier. No spaces. Example: vps-de, laptop-home
+// label           Display name shown in the fleet overview
+// url             TequilAPI address of the Mysterium node (default port 4449)
+// toolkit_url     Toolkit backend address on that node (port 5000)
+//                 Set this for full data: history, sessions, CPU/RAM, traffic
+//                 Omit this for live-only data (no history, no resources)
+// toolkit_api_key The dashboard_api_key from that node's config/setup.json
+//
+// ── How to find the API key on a remote node ─────────────────────────────────
+// On the remote node machine, open:
+//   /path/to/mysterium-toolkit/config/setup.json
+// and copy the value of "dashboard_api_key"
+//
+// ── Port forwarding (home nodes behind a router) ─────────────────────────────
+// If a node is behind a home router, forward port 5000 on the router
+// to the local IP of that machine (e.g. 192.168.1.100).
+// Test reachability from the master machine:
+//   curl http://NODE_IP:5000/health
+//
+// ── Hot reload ───────────────────────────────────────────────────────────────
+// Edit this file while the toolkit is running.
+// Changes apply within 30 seconds — no restart needed.
