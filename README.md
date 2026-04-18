@@ -39,7 +39,7 @@ The toolkit needs a running Mysterium node to monitor. This is the first thing s
 
 **Node found** — prints `✓ Mysterium node detected` and hands control back to setup.sh.
 
-**No node found** — `node_install_guide.py` shows:
+**No node found** — shows:
 
 ```
 ⚠ No local Mysterium node detected on this machine.
@@ -51,27 +51,25 @@ The toolkit needs a running Mysterium node to monitor. This is the first thing s
     4. Exit
 ```
 
-Choosing **option 3** hands control to `node_installer.py`, which installs the node completely. Only after the node is installed and running does control return to setup.sh to continue.
-
-Options 1 and 2 continue without a local node — the toolkit can monitor a node running on another machine once the backend is running.
+Choosing **option 3** hands control to `node_installer.py`, which installs the node completely. Only after the node is installed and running does control return to setup.sh. Options 1 and 2 continue without a local node — the toolkit can monitor a node running on another machine once the backend is running and the node IP is entered in the setup wizard.
 
 ---
 
-### Step 0 — Installing the node (option 3)
+### Step 0 — Node installer
 
-`node_installer.py` detects your OS and package manager:
+> Only reached if you had no node and chose option 3 above. If your node was already detected, this section is skipped entirely.
+
+`node_installer.py` takes over, detects your OS and package manager, and shows the available install methods with the recommended option for your distro listed first:
 
 ```
 ℹ Detected OS: [your distro]
 ℹ Package manager: [apt/dnf/pacman/apk]
 ```
 
-Then shows the available install methods. The recommended method for your distro is listed first:
-
 ```
 1. APT install       (recommended for Debian / Ubuntu / Parrot / Kali)
 2. DNF/YUM install   (recommended for Fedora / RHEL / Rocky / Alma)
-3. AUR install       (recommended for Arch / Manjaro)
+3. AUR install       (recommended for Arch / Manjaro / EndeavourOS)
 4. Docker install    — works on any Linux
 5. Manual .deb       — specific version, auto-fetched from GitHub
 6. Official script   — curl | bash
@@ -90,13 +88,11 @@ On Alpine, Docker is the only option — Mysterium provides no APK package.
   Continue? [Y/n]:
 ```
 
-Runs:
+Runs the official Mysterium install script:
 
 ```bash
 curl -sSf https://raw.githubusercontent.com/mysteriumnetwork/node/master/install.sh | bash
 ```
-
-
 
 ---
 
@@ -113,9 +109,7 @@ curl -sSf https://raw.githubusercontent.com/mysteriumnetwork/node/master/install
   Continue? [Y/n]:
 ```
 
-If Docker is not installed, the installer installs Docker Engine automatically first.
-
-Runs:
+If Docker is not installed, the installer installs Docker Engine automatically first. Then runs:
 
 ```bash
 docker run --cap-add NET_ADMIN -d --name myst --restart=unless-stopped \
@@ -154,19 +148,17 @@ Runs the official Mysterium install script. If it fails, asks you to paste a dir
 curl -sSf https://raw.githubusercontent.com/mysteriumnetwork/node/master/install.sh | sudo bash
 ```
 
-Works on Debian, Ubuntu, Fedora, and most systemd-based distros.
-
 ---
 
 #### Manual .deb
 
-Auto-fetches the latest release from GitHub with architecture detection and asks you to confirm the download. You can also paste a direct URL or a local file path.
+Auto-fetches the latest release from GitHub with architecture detection (amd64, arm64, armhf) and asks you to confirm. You can also paste a direct URL or a local file path.
 
 ---
 
 #### After install — set node password
 
-Immediately after a successful install, `node_installer.py` sets the password:
+Immediately after a successful install, `node_installer.py` sets the TequilAPI password:
 
 ```
 Set Node Password
@@ -175,13 +167,7 @@ Set Node Password
   Choose a TequilAPI password (press Enter to use default 'mystberry'):
 ```
 
-Runs:
-
-```bash
-myst config set tequilapi.auth.password YOUR_PASSWORD
-```
-
-Then restarts the node. On success:
+Runs `myst config set tequilapi.auth.password YOUR_PASSWORD`, then restarts the node. On success:
 
 ```
 ✓ Password set successfully.
@@ -387,7 +373,7 @@ Connects the dashboard to your node and sets up authentication. Two modes:
 
 - Dashboard port: 5000 by default, auto-suggests alternative if 5000 is in use
 - Timezone: auto-detected from system
-- Optionally asks for your Polygon wallet address
+- Optionally asks for your Polygon wallet address (0x...)
 
 #### Custom mode
 
@@ -440,7 +426,7 @@ Default 5000.
 
 **Step 5.5 — Timezone**
 
-Auto-detected from system. Used for daily/monthly resets in earnings and traffic tracking.
+Auto-detected from system. Used for daily/monthly resets in earnings and traffic tracking. Change later in `config/setup.json`.
 
 **Step 6 — Dashboard authentication**
 
@@ -548,7 +534,7 @@ sudo ./stop.sh
 ```
 
 Open the dashboard: `http://localhost:5000`  
-From another device on your network: `http://YOUR_MACHINE_IP:5000`
+From your phone or any device on your network or the internet: `http://YOUR_MACHINE_IP:5000`
 
 ---
 
@@ -571,22 +557,118 @@ If you run `setup.sh` on a machine that already has a configured toolkit, it det
 
 ## What It Does
 
-- **Earnings tracking** — unsettled MYST, lifetime gross, settled balance, daily / weekly / monthly delta from SQLite snapshots every 10 minutes
-- **Live MYST price** — EUR and USD conversion via CoinPaprika + Frankfurter ECB. Both free, no account, no API key
-- **Earnings history chart** — Daily / Weekly / Monthly / All tabs, auto-scales to history length, selective data cleanup built in
-- **Session archive** — every session saved to SQLite with token values frozen before Mysterium zeroes them at settlement
-- **Node quality** — Discovery quality score, latency, bandwidth, uptime 24h / 30d, packet loss, connected %
-- **Session analytics** — full session history, active tunnels, consumer breakdown by country and service type
-- **On-chain wallet** — live MYST balance on Polygon via Polygonscan, settlement history, beneficiary address
-- **Data traffic** — VPN vs NIC vs overhead, Today / Month / 3 Months / Year / All Time, backed by vnstat
-- **Node control** — restart node, settle MYST on-chain, payment config tuner
-- **System health** — 13 subsystems, one-click Fix & Lock, survives reboots
-- **Adaptive CPU governor** — switches powersave / schedutil / performance automatically based on active session count
-- **Adaptive conntrack** — connection tracking scales with tunnel count: 128K / 256K / 512K
-- **Fleet monitor** — manage multiple nodes from one central dashboard, data fully isolated per node
-- **Autostart** — systemd service, starts after the Mysterium node, restarts on crash
-- **Firewall management** — detect type, apply correct rules, clean duplicate FORWARD rules
-- **11 themes** — Emerald, Cyber, Sunset, Violet, Crimson, Matrix, Phosphor, Ghost, Midnight, Steel, Military
+The dashboard runs in your browser — on the same machine, on your phone, or from anywhere in the world as long as port 5000 is reachable. Every action below is available remotely from any device with a browser.
+
+### Earnings
+
+- **Unsettled MYST** — live balance not yet moved on-chain
+- **Lifetime gross** — all-time cumulative earnings before Hermes fee
+- **Settled balance** — MYST ready to withdraw from the payment channel
+- **Daily / Weekly / Monthly delta** — computed from SQLite snapshots taken every 10 minutes. Shows *BUILDING* until enough history exists
+- **Live MYST price** — EUR and USD conversion via CoinPaprika + Frankfurter ECB. Both free, no account, no API key required
+- **Earnings history chart** — Daily / Weekly / Monthly / All tabs, auto-scales to your history length
+- **Selective data cleanup** — delete earnings snapshots by date range, two-click confirmation
+
+### Session archive
+
+Every session is saved to SQLite with token values frozen the moment the session ends — before Mysterium zeroes them after settlement. The archive survives node restarts, re-installs, and settlements. View full history, filter by country, service type, or date.
+
+### Node quality
+
+- Discovery quality score, latency, and bandwidth from the Mysterium Discovery API
+- Uptime 24h and 30d — tracked locally, independent of the Discovery API
+- Packet loss percentage, connected percentage
+- Expandable sparkline — quality score, latency, and bandwidth over 7 / 14 / 30 / 90 days
+
+### Session analytics
+
+- Active tunnels — live consumer connections with identity and service type
+- Consumer breakdown by country and service type
+- Full session history with duration, data transferred, and earnings per session
+
+### On-chain wallet
+
+- Live MYST balance on Polygon via Polygonscan
+- Full settlement history
+- Beneficiary (payout) address display
+
+### Data traffic
+
+VPN traffic vs total NIC traffic vs overhead — Today / Month / 3 Months / Year / All Time, backed by vnstat. Separate per-interface tracking for `myst*` tunnel interfaces via udev auto-registration.
+
+### Node control
+
+All node control actions are authenticated and available remotely from any browser:
+
+- **Restart node** — tries systemctl → service → Docker → TequilAPI stop/start in sequence. Works on bare metal, VM, and Docker installs without any manual SSH
+- **Settle MYST on-chain** — triggers settlement via TequilAPI transactor. Fetches identity and hermes_id automatically, handles all endpoint variants across node versions
+- **Payment config tuner** — read and write all 7 payment configuration keys live via `myst config set`, without editing config files manually:
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `payments.zero-stake-unsettled-amount` | 5.0 MYST | Auto-settle threshold (zero-stake) |
+| `payments.unsettled-max-amount` | 10.0 MYST | Maximum unsettled before forced settlement |
+| `payments.min_promise_amount` | 0.05 MYST | Minimum promise value to accept a session |
+| `payments.provider.invoice-frequency` | 60s | How often to send payment invoices during a session |
+| `pingpong.balance-check-interval` | 90s | Consumer balance poll interval |
+| `pingpong.promise-wait-timeout` | 180s | How long to wait for a consumer promise |
+| `payments.settle.min-amount` | 1.0 MYST | Minimum balance required for manual settlement |
+
+Two built-in presets: **Node Defaults** and **High Load** (optimised for 50+ concurrent sessions — raises thresholds and intervals to reduce rate limiting).
+
+### System health
+
+13 subsystems monitored continuously. Every fix can be applied with one click and locked to survive reboots — from anywhere, including your phone:
+
+| Subsystem | Checks | Fix action |
+|-----------|--------|------------|
+| Connection Tracking | Table fill %, auto-scales with tunnels | Expand to load-appropriate tier |
+| CPU Load Balancing | irqbalance and RPS | Install irqbalance, set RPS to all cores |
+| Mysterium Service | Node process and systemd / Docker status | Restart node |
+| Kernel Network Tuning | 12 sysctl parameters | Apply safe network buffer values |
+| NIC Interrupt Coalescing | rx-usecs, adaptive-rx | Set rx-usecs=250µs |
+| NIC Checksum Offload | rx_csum_offload_errors | Disable faulty RX checksum |
+| Firewall Backend | iptables-legacy vs nftables conflict | Switch iptables alternative |
+| Port Reachability | TequilAPI and service ports | Restart node if unreachable |
+| Stale Processes | Orphaned toolkit PIDs | Terminate stale processes |
+| Auto-RPS Watcher | systemd timer for VPN interface tuning | Install watcher timer |
+| Swap / Memory | Swap size and swappiness | Create 4 GB swapfile |
+| CPU Governor | Per-core governor, auto-adjusts with load | Applied automatically |
+| BBR Congestion Control | tcp_congestion_control | Enable BBR and fq |
+
+**Fix & Lock** — apply a fix and persist it so it survives the next reboot. **Unlock** — remove the persisted setting and revert to system defaults.
+
+### System metrics history
+
+CPU%, RAM%, disk%, and CPU temperature as sparklines over 1 / 3 / 7 / 14 / 30 days. Sampled every 5 minutes. Loads on demand — no background requests until expanded.
+
+### Adaptive subsystems
+
+Two subsystems adjust automatically every 10 minutes with no manual action:
+
+**CPU Governor** — scales with active session count:
+
+| Sessions | Governor | Effect |
+|----------|----------|--------|
+| 0 | `powersave` | Minimum frequency — CPU stays cool |
+| 1–5 | `schedutil` | Kernel-managed — ramps instantly under load |
+| 6+ | `performance` | Maximum throughput |
+
+**Connection Tracking** — scales with active VPN tunnels:
+
+| Tunnels | conntrack max |
+|---------|--------------|
+| 0–4 | 128,000 |
+| 5–19 | 256,000 |
+| 20+ | 512,000 |
+
+### Data Management
+
+Full control over all 7 persistent databases from the dashboard. Delete by type, by date range, or clear all. Two-click confirmation on all destructive actions. Automatic daily pruning within configured retention windows.
+
+### Themes
+
+11 built-in themes: Emerald · Cyber · Sunset · Violet · Crimson · Matrix · Phosphor · Ghost · Midnight · Steel · Military
 
 ---
 
@@ -594,9 +676,31 @@ If you run `setup.sh` on a machine that already has a configured toolkit, it det
 
 | Type | Installs | Use for |
 |------|----------|---------|
-| **Type 1 — Full** | Backend, web dashboard, CLI, kernel tuning, firewall | Your main node machine |
-| **Type 2 — Fleet Master** | Full install + guided nodes.json setup | Central machine managing multiple nodes |
-| **Type 3 — Lightweight** | Backend only, no frontend, no Node.js | Remote nodes monitored by a fleet master |
+| **Type 1 — Full** | Backend, web dashboard, CLI, kernel tuning, firewall | Your main node machine — full remote control from any device |
+| **Type 2 — Fleet Master** | Full install + all Type 1 features + guided nodes.json setup | Central machine managing and controlling multiple remote nodes |
+| **Type 3 — Lightweight** | Backend only, no frontend, no Node.js | Remote node monitored and controlled by a fleet master |
+
+### Type 1 — Full install
+
+Everything runs on the node machine itself. The web dashboard is served directly from this machine on port 5000. Access it from your phone, laptop, or any browser — locally or remotely. All node control actions (restart, settle, health fixes, payment config) run directly on this machine.
+
+### Type 2 — Fleet Master
+
+Installs the full toolkit plus fleet management. The central dashboard shows all registered remote nodes in a single view. For each remote node the fleet master can:
+
+- View all earnings, sessions, quality, traffic, and system health data
+- Restart the remote node
+- Trigger settlement on the remote node
+- Apply and persist system health fixes on the remote node
+- Read and write payment config on the remote node
+- View earnings chart, traffic history, and session archive from the remote node
+- Manage data retention on the remote node
+
+All remote control actions are proxied through the fleet master — the remote node's API key never leaves the server side.
+
+### Type 3 — Lightweight
+
+Backend only — no web dashboard, no Node.js required. Minimal resource usage. Runs on the remote node machine and serves `/peer/data` so the fleet master can read all metrics from it. All monitoring and control is handled by the fleet master.
 
 ---
 
@@ -615,6 +719,42 @@ sudo journalctl -u mysterium-toolkit -f
 
 ---
 
+## Fleet Mode
+
+Each node runs its own toolkit backend. The fleet master reads data from each node over HTTP using its API key. Data is never mixed between nodes.
+
+### Setup
+
+1. Install the toolkit on each node — Type 1 for full local access, Type 3 for lightweight remote-only
+2. Find each node's API key in `config/setup.json` → `dashboard_api_key`
+3. Ensure port 5000 is reachable from the fleet master (port forward if behind NAT)
+4. Create `config/nodes.json` on the fleet master machine:
+
+```json
+{
+  "nodes": [
+    {
+      "id": "vps",
+      "label": "My VPS Node",
+      "url": "http://localhost:4449",
+      "toolkit_url": "http://localhost:5000",
+      "toolkit_api_key": "VPS_API_KEY_HERE"
+    },
+    {
+      "id": "home",
+      "label": "Home Node",
+      "url": "http://YOUR_HOME_IP:4449",
+      "toolkit_url": "http://YOUR_HOME_IP:5000",
+      "toolkit_api_key": "HOME_API_KEY_HERE"
+    }
+  ]
+}
+```
+
+Hot-reload: edit `nodes.json` while running — changes apply within 30 seconds.
+
+---
+
 ## Permissions
 
 The backend always runs as your normal user, never as root. During setup, `setup.sh` writes `/etc/sudoers.d/mysterium-toolkit` with narrow passwordless rules. These never expire.
@@ -625,9 +765,9 @@ The backend always runs as your normal user, never as root. During setup, `setup
 | `ethtool` | NIC coalescing and checksum |
 | `modprobe` | Load kernel modules (tcp_bbr, nf_conntrack) |
 | `bash` | Write config to /etc/sysctl.d/, /usr/local/bin/, /etc/systemd/ |
-| `systemctl restart mysterium-*` | Node restart from health panel |
+| `systemctl restart mysterium-*` | Node restart from dashboard |
 | `cpupower frequency-set` | Adaptive CPU governor |
-| `iptables` / `nft` | Read firewall rules |
+| `iptables` / `nft` | Read and manage firewall rules |
 | `fallocate` / `mkswap` / `swapon` | Create swapfile |
 
 To regenerate after an update: `sudo ./update.sh`
@@ -654,7 +794,7 @@ Applied automatically during setup when the node runs on the same machine. Skipp
 
 ### VPS / virtual machine detection
 
-Detected via `systemd-detect-virt` and `hypervisor` flag in `/proc/cpuinfo`. On a VPS: CPU governor and IRQ tuning skipped, all network tuning applied.
+Detected via `systemd-detect-virt` and `hypervisor` flag in `/proc/cpuinfo`. On a VPS: CPU governor and IRQ tuning are skipped — these require bare-metal CPU frequency scaling access. All network tuning applies on both bare metal and VPS.
 
 Apply later via System Health → Fix All, or manually:
 
@@ -685,7 +825,7 @@ Based on active rules, not binary presence.
 | 51820 | UDP | WireGuard |
 | 10000–65000 | UDP | P2P / NAT hole punching |
 
-> **Type 3:** firewall skipped — node machine manages its own rules.
+> **Type 3:** firewall configuration is skipped — the node machine manages its own rules. Run setup on the node machine to apply them there.
 
 Rules are persisted automatically:
 
@@ -696,80 +836,11 @@ Rules are persisted automatically:
 
 ---
 
-## Adaptive Subsystems
-
-**CPU Governor** — adjusts every 10 minutes:
-
-| Sessions | Governor | Effect |
-|----------|----------|--------|
-| 0 | `powersave` | Minimum frequency |
-| 1–5 | `schedutil` | Kernel-managed |
-| 6+ | `performance` | Maximum throughput |
-
-**Connection Tracking** — adjusts every 10 minutes:
-
-| Tunnels | conntrack max |
-|---------|--------------|
-| 0–4 | 128,000 |
-| 5–19 | 256,000 |
-| 20+ | 512,000 |
-
----
-
-## Fleet Mode
-
-Each node runs its own toolkit backend. The central dashboard reads data from each node over HTTP. Data is never mixed between nodes.
-
-### Setup
-
-1. Install the toolkit on each node (Type 1 or Type 3)
-2. Find each node's API key in `config/setup.json` → `dashboard_api_key`
-3. Ensure port 5000 is reachable from the central machine
-4. Create `config/nodes.json` on the central machine:
-
-```json
-{
-  "nodes": [
-    {
-      "id": "vps",
-      "label": "My VPS Node",
-      "url": "http://localhost:4449",
-      "toolkit_url": "http://localhost:5000",
-      "toolkit_api_key": "VPS_API_KEY_HERE"
-    },
-    {
-      "id": "home",
-      "label": "Home Node",
-      "url": "http://YOUR_HOME_IP:4449",
-      "toolkit_url": "http://YOUR_HOME_IP:5000",
-      "toolkit_api_key": "HOME_API_KEY_HERE"
-    }
-  ]
-}
-```
-
-Hot-reload: edit `nodes.json` while running — changes apply within 30 seconds.
-
----
-
-## Earnings
-
-| Field | Source | Description |
-|-------|--------|-------------|
-| Unsettled | TequilAPI `earnings_tokens` | Earned, not yet settled on-chain |
-| Lifetime Gross | TequilAPI `earnings_total_tokens` | All-time cumulative, before Hermes fee |
-| Hermes Channel | TequilAPI `balance_tokens` | Ready to withdraw — 0.0000 means already settled |
-| Daily / Weekly / Monthly | SQLite snapshots every 10 min | Shows BUILDING until enough history exists |
-| Quality history chart | Sparkline inside Node Quality card | Score, latency, bandwidth — 7 to 90 day windows |
-| System metrics history | CPU, RAM, disk, temp sparklines | 5 min interval — 1 to 30 day windows |
-| Data Management panel | Storage overview for all 7 databases | Delete by type or age, two-click confirm |
-| ≈ €X.XX / $X.XX | CoinPaprika + Frankfurter ECB | Fiat value at current MYST price — no key needed |
-
-### Data Management
+## Data Management
 
 The **Data Management** card (below System Health) gives full control over all persistent storage.
 
-#### Databases
+### Databases
 
 | Database | File | Records | Interval |
 |----------|------|---------|----------|
@@ -799,33 +870,7 @@ Override in `config/setup.json`:
 "data_retention": { "earnings": 730, "sessions": 180, "quality": 60 }
 ```
 
-Restart the backend after editing.
-
-#### Quality History & System Metrics Charts
-
-The **Node Quality** card has an expandable sparkline showing score, latency, and bandwidth over 7 / 14 / 30 / 90 days.
-
-The **System Metrics History** card shows CPU%, RAM%, disk%, and temperature over 1 / 3 / 7 / 14 / 30 days. Both load on demand.
-
----
-
-## System Health
-
-| Subsystem | Checks | Fix action |
-|-----------|--------|------------|
-| Connection Tracking | Table fill %, auto-scales with tunnels | Expand to load-appropriate tier |
-| CPU Load Balancing | irqbalance and RPS | Install irqbalance, set RPS to all cores |
-| Mysterium Service | Node process and systemd / Docker status | Restart node |
-| Kernel Network Tuning | 12 sysctl parameters | Apply safe network buffer values |
-| NIC Interrupt Coalescing | rx-usecs, adaptive-rx | Set rx-usecs=250µs |
-| NIC Checksum Offload | rx_csum_offload_errors | Disable faulty RX checksum |
-| Firewall Backend | iptables-legacy vs nftables conflict | Switch iptables alternative |
-| Port Reachability | TequilAPI and service ports | Restart node if unreachable |
-| Stale Processes | Orphaned toolkit PIDs | Terminate stale processes |
-| Auto-RPS Watcher | systemd timer for VPN interface tuning | Install watcher timer |
-| Swap / Memory | Swap size and swappiness | Create 4 GB swapfile |
-| CPU Governor | Per-core governor, auto-adjusts with load | Applied automatically |
-| BBR Congestion Control | tcp_congestion_control | Enable BBR and fq |
+Only the keys you specify are overridden. Restart the backend after editing.
 
 ---
 
