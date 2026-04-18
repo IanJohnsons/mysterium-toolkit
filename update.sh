@@ -69,6 +69,13 @@ if [ -n "$_NODES_BACKUP" ] && [ ! -f "config/nodes.json" ]; then
     echo -e "  ${GREEN}✓ config/nodes.json restored after pull${NC}"
 fi
 
+# ── Fix ownership on config/ — git pull runs as root and can make DB files root-owned ──
+_REAL_USER="${SUDO_USER:-$USER}"
+if [ "$_REAL_USER" != "root" ]; then
+    chown -R "$_REAL_USER:$_REAL_USER" "$TOOLKIT_DIR/config/" 2>/dev/null || true
+    echo -e "  ${GREEN}✓ config/ ownership corrected → $_REAL_USER${NC}"
+fi
+
 # ── New version ───────────────────────────────────────────────────────────
 NEW_VERSION=$(cat VERSION 2>/dev/null || echo "unknown")
 echo -e "  Version: ${BOLD}v${NEW_VERSION}${NC}"
