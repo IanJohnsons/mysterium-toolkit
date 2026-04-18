@@ -18,8 +18,526 @@ cd mysterium-toolkit
 sudo ./setup.sh
 ```
 
-Open the dashboard in your browser: `http://localhost:5000`  
-From your phone or any device on your network: `http://YOUR_MACHINE_IP:5000`
+`setup.sh` is fully interactive. Follow the prompts from start to finish.
+
+> Always clone to a fixed directory name without a version number. The autostart systemd service points to the directory path — if the path changes, autostart breaks.
+
+---
+
+## What setup.sh does — full walkthrough
+
+---
+
+### Step 0 — Node detection
+
+The toolkit needs a running Mysterium node to monitor. This is the first thing setup.sh checks. `node_install_guide.py` takes over and looks four ways:
+
+1. systemd service `mysterium-node` — active status
+2. Docker container named `myst` — running state
+3. Process list — `myst` binary
+4. TequilAPI responding on `localhost:4449`
+
+**Node found** — prints `✓ Mysterium node detected` and hands control back to setup.sh.
+
+**No node found** — `node_install_guide.py` shows:
+
+```
+⚠ No local Mysterium node detected on this machine.
+
+  Choose how to continue:
+    1. Remote mode  — my node runs on ANOTHER machine (enter its IP in the next step)
+    2. Fleet mode   — I manage multiple remote nodes via nodes.json
+    3. Install node — install a Mysterium node on THIS machine first
+    4. Exit
+```
+
+Choosing **option 3** hands control to `node_installer.py`, which installs the node completely. Only after the node is installed and running does control return to setup.sh to continue.
+
+Options 1 and 2 continue without a local node — the toolkit can monitor a node running on another machine once the backend is running.
+
+---
+
+### Step 0 — Installing the node (option 3)
+
+`node_installer.py` detects your OS and package manager:
+
+```
+ℹ Detected OS: [your distro]
+ℹ Package manager: [apt/dnf/pacman/apk]
+```
+
+Then shows the available install methods. The recommended method for your distro is listed first:
+
+```
+1. APT install       (recommended for Debian / Ubuntu / Parrot / Kali)
+2. DNF/YUM install   (recommended for Fedora / RHEL / Rocky / Alma)
+3. AUR install       (recommended for Arch / Manjaro)
+4. Docker install    — works on any Linux
+5. Manual .deb       — specific version, auto-fetched from GitHub
+6. Official script   — curl | bash
+0. Cancel
+```
+
+On Alpine, Docker is the only option — Mysterium provides no APK package.
+
+---
+
+#### APT install — Debian / Ubuntu / Parrot / Kali
+
+```
+· Detected: [distro name]
+· The installer will run automatically. This may take 1-3 minutes.
+  Continue? [Y/n]:
+```
+
+Runs:
+
+```bash
+curl -sSf https://raw.githubusercontent.com/mysteriumnetwork/node/master/install.sh | bash
+```
+
+
+
+---
+
+#### Docker install — any distro including Proxmox / LXC / KVM / Alpine
+
+```
+· Docker found: [version]
+
+· This will create a Docker container named 'myst' with:
+    · Port 4449 mapped (TequilAPI)
+    · Volume 'myst-data' for persistent storage
+    · NET_ADMIN capability (required for WireGuard)
+
+  Continue? [Y/n]:
+```
+
+If Docker is not installed, the installer installs Docker Engine automatically first.
+
+Runs:
+
+```bash
+docker run --cap-add NET_ADMIN -d --name myst --restart=unless-stopped \
+    -p 4449:4449 \
+    -v myst-data:/var/lib/mysterium-node \
+    mysteriumnetwork/myst:latest \
+    service --agreed-terms-and-conditions
+```
+
+On success:
+
+```
+✓ Container is running!
+· TequilAPI available at: http://localhost:4449
+```
+
+> **Proxmox / LXC containers:** enable `NET_ADMIN` before running. In the Proxmox web UI go to container → Options → Features → enable nesting. In the LXC config add `lxc.cap.keep: net_admin`. Without this, WireGuard tunnel creation fails.
+
+---
+
+#### AUR install — Arch / Manjaro / EndeavourOS
+
+Checks for `yay` or `paru`. If found, installs `mysterium-node` from AUR. If neither is found, falls back to Docker automatically.
+
+---
+
+#### DNF / YUM install — Fedora / RHEL / Rocky / AlmaLinux
+
+Runs the official Mysterium install script. If it fails, asks you to paste a direct RPM download URL from the [GitHub releases page](https://github.com/mysteriumnetwork/node/releases).
+
+---
+
+#### Official script — universal
+
+```bash
+curl -sSf https://raw.githubusercontent.com/mysteriumnetwork/node/master/install.sh | sudo bash
+```
+
+Works on Debian, Ubuntu, Fedora, and most systemd-based distros.
+
+---
+
+#### Manual .deb
+
+Auto-fetches the latest release from GitHub with architecture detection and asks you to confirm the download. You can also paste a direct URL or a local file path.
+
+---
+
+#### After install — set node password
+
+Immediately after a successful install, `node_installer.py` sets the password:
+
+```
+Set Node Password
+· Setting TequilAPI password via myst config set...
+
+  Choose a TequilAPI password (press Enter to use default 'mystberry'):
+```
+
+Runs:
+
+```bash
+myst config set tequilapi.auth.password YOUR_PASSWORD
+```
+
+Then restarts the node. On success:
+
+```
+✓ Password set successfully.
+· Restarting node to apply password...
+✓ Node restarted with new password.
+· Remember this password — you need it in the toolkit setup wizard.
+```
+
+If the automatic method fails, the manual fallback is shown:
+
+```
+· Set it manually: myst config set tequilapi.auth.password YOUR_PASSWORD
+· Then restart:    sudo systemctl restart mysterium-node
+```
+
+---
+
+#### After password — start all services
+
+`node_installer.py` starts all Mysterium services automatically:
+
+- Waits for TequilAPI to be ready (up to 10 retries)
+- Authenticates and reads your node identity
+- Starts: `wireguard`, `dvpn`, `data_transfer`, `scraping`, `noop`, `monitoring`
+- Persists active services via `myst config set active-services`
+
+```
+· Starting all Mysterium services...
+· Identity: 0x...
+✓ wireguard started
+✓ dvpn started
+✓ data_transfer started
+· noop — skipped or already running
+· monitoring — skipped or already running
+✓ Services persisted: wireguard,dvpn,data_transfer
+```
+
+---
+
+#### After services — complete registration in the browser
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+IMPORTANT: Complete your node setup in the browser:
+
+  1. Open http://YOUR_SERVER_IP:4449/ui
+     (replace YOUR_SERVER_IP with this machine's IP)
+
+  2. Log in and accept the Terms & Conditions
+  3. Claim your node on mystnodes.com:
+     Settings → MMN API Key → paste your key
+  4. Set your payout wallet (beneficiary address)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+· Then return here and continue the toolkit setup wizard.
+```
+
+> **When creating your mystnodes.com account — use email + password, not Google login.** Google login does not let you change your password or recover your account.
+
+`node_installer.py` finishes and **hands control back to setup.sh**.
+
+---
+
+### Choose install type
+
+Back in setup.sh, now that the node is running:
+
+```
+1. Full install        — Node on this machine. Full dashboard, CLI, all features.
+                         Default. Use this for your main node machine.
+
+2. Fleet master        — Central dashboard to monitor multiple remote nodes.
+                         Installs full toolkit. Helps configure nodes.json after setup.
+
+3. Lightweight backend — Backend only, no browser dashboard.
+                         For remote nodes monitored by a fleet master.
+                         No Node.js/npm needed. Minimal resources. Serves /peer/data.
+
+Select (1-3) [default: 1]:
+```
+
+---
+
+### Pre-flight checks
+
+- Detects your package manager: apt · dnf · yum · pacman · apk
+- Checks Python 3.8+ — exits with install instructions if missing or too old
+- Checks pip — installs it if missing
+- Lists optional tools already present: vnstat, ethtool, ufw, docker, node, npm
+- Warns if Node.js/npm not found (web dashboard won't work without it — CLI still works)
+
+---
+
+### Step 0.5 — Stop running toolkit service
+
+If a `mysterium-toolkit` systemd service is already active, it is stopped and disabled before continuing.
+
+---
+
+### Step 1 — Kill old processes
+
+Kills any leftover `app.py`, `vite`, and `npm start` processes from previous toolkit installs.
+
+---
+
+### Step 2 — Scan for previous toolkit installations
+
+`env_scanner.py` scans the machine for any earlier toolkit directories.
+
+---
+
+### Step 2.5 — Data migration
+
+- Removes empty database placeholders that may have shipped in the release zip (these would block migration)
+- `migrate_data.py` scans for a previous install and reports what it found
+- If found: offers to copy earnings history, uptime log, and node config
+- After copying: offers to remove old installs to reclaim disk space
+
+---
+
+### Step 3 — Check existing setup
+
+If a `venv/` and `.env` already exist in the directory, setup asks:
+
+```
+1. Update existing setup (keep config)
+2. Fresh install (delete everything)
+3. Exit
+```
+
+Choosing 1 updates Python packages and rebuilds the frontend, then jumps straight to the firewall step.
+
+---
+
+### Step 4 — Install system tools
+
+The following are installed automatically if missing:
+
+| Tool | Purpose |
+|------|---------|
+| `vnstat` | Network traffic tracking |
+| `ethtool` | NIC interrupt coalescing and checksum |
+| `curl` | API calls and health checks |
+| `iputils` (ping) | Port reachability checks |
+| `lm-sensors` | CPU temperature monitoring |
+| `sqlite3` | Database CLI for diagnostics |
+| `irqbalance` | CPU load balancing across cores |
+| `conntrack` | Connection tracking table reads |
+| `nodejs` / `npm` | Frontend build — Type 1 / 2 only |
+
+A udev rule is written to `/etc/udev/rules.d/99-myst-vnstat.rules` so every `myst*` tunnel interface is automatically registered with vnstat the moment Mysterium creates it — even before the toolkit runs.
+
+vnstat day retention is set to 1095 days (3 years) in `/etc/vnstat.conf`.
+
+---
+
+### Step 5 — Create Python virtual environment
+
+Creates `venv/` — an isolated Python environment. All toolkit packages are installed here, separate from your system Python.
+
+---
+
+### Step 6 — Install Python packages
+
+Installs all dependencies from `requirements.txt` into `venv/`.
+
+---
+
+### Step 7 — Build frontend
+
+Types 1 and 2 only. Copies build config from `.build/`, runs `npm install` and `npm run build`, produces `dist/`, then removes `node_modules` (~88 MB freed). Skipped entirely for Type 3.
+
+---
+
+### Step 7.5 — Detect existing configuration
+
+If `config/setup.json` already exists and is valid, the setup wizard is skipped entirely. `.env` is reconstructed automatically from the existing config. Your dashboard password, API key, node password, and all settings are preserved — no action needed.
+
+---
+
+### Step 8 — Setup wizard
+
+Connects the dashboard to your node and sets up authentication. Two modes:
+
+```
+1. Easy   — node on this machine, auto-detects port and config
+2. Custom — node on another machine, different IP, or manual settings
+```
+
+#### Easy mode
+
+- Scans ports 4449, 4050, 14449, 14050 for a running node
+- If found: confirms port and node version automatically
+- Asks for your Node UI password:
+
+```
+· Your node's TequilAPI is on port [port].
+  Enter the password you set in the Node UI (http://localhost:4449).
+  If you never set one, try leaving it blank or use 'mystberry'.
+
+  Node UI password (press Enter if none):
+```
+
+- Dashboard port: 5000 by default, auto-suggests alternative if 5000 is in use
+- Timezone: auto-detected from system
+- Optionally asks for your Polygon wallet address
+
+#### Custom mode
+
+**Step 1 — Node location**
+
+```
+1. This computer (localhost)
+2. Another computer on my network (LAN) — enter IP
+3. A remote server (VPS/Cloud) — enter IP or domain
+```
+
+**Step 1b — Docker auto-detection**
+
+If localhost is selected, the wizard scans running Docker containers for a `myst` image. If found, the port is read automatically:
+
+```
+✓ Docker container detected: myst
+✓   Mapped TequilAPI port: 4449
+    We'll use this port automatically.
+```
+
+**Step 2 — TequilAPI port**
+
+Default 4449. The wizard warns: *"PORT is a NUMBER, not an API key string!"*
+
+**Step 3 — TequilAPI authentication**
+
+```
+TequilAPI Authentication — this is your Node UI password.
+
+Where to find your password:
+  Open http://localhost:4449/ui in your browser.
+  The password was shown ONCE when you first set up your node.
+  It looks like: xK9#mP2$vL7@nQ4w  (random, unique per install)
+
+  NOT 'mystberry' — that is an old default newer nodes no longer use.
+  If you forgot your password, reset it with:
+    sudo myst account --config-dir=/etc/mysterium-node reset-password
+
+The username is always: myst
+```
+
+**Step 4 — Connection test**
+
+Tests the connection live. If it fails, shows exactly what went wrong and lets you retry or continue anyway.
+
+**Step 5 — Dashboard port**
+
+Default 5000.
+
+**Step 5.5 — Timezone**
+
+Auto-detected from system. Used for daily/monthly resets in earnings and traffic tracking.
+
+**Step 6 — Dashboard authentication**
+
+```
+1. API Key (recommended) — paste a secret key in the login screen
+2. Username + Password   — classic login, username is always: admin
+3. No auth               — local network only, NOT recommended
+```
+
+For **API Key** — the wizard generates a key if you leave the field blank, then shows:
+
+```
+============================================================
+  IMPORTANT — SAVE YOUR API KEY
+============================================================
+
+  API Key: <your-key-here>
+
+  COPY/PASTE this key in the login screen — never type it.
+  Typing causes typos (i vs l, 5 vs 2, 0 vs O, etc).
+  Store it in a password manager or secure note now.
+  Find it later in: .env  and  config/setup.json
+============================================================
+
+  Press Enter to continue...
+```
+
+The wizard does not continue until you press Enter.
+
+For **Username + Password** — generates a password if you leave it blank:
+
+```
+============================================================
+  IMPORTANT — SAVE YOUR CREDENTIALS
+============================================================
+
+  Username : admin
+  Password : <your-password-here>
+
+  The login screen asks for these credentials.
+  Find them later in: .env  and  config/setup.json
+============================================================
+
+  Press Enter to continue...
+```
+
+**Optional extras:**
+
+- Polygon wallet address (auto-detected from settlement history if skipped)
+- Polygonscan API key — free at etherscan.io → My Account → API Keys. Without it: wallet balance updates once/hour. With it: real-time.
+- Log level: INFO (default) / WARNING / DEBUG
+
+After saving, the wizard shows credentials one final time and waits for a second *"Press Enter once you have saved..."* before continuing.
+
+---
+
+### Step 8.5 — Fleet master configuration (Type 2 only)
+
+Creates a `config/nodes.json` template and explains each field.
+
+---
+
+### Step 11 — Kernel tuning
+
+Skipped in remote mode and for Type 3. Skipped if passwordless sudo is not available — shown with the manual command to apply later. Detects VPS/VM automatically. See [Kernel Tuning](#kernel-tuning).
+
+---
+
+### Step 11.5 — Firewall
+
+Skipped for Type 3. See [Firewall](#firewall).
+
+---
+
+### Step 12 — Systemd service and sudoers
+
+Creates or updates `/etc/systemd/system/mysterium-toolkit.service` and writes `/etc/sudoers.d/mysterium-toolkit`.
+
+---
+
+### Step 13 — Done
+
+Prints your dashboard URL and opens `start.sh` automatically:
+
+```
+✓ Dashboard:  http://YOUR_IP:5000
+✓ Config:     config/setup.json
+
+Key tips:
+  · Option 9 — enable autostart so toolkit survives reboots
+  · Option 4 — open the CLI dashboard (terminal UI)
+  · Option 7 — maintenance, uninstall, cleanup old versions
+```
+
+---
+
+## After setup
 
 ```bash
 # Open the control menu — start, stop, autostart and more
@@ -29,29 +547,32 @@ From your phone or any device on your network: `http://YOUR_MACHINE_IP:5000`
 sudo ./stop.sh
 ```
 
-> Always clone to a fixed directory name without a version number. The autostart systemd service points to the directory path — if the path changes, autostart breaks.
+Open the dashboard: `http://localhost:5000`  
+From another device on your network: `http://YOUR_MACHINE_IP:5000`
 
-### Update
+---
+
+## Update
 
 ```bash
 cd mysterium-toolkit
 sudo ./update.sh
 ```
 
-Pulls the latest code, rebuilds the frontend, updates packages and sudoers, restarts the backend. Databases and config are never touched.
+Pulls the latest code, rebuilds the frontend, updates packages and sudoers, restarts the backend. `config/setup.json` and `config/nodes.json` are backed up before the pull and restored automatically. Your dashboard password, API key, node password, and all settings survive the update — no re-configuration needed.
 
-`config/setup.json` and `config/nodes.json` are backed up before the pull and restored automatically if the pull would remove them.
+---
 
-### Re-install on existing machine
+## Re-install on existing machine
 
-If you run `setup.sh` on a machine that already has a configured toolkit, it detects the existing `config/setup.json` and asks whether to keep it. Choosing yes skips the entire setup wizard — your node password, API key, port and fleet settings are preserved. Previous databases and `nodes.json` are migrated automatically.
+If you run `setup.sh` on a machine that already has a configured toolkit, it detects the existing `config/setup.json` and asks whether to keep it. Choosing yes skips the entire setup wizard — your settings are preserved and databases are migrated automatically.
 
 ---
 
 ## What It Does
 
 - **Earnings tracking** — unsettled MYST, lifetime gross, settled balance, daily / weekly / monthly delta from SQLite snapshots every 10 minutes
-- **Live MYST price** — EUR and USD conversion next to your earnings via CoinPaprika + Frankfurter ECB. Both free, no account, no API key
+- **Live MYST price** — EUR and USD conversion via CoinPaprika + Frankfurter ECB. Both free, no account, no API key
 - **Earnings history chart** — Daily / Weekly / Monthly / All tabs, auto-scales to history length, selective data cleanup built in
 - **Session archive** — every session saved to SQLite with token values frozen before Mysterium zeroes them at settlement
 - **Node quality** — Discovery quality score, latency, bandwidth, uptime 24h / 30d, packet loss, connected %
@@ -85,7 +606,7 @@ Open `./start.sh` → option 9 — **Autostart on Boot**.
 
 Installs a systemd service that starts automatically at boot, after the Mysterium node service, and restarts on crash. Works on laptops and headless VPS servers — no login required.
 
-> **Type 3 (lightweight) nodes:** start the backend manually first (`./start.sh` → option 1), then activate autostart via option 9. Activating autostart before the backend is running will fail on this node type.
+> **Type 3 (lightweight) nodes:** start the backend manually first via `./start.sh` → option 1 and verify it runs, then activate autostart via option 9. The systemd service needs the venv and config to exist before it can start at boot.
 
 ```bash
 sudo systemctl status mysterium-toolkit
@@ -96,7 +617,7 @@ sudo journalctl -u mysterium-toolkit -f
 
 ## Permissions
 
-The backend always runs as your normal user, never as root. During setup, `setup.sh` writes `/etc/sudoers.d/mysterium-toolkit` with narrow passwordless rules for specific commands only. These rules never expire — health fixes and governor adjustments work permanently without any sudo timeout.
+The backend always runs as your normal user, never as root. During setup, `setup.sh` writes `/etc/sudoers.d/mysterium-toolkit` with narrow passwordless rules. These never expire.
 
 | Command | Purpose |
 |---------|---------|
@@ -113,19 +634,79 @@ To regenerate after an update: `sudo ./update.sh`
 
 ---
 
+## Kernel Tuning
+
+Applied automatically during setup when the node runs on the same machine. Skipped in remote mode and Type 3. Persisted to `/etc/sysctl.d/99-mysterium-node.conf`.
+
+| Parameter | Value | Effect |
+|-----------|-------|--------|
+| `net.ipv4.ip_forward` | 1 | Required for VPN traffic forwarding |
+| `net.core.rmem_max` | 134217728 | 128 MB receive buffer |
+| `net.core.wmem_max` | 134217728 | 128 MB send buffer |
+| `net.ipv4.tcp_rmem` | 4096 87380 134217728 | TCP receive buffer range |
+| `net.ipv4.tcp_wmem` | 4096 65536 134217728 | TCP send buffer range |
+| `net.ipv4.tcp_congestion_control` | bbr | BBR congestion control |
+| `net.core.default_qdisc` | fq | Fair queuing — required for BBR |
+| `net.netfilter.nf_conntrack_max` | 524288 | Connection tracking capacity |
+| `vm.swappiness` | 60 | Balanced swap usage |
+
+`tcp_bbr` loaded at boot via `/etc/modules-load.d/tcp_bbr.conf`.
+
+### VPS / virtual machine detection
+
+Detected via `systemd-detect-virt` and `hypervisor` flag in `/proc/cpuinfo`. On a VPS: CPU governor and IRQ tuning skipped, all network tuning applied.
+
+Apply later via System Health → Fix All, or manually:
+
+```bash
+sudo python3 scripts/system_health.py --health-fix --health-persist
+```
+
+---
+
+## Firewall
+
+Detection priority:
+
+```
+firewalld → iptables (with active rules) → ufw → nftables → iptables-legacy
+```
+
+Based on active rules, not binary presence.
+
+### Ports opened — Type 1 / Type 2
+
+| Port | Protocol | Service |
+|------|----------|---------|
+| 5000 | TCP | Toolkit dashboard |
+| 4449 | TCP | TequilAPI / Node UI |
+| 1194 | UDP | OpenVPN UDP |
+| 1194 | TCP | OpenVPN TCP |
+| 51820 | UDP | WireGuard |
+| 10000–65000 | UDP | P2P / NAT hole punching |
+
+> **Type 3:** firewall skipped — node machine manages its own rules.
+
+Rules are persisted automatically:
+
+- `iptables` → `/etc/iptables/rules.v4`; `netfilter-persistent` enabled if available
+- `nftables` → written back to `/etc/nftables.conf`
+- `firewalld` → `--permanent` on all rules, then `--reload`
+- `ufw` → `ufw allow`; enabled automatically if inactive
+
+---
+
 ## Adaptive Subsystems
 
-Two subsystems adjust automatically every 10 minutes with no manual action needed:
-
-**CPU Governor** — scales with active sessions:
+**CPU Governor** — adjusts every 10 minutes:
 
 | Sessions | Governor | Effect |
 |----------|----------|--------|
-| 0 | `powersave` | Minimum frequency — CPU stays cool |
-| 1–5 | `schedutil` | Kernel-managed — ramps instantly under load |
+| 0 | `powersave` | Minimum frequency |
+| 1–5 | `schedutil` | Kernel-managed |
 | 6+ | `performance` | Maximum throughput |
 
-**Connection Tracking** — scales with VPN tunnels:
+**Connection Tracking** — adjusts every 10 minutes:
 
 | Tunnels | conntrack max |
 |---------|--------------|
@@ -137,13 +718,13 @@ Two subsystems adjust automatically every 10 minutes with no manual action neede
 
 ## Fleet Mode
 
-Each node runs its own toolkit backend. The central dashboard reads data from each node over HTTP using its API key. Data is never mixed between nodes.
+Each node runs its own toolkit backend. The central dashboard reads data from each node over HTTP. Data is never mixed between nodes.
 
 ### Setup
 
 1. Install the toolkit on each node (Type 1 or Type 3)
 2. Find each node's API key in `config/setup.json` → `dashboard_api_key`
-3. Ensure port 5000 is reachable from the central machine (port forward if behind NAT)
+3. Ensure port 5000 is reachable from the central machine
 4. Create `config/nodes.json` on the central machine:
 
 ```json
@@ -182,11 +763,11 @@ Hot-reload: edit `nodes.json` while running — changes apply within 30 seconds.
 | Quality history chart | Sparkline inside Node Quality card | Score, latency, bandwidth — 7 to 90 day windows |
 | System metrics history | CPU, RAM, disk, temp sparklines | 5 min interval — 1 to 30 day windows |
 | Data Management panel | Storage overview for all 7 databases | Delete by type or age, two-click confirm |
-| ≈ €X.XX / $X.XX | CoinPaprika + Frankfurter ECB | Fiat value at current MYST token price — no key needed |
+| ≈ €X.XX / $X.XX | CoinPaprika + Frankfurter ECB | Fiat value at current MYST price — no key needed |
 
 ### Data Management
 
-The **Data Management** card (below System Health) gives you full control over all persistent storage.
+The **Data Management** card (below System Health) gives full control over all persistent storage.
 
 #### Databases
 
@@ -200,7 +781,7 @@ The **Data Management** card (below System Health) gives you full control over a
 | Service events | `config/service_events.db` | Start/stop events | on change |
 | Uptime log | `config/uptime_log.json` | Poll cycles | every 10 min |
 
-All databases are pruned automatically once per calendar day. Default retention windows:
+Default retention windows — pruned once per calendar day:
 
 | Database | Default retention |
 |----------|-------------------|
@@ -212,23 +793,21 @@ All databases are pruned automatically once per calendar day. Default retention 
 | Service events | 30 days |
 | Uptime log | 90 days |
 
-Override any window in `config/setup.json` under the key `data_retention`:
+Override in `config/setup.json`:
 
 ```json
 "data_retention": { "earnings": 730, "sessions": 180, "quality": 60 }
 ```
 
-Only the keys you specify are overridden — the rest keep their defaults. Restart the backend after editing.
-
-Use the Data Management panel to manually delete data outside the normal retention cycle. Two-click confirmation required.
+Restart the backend after editing.
 
 #### Quality History & System Metrics Charts
 
-The **Node Quality** card has an expandable sparkline at the bottom showing quality score, latency, and bandwidth over 7 / 14 / 30 / 90 days.
+The **Node Quality** card has an expandable sparkline showing score, latency, and bandwidth over 7 / 14 / 30 / 90 days.
 
-The **System Metrics History** card (above System Health) shows CPU%, RAM%, disk%, and CPU temperature as sparklines over 1 / 3 / 7 / 14 / 30 days. Both charts load on demand — no background requests until expanded.
+The **System Metrics History** card shows CPU%, RAM%, disk%, and temperature over 1 / 3 / 7 / 14 / 30 days. Both load on demand.
 
-
+---
 
 ## System Health
 
@@ -255,7 +834,7 @@ The **System Metrics History** card (above System Health) shows CPU%, RAM%, disk
 | | Details |
 |-|---------|
 | Python | 3.8 or newer |
-| Node.js | 18 or newer (Type 1 / 2 only, for frontend build) |
+| Node.js | 18 or newer (Type 1 / 2 only) |
 | Distros | Debian · Ubuntu · Parrot OS · Fedora · Arch Linux · Alpine |
 | Environments | Bare metal · Docker · LXC · Proxmox · KVM VPS |
 | Firewall | firewalld · ufw · nftables · iptables-nft · iptables-legacy |
