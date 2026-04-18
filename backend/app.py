@@ -1307,14 +1307,17 @@ class SessionDB:
                 """)
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_started ON sessions(started_at)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_service ON sessions(service_type)")
-                conn.execute("CREATE INDEX IF NOT EXISTS idx_provider ON sessions(provider_id)")
                 # Migrate existing databases — add provider_id column if missing
+                # IMPORTANT: ALTER TABLE must run BEFORE CREATE INDEX on provider_id.
+                # On old databases without the column, CREATE INDEX fails and the outer
+                # except catches it — preventing _initialized from ever being set True
+                # and leaving the migration permanently stuck.
                 try:
                     conn.execute("ALTER TABLE sessions ADD COLUMN provider_id TEXT DEFAULT ''")
-                    conn.execute("CREATE INDEX IF NOT EXISTS idx_provider ON sessions(provider_id)")
                     logger.info("SessionDB: added provider_id column to existing database")
                 except Exception:
                     pass  # Column already exists
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_provider ON sessions(provider_id)")
                 # Note: we do NOT backfill provider_id for existing rows.
                 # Existing rows without provider_id may belong to a different node
                 # that was migrated. Only new sessions get provider_id set.
