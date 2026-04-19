@@ -509,6 +509,10 @@ TIER_MEDIUM_INTERVAL = 120  # seconds — reduced API calls (was 60)
 _tier_slow_cache = {}
 _traffic_history_imported = False  # Set True after first vnstat history import
 
+# Fast tier snapshot — written after each fast collection, read by get_resources()
+# for tunnel count, speed and latency when writing SystemMetricsDB snapshots.
+_last_fast_data = {}
+
 # VPN daily psutil baseline — used when vnstat does not track myst* interfaces.
 # At midnight (or first run) we snapshot psutil bytes_recv/sent on myst*/wg*/tun*
 # so "today's VPN" = current_psutil - baseline.  Resets each calendar day.
@@ -3722,11 +3726,14 @@ class MetricsCollector:
                 _now = time.time()
                 if not hasattr(MetricsCollector, '_metrics_db_last') or _now - MetricsCollector._metrics_db_last >= 300:
                     try:
-                        # Include tunnel count, speed and latency from cached tiers
-                        _perf = _tier_medium_cache.get('performance') or {}
-                        _live = _tier_medium_cache.get('live_connections') or {}
+                        # Read performance and live_connections from the previous
+                        # fast tier cycle — stored in _last_fast_data after each
+                        # collect_all() run. This gives correct tunnel count, VPN
+                        # speed, NIC speed and latency for the DB snapshot.
+                        _perf = _last_fast_data.get('performance') or {}
+                        _live = _last_fast_data.get('live_connections') or {}
                         _perf_ext = {
-                            'tunnel_count':    _live.get('active', 0),
+                            'tunnel_count':    _live.get('active'),
                             'speed_total':     _perf.get('speed_total'),
                             'sys_speed_total': _perf.get('sys_speed_total'),
                             'latency_ms':      _perf.get('latency_ms'),
@@ -4161,6 +4168,11 @@ class MetricsCollector:
             'live_connections': MetricsCollector.get_live_connections(),
             'resources': MetricsCollector.get_resources(),
         }
+
+        # Store fast tier snapshot so get_resources() DB write can read
+        # performance and live_connections from the same cycle.
+        global _last_fast_data
+        _last_fast_data = fast
 
         # ---- MEDIUM TIER (every 60s) — TequilaCache refresh ----
         if now - _tier_medium_last >= TIER_MEDIUM_INTERVAL or not _tier_medium_cache:
