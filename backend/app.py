@@ -7672,6 +7672,60 @@ def get_data_retention():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/data/retention', methods=['POST'])
+@require_auth
+def save_data_retention():
+    """Save data retention settings to config/setup.json.
+    Accepts a JSON body with any subset of retention keys (days as integers).
+    Only valid keys and positive integers are accepted.
+    Changes take effect immediately — no restart required.
+    """
+    try:
+        body = request.get_json(silent=True) or {}
+        new_values = body.get('retention', {})
+        if not isinstance(new_values, dict):
+            return jsonify({'error': 'retention must be a JSON object'}), 400
+
+        # Validate: only known keys, only positive integers
+        accepted = {}
+        rejected = {}
+        for k, v in new_values.items():
+            if k not in _DEFAULT_RETENTION:
+                rejected[k] = f'unknown key'
+            elif not isinstance(v, int) or v <= 0:
+                rejected[k] = f'must be a positive integer (got {v!r})'
+            else:
+                accepted[k] = v
+
+        if not accepted:
+            return jsonify({'error': 'No valid retention values provided', 'rejected': rejected}), 400
+
+        # Read current setup.json, merge, write back
+        cfg_path = Path('config/setup.json')
+        try:
+            current = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+        except Exception:
+            current = {}
+
+        existing = current.get('data_retention', {})
+        if not isinstance(existing, dict):
+            existing = {}
+        existing.update(accepted)
+        current['data_retention'] = existing
+        cfg_path.write_text(json.dumps(current, indent=2))
+
+        logger.info(f"data/retention updated: {accepted}")
+        return jsonify({
+            'success':  True,
+            'saved':    accepted,
+            'rejected': rejected,
+            'retention': _get_retention_config(),
+        }), 200
+    except Exception as e:
+        logger.error(f'data/retention POST error: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/data/delete', methods=['POST'])
 @require_auth
 def delete_data():

@@ -76,6 +76,25 @@ if [ "$_REAL_USER" != "root" ]; then
     echo -e "  ${GREEN}✓ config/ ownership corrected → $_REAL_USER${NC}"
 fi
 
+# ── Add data_retention defaults to setup.json if missing ─────────────────────
+if [ -f "config/setup.json" ]; then
+    python3 - << 'PYEOF'
+import json, pathlib
+cfg = pathlib.Path('config/setup.json')
+try:
+    d = json.loads(cfg.read_text())
+    if 'data_retention' not in d:
+        d['data_retention'] = {
+            'earnings': 365, 'sessions': 90, 'traffic': 730,
+            'quality': 90, 'system': 30, 'services': 30, 'uptime': 90,
+        }
+        cfg.write_text(json.dumps(d, indent=2))
+        print('  ✓ data_retention defaults added to config/setup.json')
+except Exception as e:
+    print(f'  ⚠ Could not migrate setup.json: {e}')
+PYEOF
+fi
+
 # ── New version ───────────────────────────────────────────────────────────
 NEW_VERSION=$(cat VERSION 2>/dev/null || echo "unknown")
 echo -e "  Version: ${BOLD}v${NEW_VERSION}${NC}"

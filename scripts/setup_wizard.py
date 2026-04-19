@@ -793,6 +793,18 @@ LOG_LEVEL={config.get('log_level', 'INFO')}
     # Save timezone
     config_json['timezone'] = config.get('timezone', 'UTC')
 
+    # Data retention defaults — written so users can edit them directly in setup.json
+    # All values are in days. Edit and restart the backend to apply changes.
+    config_json['data_retention'] = {
+        'earnings': 365,
+        'sessions': 90,
+        'traffic':  730,
+        'quality':  90,
+        'system':   30,
+        'services': 30,
+        'uptime':   90,
+    }
+
     Path('config/setup.json').write_text(json.dumps(config_json, indent=2))
     print_success("config/setup.json created")
 

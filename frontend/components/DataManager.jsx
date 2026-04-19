@@ -22,6 +22,111 @@ class DataManagerBoundary extends React.Component {
   }
 }
 
+const RetentionEditor = ({ base, authHeaders, retention, onSaved }) => {
+  const defaults = retention.defaults || {};
+  const current  = retention.retention || {};
+
+  // Local editable state — initialised from current retention values
+  const [values, setValues]     = useState({ ...current });
+  const [saving, setSaving]     = useState(false);
+  const [saveStatus, setSaveStatus] = useState(null); // null | 'ok' | 'error'
+  const [errorMsg, setErrorMsg] = useState('');
+
+  const labels = {
+    earnings: 'Earnings',
+    sessions: 'Sessions',
+    traffic:  'Traffic',
+    quality:  'Quality',
+    system:   'System',
+    services: 'Services',
+    uptime:   'Uptime',
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    setSaveStatus(null);
+    try {
+      const res = await fetch(`${base}/data/retention`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json', ...(authHeaders || {}) },
+        body:    JSON.stringify({ retention: values }),
+      });
+      const d = await res.json();
+      if (d.success) {
+        setSaveStatus('ok');
+        if (d.retention) onSaved(d.retention);
+        setTimeout(() => setSaveStatus(null), 4000);
+      } else {
+        setSaveStatus('error');
+        setErrorMsg(d.error || 'Save failed');
+      }
+    } catch (e) {
+      setSaveStatus('error');
+      setErrorMsg(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const isDirty = Object.keys(values).some(k => values[k] !== current[k]);
+
+  return (
+    <div className="p-3 bg-slate-900/30 rounded-lg border border-slate-700">
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-xs text-slate-400 font-semibold tracking-wide uppercase">
+          Auto-retention (days kept)
+        </div>
+        <div className="text-[10px] text-slate-600">Pruned daily · edit and save to apply</div>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+        {Object.entries(labels).map(([key, label]) => (
+          <div key={key} className="flex flex-col gap-0.5">
+            <label className="text-[10px] text-slate-500 capitalize">{label}</label>
+            <input
+              type="number"
+              min="1"
+              max="3650"
+              value={values[key] ?? defaults[key] ?? 30}
+              onChange={e => setValues(v => ({ ...v, [key]: parseInt(e.target.value) || 1 }))}
+              className="w-full px-2 py-0.5 bg-slate-800 border border-slate-600 rounded text-xs text-white font-mono focus:border-emerald-500 focus:outline-none"
+            />
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center gap-3">
+        <button
+          onClick={handleSave}
+          disabled={saving || !isDirty}
+          className={`px-3 py-1 text-xs rounded border font-semibold transition
+            ${isDirty
+              ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300 hover:bg-emerald-500/30'
+              : 'bg-slate-800 border-slate-700 text-slate-600 cursor-not-allowed'
+            } disabled:opacity-50`}
+        >
+          {saving ? 'Saving…' : 'Save retention'}
+        </button>
+        {isDirty && !saving && (
+          <button
+            onClick={() => setValues({ ...current })}
+            className="text-[10px] text-slate-500 hover:text-slate-300 transition"
+          >
+            Reset
+          </button>
+        )}
+        {saveStatus === 'ok' && (
+          <span className="text-[10px] text-emerald-400">✓ Saved — takes effect on next daily prune</span>
+        )}
+        {saveStatus === 'error' && (
+          <span className="text-[10px] text-red-400">✗ {errorMsg}</span>
+        )}
+      </div>
+      {retention.last_prune && (
+        <div className="text-[10px] text-slate-600 mt-2">Last pruned: {retention.last_prune}</div>
+      )}
+    </div>
+  );
+};
+
 const DataManagerInner = ({ nodeId, isFleetMode = false, authHeaders = {} }) => {
   const [stats, setStats]               = useState(null);
   const [loading, setLoading]           = useState(false);
@@ -311,23 +416,14 @@ const DataManagerInner = ({ nodeId, isFleetMode = false, authHeaders = {} }) => 
         </div>
       )}
 
-      {/* Retention info */}
+      {/* Retention settings — editable */}
       {retention?.retention && (
-        <div className="p-3 bg-slate-900/30 rounded-lg border border-slate-700">
-          <div className="text-xs text-slate-400 font-semibold tracking-wide uppercase mb-2">Auto-retention (days kept)</div>
-          <div className="grid grid-cols-4 sm:grid-cols-7 gap-1.5">
-            {Object.entries(retention.retention).map(([type, days]) => (
-              <div key={type} className="text-center">
-                <div className="text-[10px] text-slate-500 capitalize">{type}</div>
-                <div className="text-xs font-mono text-emerald-400">{days}d</div>
-              </div>
-            ))}
-          </div>
-          {retention.last_prune && (
-            <div className="text-[10px] text-slate-600 mt-1.5">Last pruned: {retention.last_prune}</div>
-          )}
-          <div className="text-[10px] text-slate-600 mt-0.5">Runs daily. Override in config/setup.json → data_retention.</div>
-        </div>
+        <RetentionEditor
+          base={isFleetMode ? `/fleet/node/${nodeId}/proxy` : ''}
+          authHeaders={authHeaders}
+          retention={retention}
+          onSaved={(updated) => setRetention(r => ({ ...r, retention: updated }))}
+        />
       )}
     </div>
   );
