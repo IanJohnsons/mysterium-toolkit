@@ -47,9 +47,28 @@ class SystemMetricsDB:
                         load_avg_5 REAL,
                         load_avg_15 REAL,
                         node_id TEXT DEFAULT '',
+                        tunnel_count INTEGER,
+                        node_speed_mbps REAL,
+                        sys_speed_mbps REAL,
+                        latency_ms REAL,
+                        ambient_temp REAL,
+                        ram_temp REAL,
                         UNIQUE(time, node_id)
                     )
                 """)
+                # Migrate existing databases — add new columns if missing
+                for col, coltype in [
+                    ('tunnel_count',    'INTEGER'),
+                    ('node_speed_mbps', 'REAL'),
+                    ('sys_speed_mbps',  'REAL'),
+                    ('latency_ms',      'REAL'),
+                    ('ambient_temp',    'REAL'),
+                    ('ram_temp',        'REAL'),
+                ]:
+                    try:
+                        conn.execute(f"ALTER TABLE system_snapshots ADD COLUMN {col} {coltype}")
+                    except Exception:
+                        pass  # Column already exists
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_system_time ON system_snapshots(time)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_system_node ON system_snapshots(node_id)")
                 conn.commit()
@@ -60,7 +79,7 @@ class SystemMetricsDB:
                 logger.warning(f"SystemMetricsDB init failed: {e}")
     
     @classmethod
-    def record(cls, resources_data, node_id=''):
+    def record(cls, resources_data, node_id='', performance_data=None):
         """Record a system metrics snapshot."""
         cls.init()
         
@@ -72,15 +91,41 @@ class SystemMetricsDB:
                 load_avg_1, load_avg_5, load_avg_15 = os.getloadavg()
         except:
             pass
+
+        # Extract extra temps from all_temps list
+        ambient_temp = None
+        ram_temp = None
+        for t in (resources_data.get('all_temps') or []):
+            lbl = t.get('label', '').lower()
+            val = t.get('value')
+            if val is None:
+                continue
+            if 'ambient' in lbl or 'board' in lbl or 'acpi' in lbl:
+                ambient_temp = val
+            elif lbl in ('ram', 'sodimm') or 'dimm' in lbl or 'mem' in lbl:
+                ram_temp = val
+
+        # Extract tunnel/speed/latency from performance_data
+        tunnel_count    = None
+        node_speed_mbps = None
+        sys_speed_mbps  = None
+        latency_ms      = None
+        if performance_data:
+            tunnel_count    = performance_data.get('tunnel_count')
+            node_speed_mbps = performance_data.get('speed_total')
+            sys_speed_mbps  = performance_data.get('sys_speed_total')
+            latency_ms      = performance_data.get('latency_ms')
         
         with cls._lock:
             try:
                 conn = cls._conn()
                 conn.execute("""
                     INSERT OR REPLACE INTO system_snapshots 
-                    (time, cpu_pct, ram_pct, disk_pct, cpu_temp, 
-                     load_avg_1, load_avg_5, load_avg_15, node_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (time, cpu_pct, ram_pct, disk_pct, cpu_temp,
+                     load_avg_1, load_avg_5, load_avg_15, node_id,
+                     tunnel_count, node_speed_mbps, sys_speed_mbps,
+                     latency_ms, ambient_temp, ram_temp)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     now,
                     resources_data.get('cpu'),
@@ -91,6 +136,12 @@ class SystemMetricsDB:
                     load_avg_5,
                     load_avg_15,
                     node_id,
+                    tunnel_count,
+                    node_speed_mbps,
+                    sys_speed_mbps,
+                    latency_ms,
+                    ambient_temp,
+                    ram_temp,
                 ))
                 conn.commit()
                 conn.close()

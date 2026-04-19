@@ -1307,17 +1307,14 @@ class SessionDB:
                 """)
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_started ON sessions(started_at)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_service ON sessions(service_type)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_provider ON sessions(provider_id)")
                 # Migrate existing databases — add provider_id column if missing
-                # IMPORTANT: ALTER TABLE must run BEFORE CREATE INDEX on provider_id.
-                # On old databases without the column, CREATE INDEX fails and the outer
-                # except catches it — preventing _initialized from ever being set True
-                # and leaving the migration permanently stuck.
                 try:
                     conn.execute("ALTER TABLE sessions ADD COLUMN provider_id TEXT DEFAULT ''")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_provider ON sessions(provider_id)")
                     logger.info("SessionDB: added provider_id column to existing database")
                 except Exception:
                     pass  # Column already exists
-                conn.execute("CREATE INDEX IF NOT EXISTS idx_provider ON sessions(provider_id)")
                 # Note: we do NOT backfill provider_id for existing rows.
                 # Existing rows without provider_id may belong to a different node
                 # that was migrated. Only new sessions get provider_id set.
@@ -3725,7 +3722,17 @@ class MetricsCollector:
                 _now = time.time()
                 if not hasattr(MetricsCollector, '_metrics_db_last') or _now - MetricsCollector._metrics_db_last >= 300:
                     try:
-                        SystemMetricsDB.record(resources_data, node_id=_local_node_id)
+                        # Include tunnel count, speed and latency from cached tiers
+                        _perf = _tier_medium_cache.get('performance') or {}
+                        _live = _tier_medium_cache.get('live_connections') or {}
+                        _perf_ext = {
+                            'tunnel_count':    _live.get('active', 0),
+                            'speed_total':     _perf.get('speed_total'),
+                            'sys_speed_total': _perf.get('sys_speed_total'),
+                            'latency_ms':      _perf.get('latency_ms'),
+                        }
+                        SystemMetricsDB.record(resources_data, node_id=_local_node_id,
+                                               performance_data=_perf_ext)
                         MetricsCollector._metrics_db_last = _now
                     except Exception as e:
                         logger.debug(f"SystemMetricsDB record failed: {e}")
@@ -5122,6 +5129,46 @@ def serve_setup_config():
 def get_version():
     """Return toolkit version — no auth required."""
     return jsonify({'version': APP_VERSION}), 200
+
+
+@app.route('/api/update-check', methods=['GET'])
+def check_for_update():
+    """Check if a newer version is available on GitHub.
+    Polls raw VERSION file from GitHub main branch — cached 1 hour.
+    No auth token required — raw file is publicly accessible even on private repos
+    when accessed via the correct raw URL.
+    """
+    import urllib.request as _ur
+    _VERSION_URL = 'https://raw.githubusercontent.com/IanJohnsons/mysterium-toolkit/main/VERSION'
+    _cache = getattr(check_for_update, '_cache', None)
+    _cache_time = getattr(check_for_update, '_cache_time', 0)
+
+    now = time.time()
+    if _cache is not None and now - _cache_time < 3600:
+        return jsonify(_cache), 200
+
+    try:
+        req = _ur.Request(_VERSION_URL, headers={'User-Agent': 'mysterium-toolkit'})
+        with _ur.urlopen(req, timeout=5) as resp:
+            latest = resp.read().decode().strip()
+        result = {
+            'current':    APP_VERSION,
+            'latest':     latest,
+            'up_to_date': latest == APP_VERSION,
+            'update_available': latest != APP_VERSION,
+        }
+    except Exception as e:
+        result = {
+            'current':          APP_VERSION,
+            'latest':           None,
+            'up_to_date':       True,
+            'update_available': False,
+            'error':            str(e)[:80],
+        }
+
+    check_for_update._cache      = result
+    check_for_update._cache_time = now
+    return jsonify(result), 200
 
 
 @app.route('/health', methods=['GET'])

@@ -389,6 +389,7 @@ const MysteriumDashboard = () => {
 
   const [updateInterval, setUpdateInterval] = useState(5000);
   const [toolkitVersion, setToolkitVersion] = useState('...');
+  const [updateInfo, setUpdateInfo]         = useState(null);
   const [healthToast, setHealthToast] = useState(null);  // {msg, level} — degraded-state notification
 
   // Fleet Node Manager state — must be at top level to survive fetchMetrics re-renders
@@ -556,6 +557,10 @@ const MysteriumDashboard = () => {
     // Fetch toolkit version from backend (no auth required)
     fetch('/api/version').then(r => r.ok ? r.json() : null).then(d => {
       if (d?.version) setToolkitVersion(d.version);
+    }).catch(() => {});
+    // Check for available update (cached 1h on backend)
+    fetch('/api/update-check').then(r => r.ok ? r.json() : null).then(d => {
+      if (d) setUpdateInfo(d);
     }).catch(() => {});
   }, []);
 
@@ -1411,7 +1416,13 @@ const MysteriumDashboard = () => {
                 <Zap className="w-5 h-5 text-emerald-400" />
               </div>
               <div>
-                <h1 className="text-lg font-bold tracking-tight">Mysterium Node <span className="text-xs font-normal text-slate-500">v{toolkitVersion}</span></h1>
+                <h1 className="text-lg font-bold tracking-tight">Mysterium Node <span className="text-xs font-normal text-slate-500">v{toolkitVersion}</span>
+                  {updateInfo?.update_available && (
+                    <span className="ml-2 text-xs font-normal text-amber-400 border border-amber-500/40 bg-amber-500/10 rounded px-1.5 py-0.5" title={`v${updateInfo.latest} available — run: sudo ./update.sh`}>
+                      ↑ v{updateInfo.latest}
+                    </span>
+                  )}
+                </h1>
                 <div className="flex gap-2 items-center text-xs">
                   <p className="text-slate-400">Status:</p>
                   <div className={`w-2 h-2 rounded-full ${metrics.nodeConnected ? 'bg-emerald-400 animate-pulse' : 'bg-red-400'}`}></div>
@@ -4039,7 +4050,25 @@ const SystemMetricsHistoryCard = ({ backendUrl, authHeaders }) => {
               <Spark data={history} yKey="ram_pct"  label="RAM"  colorClass="text-sky-400"     hexColor="rgb(56,189,248)" />
               <Spark data={history} yKey="disk_pct" label="Disk" colorClass="text-amber-400"   hexColor="rgb(251,191,36)" />
               {history.some(d => d.cpu_temp != null) && (
-                <Spark data={history} yKey="cpu_temp" label="Temp" colorClass="text-rose-400" hexColor="rgb(251,113,133)" unit="°C" />
+                <Spark data={history} yKey="cpu_temp"     label="CPU Temp" colorClass="text-rose-400"    hexColor="rgb(251,113,133)" unit="°C" />
+              )}
+              {history.some(d => d.ambient_temp != null) && (
+                <Spark data={history} yKey="ambient_temp" label="Ambient"  colorClass="text-amber-400"   hexColor="rgb(251,191,36)"  unit="°C" />
+              )}
+              {history.some(d => d.ram_temp != null) && (
+                <Spark data={history} yKey="ram_temp"     label="RAM Temp" colorClass="text-rose-400"    hexColor="rgb(251,113,133)" unit="°C" />
+              )}
+              {history.some(d => d.tunnel_count != null) && (
+                <Spark data={history} yKey="tunnel_count"    label="Tunnels"   colorClass="text-violet-400" hexColor="rgb(167,139,250)" unit="" />
+              )}
+              {history.some(d => d.node_speed_mbps != null) && (
+                <Spark data={history} yKey="node_speed_mbps" label="VPN Speed" colorClass="text-cyan-400"   hexColor="rgb(34,211,238)"  unit=" MB/s" />
+              )}
+              {history.some(d => d.sys_speed_mbps != null) && (
+                <Spark data={history} yKey="sys_speed_mbps"  label="NIC Speed" colorClass="text-sky-400"    hexColor="rgb(56,189,248)"  unit=" MB/s" />
+              )}
+              {history.some(d => d.latency_ms != null) && (
+                <Spark data={history} yKey="latency_ms"      label="Latency"   colorClass="text-emerald-400" hexColor="rgb(52,211,153)" unit="ms" />
               )}
             </div>
           )}
