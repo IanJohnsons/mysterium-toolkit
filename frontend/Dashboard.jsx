@@ -1281,7 +1281,14 @@ const MysteriumDashboard = () => {
                 </div>
                 <div>
                   <h1 className="text-lg font-bold tracking-tight">Mysterium Fleet</h1>
-                  <p className="text-xs text-slate-500">v{toolkitVersion} — select a node to view its dashboard</p>
+                  <p className="text-xs text-slate-500">
+                    v{toolkitVersion} — select a node to view its dashboard
+                    {updateInfo?.update_available && (
+                      <span className="ml-2 text-amber-400 border border-amber-500/40 bg-amber-500/10 rounded px-1.5 py-0.5" title={`v${updateInfo.latest} available — run: sudo ./update.sh`}>
+                        ↑ v{updateInfo.latest} available
+                      </span>
+                    )}
+                  </p>
                 </div>
               </div>
               <div className="flex items-center gap-3">
