@@ -3717,7 +3717,7 @@ const QualityHistorySparkline = ({ backendUrl, authHeaders }) => {
       .then(r => r.json())
       .then(d => { setHistory(d.history || []); setLoading(false); })
       .catch(() => setLoading(false));
-  }, [open, days, authHeaders]);
+  }, [open, days, authHeaders, backendUrl]);
 
   React.useEffect(() => { load(); }, [load]);
 
@@ -3816,7 +3816,7 @@ const SystemMetricsHistoryCard = ({ backendUrl, authHeaders }) => {
       .then(r => r.json())
       .then(d => { setHistory(d.history || []); setLoading(false); })
       .catch(() => setLoading(false));
-  }, [open, days, authHeaders]);
+  }, [open, days, authHeaders, backendUrl]);
 
   React.useEffect(() => { load(); }, [load]);
 
