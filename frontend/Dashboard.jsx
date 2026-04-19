@@ -1352,7 +1352,8 @@ const MysteriumDashboard = () => {
                     <div className="space-y-1.5 text-xs">
                       {shortW && <div className="font-mono text-cyan-400/80">{shortW}</div>}
                       <div className="flex gap-3 text-slate-500">
-                        {n.version && <span>v{n.version}{nodeUpdateInfo?.update_available && n.version === nodeUpdateInfo.current && <span className="ml-1 text-amber-400 border border-amber-500/40 bg-amber-500/10 rounded px-1 text-[9px]" title={`Node v${nodeUpdateInfo.latest} available`}>↑{nodeUpdateInfo.latest}</span>}</span>}
+                        {n.version && <span>v{n.version}</span>}
+                        {nodeUpdateInfo?.update_available && n.version === nodeUpdateInfo.current && <div className="mt-0.5"><span className="text-amber-400 border border-amber-500/40 bg-amber-500/10 rounded px-1 text-[9px]" title={`Node v${nodeUpdateInfo.latest} available`}>↑ {nodeUpdateInfo.latest}</span></div>}
                         {n.uptime && <span>up {formatUptime(n.uptime)}</span>}
                         {n.nat && <span>NAT: {n.nat}</span>}
                       </div>
@@ -1525,7 +1526,8 @@ const MysteriumDashboard = () => {
                       <div className="text-[10px] space-y-0.5">
                         {shortW && <div className="font-mono text-cyan-400/80">{shortW}</div>}
                         <div className="flex gap-2 text-slate-500">
-                          {n.version && <span>v{n.version}{nodeUpdateInfo?.update_available && n.version === nodeUpdateInfo.current && <span className="ml-1 text-amber-400 border border-amber-500/40 bg-amber-500/10 rounded px-1 text-[9px]" title={`Node v${nodeUpdateInfo.latest} available`}>↑{nodeUpdateInfo.latest}</span>}</span>}
+                          {n.version && <span>v{n.version}</span>}
+                          {nodeUpdateInfo?.update_available && n.version === nodeUpdateInfo.current && <div className="mt-0.5"><span className="text-amber-400 border border-amber-500/40 bg-amber-500/10 rounded px-1 text-[9px]" title={`Node v${nodeUpdateInfo.latest} available`}>↑ {nodeUpdateInfo.latest}</span></div>}
                           {n.uptime  && <span>{formatUptime(n.uptime)}</span>}
                         </div>
                         <div className="flex gap-2 flex-wrap">
@@ -4654,11 +4656,14 @@ const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, 
           <div>Clients: <span className="text-emerald-300 font-semibold">{activeSessions || clients?.connected || 0}</span></div>
         )}
         {nodeVersion && nodeVersion !== 'unknown' && (
-          <div>Version: <span className="text-slate-300">{nodeVersion}</span>
+          <div>
+            <div>Version: <span className="text-slate-300">{nodeVersion}</span></div>
             {nodeUpdateInfo?.update_available && (
-              <span className="ml-2 text-xs text-amber-400 border border-amber-500/40 bg-amber-500/10 rounded px-1.5 py-0.5" title={`Mysterium node v${nodeUpdateInfo.latest} available`}>
-                ↑ {nodeUpdateInfo.latest}
-              </span>
+              <div className="mt-0.5">
+                <span className="text-xs text-amber-400 border border-amber-500/40 bg-amber-500/10 rounded px-1.5 py-0.5" title={`Mysterium node v${nodeUpdateInfo.latest} available`}>
+                  ↑ {nodeUpdateInfo.latest} available
+                </span>
+              </div>
             )}
           </div>
         )}
