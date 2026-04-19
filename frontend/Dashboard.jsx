@@ -2416,7 +2416,7 @@ const MysteriumDashboard = () => {
           </div>
 
           {/* System Metrics History Card */}
-          <SystemMetricsHistoryCard backendUrl={backendUrlRef.current} authHeaders={authHeaderRef.current} />
+          <SystemMetricsHistoryCard backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
 
           {/* System Health Card — full width */}
           <div className="mb-6">
