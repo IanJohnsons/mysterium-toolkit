@@ -5183,7 +5183,88 @@ def check_for_update():
     return jsonify(result), 200
 
 
-@app.route('/health', methods=['GET'])
+@app.route('/api/node-update-check', methods=['GET'])
+def check_node_update():
+    """Check if a newer Mysterium node version is available on GitHub.
+    Follows the GitHub releases/latest redirect to extract the tag — no token needed.
+    Cached 1 hour. Compares against live node version from nodeStatus.
+    """
+    _cache = getattr(check_node_update, '_cache', None)
+    _cache_time = getattr(check_node_update, '_cache_time', 0)
+
+    now = time.time()
+    if _cache is not None and now - _cache_time < 3600:
+        return jsonify(_cache), 200
+
+    latest = None
+    try:
+        import urllib.request as _ur
+        req = _ur.Request(
+            'https://github.com/mysteriumnetwork/node/releases/latest',
+            headers={'User-Agent': 'mysterium-toolkit'}
+        )
+        # Don't follow redirect — we just want the Location header
+        opener = _ur.build_opener(_ur.HTTPRedirectHandler())
+        class _NoFollow(_ur.HTTPRedirectHandler):
+            def redirect_request(self, *a, **kw): return None
+        no_follow = _ur.build_opener(_NoFollow())
+        try:
+            no_follow.open(req, timeout=5)
+        except Exception as redirect_exc:
+            # urllib raises on redirect — extract URL from exception
+            loc = getattr(redirect_exc, 'headers', {})
+            if hasattr(loc, 'get'):
+                url = loc.get('Location', '')
+            else:
+                url = str(redirect_exc)
+            if '/tag/' in url:
+                latest = url.split('/tag/')[-1].strip()
+    except Exception:
+        pass
+
+    # Fallback: direct API call (may be rate-limited without token)
+    if not latest:
+        try:
+            import urllib.request as _ur2
+            req2 = _ur2.Request(
+                'https://api.github.com/repos/mysteriumnetwork/node/releases/latest',
+                headers={'User-Agent': 'mysterium-toolkit', 'Accept': 'application/vnd.github.v3+json'}
+            )
+            with _ur2.urlopen(req2, timeout=5) as resp:
+                import json as _json
+                data = _json.loads(resp.read())
+                latest = data.get('tag_name', '').lstrip('v')
+        except Exception:
+            pass
+
+    # Get current node version from live cache
+    with metrics_lock:
+        current = metrics_cache.get('nodeStatus', {}).get('version', 'unknown')
+
+    def _norm(v):
+        """Normalize version string for comparison: strip leading v, whitespace."""
+        return str(v or '').strip().lstrip('v')
+
+    current_n = _norm(current)
+    latest_n  = _norm(latest) if latest else None
+
+    update_available = bool(
+        latest_n and current_n and
+        current_n != 'unknown' and
+        latest_n != current_n
+    )
+
+    result = {
+        'current':          current_n or 'unknown',
+        'latest':           latest_n,
+        'update_available': update_available,
+    }
+    if not latest_n:
+        result['error'] = 'Could not fetch latest version from GitHub'
+
+    check_node_update._cache      = result
+    check_node_update._cache_time = now
+    return jsonify(result), 200
 def health():
     """Health check - no auth required"""
     with metrics_lock:

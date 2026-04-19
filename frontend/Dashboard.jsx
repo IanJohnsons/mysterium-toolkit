@@ -390,6 +390,7 @@ const MysteriumDashboard = () => {
   const [updateInterval, setUpdateInterval] = useState(5000);
   const [toolkitVersion, setToolkitVersion] = useState('...');
   const [updateInfo, setUpdateInfo]         = useState(null);
+  const [nodeUpdateInfo, setNodeUpdateInfo] = useState(null);
   const [healthToast, setHealthToast] = useState(null);  // {msg, level} — degraded-state notification
 
   // Fleet Node Manager state — must be at top level to survive fetchMetrics re-renders
@@ -561,6 +562,10 @@ const MysteriumDashboard = () => {
     // Check for available update (cached 1h on backend)
     fetch('/api/update-check').then(r => r.ok ? r.json() : null).then(d => {
       if (d) setUpdateInfo(d);
+    }).catch(() => {});
+    // Check for available Mysterium node update (cached 1h on backend)
+    fetch('/api/node-update-check').then(r => r.ok ? r.json() : null).then(d => {
+      if (d) setNodeUpdateInfo(d);
     }).catch(() => {});
   }, []);
 
@@ -1347,7 +1352,7 @@ const MysteriumDashboard = () => {
                     <div className="space-y-1.5 text-xs">
                       {shortW && <div className="font-mono text-cyan-400/80">{shortW}</div>}
                       <div className="flex gap-3 text-slate-500">
-                        {n.version && <span>v{n.version}</span>}
+                        {n.version && <span>v{n.version}{nodeUpdateInfo?.update_available && n.version === nodeUpdateInfo.current && <span className="ml-1 text-amber-400 border border-amber-500/40 bg-amber-500/10 rounded px-1 text-[9px]" title={`Node v${nodeUpdateInfo.latest} available`}>↑{nodeUpdateInfo.latest}</span>}</span>}
                         {n.uptime && <span>up {formatUptime(n.uptime)}</span>}
                         {n.nat && <span>NAT: {n.nat}</span>}
                       </div>
@@ -1520,7 +1525,7 @@ const MysteriumDashboard = () => {
                       <div className="text-[10px] space-y-0.5">
                         {shortW && <div className="font-mono text-cyan-400/80">{shortW}</div>}
                         <div className="flex gap-2 text-slate-500">
-                          {n.version && <span>v{n.version}</span>}
+                          {n.version && <span>v{n.version}{nodeUpdateInfo?.update_available && n.version === nodeUpdateInfo.current && <span className="ml-1 text-amber-400 border border-amber-500/40 bg-amber-500/10 rounded px-1 text-[9px]" title={`Node v${nodeUpdateInfo.latest} available`}>↑{nodeUpdateInfo.latest}</span>}</span>}
                           {n.uptime  && <span>{formatUptime(n.uptime)}</span>}
                         </div>
                         <div className="flex gap-2 flex-wrap">
@@ -1556,7 +1561,7 @@ const MysteriumDashboard = () => {
           )}
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-            <StatusCard nodeStatus={metrics.nodeStatus} resources={metrics.resources} earnings={metrics.earnings} clients={metrics.clients} activeSessions={metrics.sessions?.active_unique_consumers ?? metrics.sessions?.active ?? 0} backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} fleetNode={metrics._fleet_node} />
+            <StatusCard nodeStatus={metrics.nodeStatus} resources={metrics.resources} earnings={metrics.earnings} clients={metrics.clients} activeSessions={metrics.sessions?.active_unique_consumers ?? metrics.sessions?.active ?? 0} backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} fleetNode={metrics._fleet_node} nodeUpdateInfo={nodeUpdateInfo} />
             <EarningsCard earnings={metrics.earnings} backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
           </div>
 
@@ -4577,7 +4582,7 @@ const NodeRestartButton = ({ backendUrl, authHeaders }) => {
   );
 };
 
-const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, backendUrl, authHeaders, fleetNode }) => {
+const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, backendUrl, authHeaders, fleetNode, nodeUpdateInfo }) => {
   const [restartStatus, setRestartStatus] = React.useState(null);
   const [showConfig, setShowConfig] = React.useState(false);
   const status = nodeStatus?.status || 'offline';
@@ -4649,7 +4654,13 @@ const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, 
           <div>Clients: <span className="text-emerald-300 font-semibold">{activeSessions || clients?.connected || 0}</span></div>
         )}
         {nodeVersion && nodeVersion !== 'unknown' && (
-          <div>Version: <span className="text-slate-300">{nodeVersion}</span></div>
+          <div>Version: <span className="text-slate-300">{nodeVersion}</span>
+            {nodeUpdateInfo?.update_available && (
+              <span className="ml-2 text-xs text-amber-400 border border-amber-500/40 bg-amber-500/10 rounded px-1.5 py-0.5" title={`Mysterium node v${nodeUpdateInfo.latest} available`}>
+                ↑ {nodeUpdateInfo.latest}
+              </span>
+            )}
+          </div>
         )}
         {isOnline && (() => {
           const NAT_LABELS = {
