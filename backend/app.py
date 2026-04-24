@@ -6719,14 +6719,14 @@ def get_service_split():
         node_id = request.args.get('node_id')
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 
+        SessionDB.init()
         conn = SessionDB._conn()
         q = """
             SELECT
-                substr(started_at, 1, 10) AS date,
+                started_at,
                 service_type,
-                COUNT(*) AS sessions,
-                SUM(COALESCE(earnings_myst, 0)) AS earnings_myst,
-                SUM(COALESCE(data_total, 0)) AS data_mb
+                COALESCE(earnings_myst, 0) AS earnings_myst,
+                COALESCE(data_total, 0) AS data_mb
             FROM sessions
             WHERE started_at >= ?
               AND service_type NOT IN ('monitoring', 'noop', '')
@@ -6736,11 +6736,33 @@ def get_service_split():
         if node_id:
             q += " AND provider_id = ?"
             params.append(node_id)
-        q += " GROUP BY date, service_type ORDER BY date ASC"
         rows = conn.execute(q, params).fetchall()
         conn.close()
-        result = [{'date': r[0], 'service_type': r[1], 'sessions': r[2],
-                   'earnings_myst': round(r[3], 6), 'data_mb': round(r[4], 2)} for r in rows]
+
+        # Bucket by local date (TOOLKIT_TZ) — same as earnings chart
+        from collections import defaultdict
+        day_type_map = defaultdict(lambda: {'sessions': 0, 'earnings_myst': 0.0, 'data_mb': 0.0})
+        for r in rows:
+            try:
+                t = datetime.fromisoformat(str(r[0]).replace('Z', '+00:00'))
+                if t.tzinfo is None:
+                    t = t.replace(tzinfo=timezone.utc)
+                day = t.astimezone(TOOLKIT_TZ).strftime('%Y-%m-%d')
+            except Exception:
+                day = str(r[0])[:10]
+            key = (day, r[1])
+            day_type_map[key]['sessions']      += 1
+            day_type_map[key]['earnings_myst'] += float(r[2])
+            day_type_map[key]['data_mb']       += float(r[3])
+
+        result = sorted([
+            {'date': k[0], 'service_type': k[1],
+             'sessions': v['sessions'],
+             'earnings_myst': round(v['earnings_myst'], 6),
+             'data_mb': round(v['data_mb'], 2)}
+            for k, v in day_type_map.items()
+        ], key=lambda x: x['date'])
+
         return jsonify({'data': result, 'days': days}), 200
     except Exception as e:
         logger.error(f'service-split error: {e}')
@@ -6759,12 +6781,13 @@ def get_earnings_efficiency():
         node_id = request.args.get('node_id')
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 
+        SessionDB.init()
         conn = SessionDB._conn()
         q = """
             SELECT
-                substr(started_at, 1, 10) AS date,
-                SUM(COALESCE(earnings_myst, 0)) AS earnings_myst,
-                SUM(COALESCE(data_total, 0)) AS data_mb
+                started_at,
+                COALESCE(earnings_myst, 0) AS earnings_myst,
+                COALESCE(data_total, 0) AS data_mb
             FROM sessions
             WHERE started_at >= ?
               AND service_type NOT IN ('monitoring', 'noop', '')
@@ -6775,15 +6798,30 @@ def get_earnings_efficiency():
         if node_id:
             q += " AND provider_id = ?"
             params.append(node_id)
-        q += " GROUP BY date ORDER BY date ASC"
         rows = conn.execute(q, params).fetchall()
         conn.close()
-        result = []
+
+        # Bucket by local date (TOOLKIT_TZ)
+        from collections import defaultdict
+        day_map = defaultdict(lambda: {'earnings_myst': 0.0, 'data_mb': 0.0})
         for r in rows:
-            data_gb = r[2] / 1024 if r[2] else 0
-            myst_per_gb = round(r[1] / data_gb, 6) if data_gb > 0 else None
-            result.append({'date': r[0], 'earnings_myst': round(r[1], 6),
-                           'data_mb': round(r[2], 2), 'myst_per_gb': myst_per_gb})
+            try:
+                t = datetime.fromisoformat(str(r[0]).replace('Z', '+00:00'))
+                if t.tzinfo is None:
+                    t = t.replace(tzinfo=timezone.utc)
+                day = t.astimezone(TOOLKIT_TZ).strftime('%Y-%m-%d')
+            except Exception:
+                day = str(r[0])[:10]
+            day_map[day]['earnings_myst'] += float(r[1])
+            day_map[day]['data_mb']       += float(r[2])
+
+        result = []
+        for day in sorted(day_map.keys()):
+            v = day_map[day]
+            data_gb = v['data_mb'] / 1024 if v['data_mb'] else 0
+            myst_per_gb = round(v['earnings_myst'] / data_gb, 6) if data_gb > 0 else None
+            result.append({'date': day, 'earnings_myst': round(v['earnings_myst'], 6),
+                           'data_mb': round(v['data_mb'], 2), 'myst_per_gb': myst_per_gb})
         return jsonify({'data': result, 'days': days}), 200
     except Exception as e:
         logger.error(f'earnings-efficiency error: {e}')
