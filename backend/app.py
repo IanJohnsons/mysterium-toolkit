@@ -6548,19 +6548,47 @@ def delete_sessions():
 @app.route('/services/<service_id>/stop', methods=['POST'])
 @require_auth
 def stop_service(service_id):
-    """Stop a running service via TequilAPI DELETE /services/{id}."""
+    """Stop a running service via TequilAPI DELETE /services/{id}.
+    Accepts optional service_type in body to resolve stale UUIDs and handle linked services.
+    scraping <-> quic_scraping are always stopped together.
+    """
+    LINKED = {'scraping': 'quic_scraping', 'quic_scraping': 'scraping'}
     try:
+        body = request.get_json() or {}
+        service_type = body.get('service_type', '')
         headers = MetricsCollector.get_tequilapi_headers()
         for node_url in NODE_API_URLS:
             try:
-                resp = requests.delete(
-                    f'{node_url}/services/{service_id}',
-                    headers=headers, timeout=10
-                )
-                if resp.status_code in (200, 202, 204):
-                    return jsonify({'success': True, 'message': f'Service {service_id} stopped'}), 200
+                # Fetch current running services to resolve fresh UUIDs
+                current = {}
+                try:
+                    sr = requests.get(f'{node_url}/services', headers=headers, timeout=5)
+                    if sr.status_code == 200:
+                        for s in sr.json():
+                            current[s.get('type', '')] = s.get('id', '')
+                except Exception:
+                    pass
+
+                # Resolve UUID: use fresh one if available, fall back to passed service_id
+                target_id = current.get(service_type, service_id) if service_type else service_id
+
+                def do_stop(sid):
+                    r = requests.delete(f'{node_url}/services/{sid}', headers=headers, timeout=10)
+                    return r.status_code in (200, 202, 204)
+
+                ok = do_stop(target_id)
+
+                # Stop linked service if applicable (scraping <-> quic_scraping)
+                if service_type in LINKED:
+                    linked_type = LINKED[service_type]
+                    linked_id = current.get(linked_type)
+                    if linked_id:
+                        do_stop(linked_id)
+
+                if ok:
+                    return jsonify({'success': True, 'message': f'Service stopped'}), 200
                 else:
-                    return jsonify({'success': False, 'error': f'HTTP {resp.status_code}: {resp.text[:200]}'}), 200
+                    return jsonify({'success': False, 'error': f'Stop failed for {target_id}'}), 200
             except Exception as e:
                 return jsonify({'success': False, 'error': str(e)}), 200
         return jsonify({'success': False, 'error': 'No node available'}), 200
@@ -6574,7 +6602,9 @@ def start_service():
     """Start a service via TequilAPI POST /services.
     Body: {service_type: 'wireguard'|'dvpn'|'data_transfer'|'scraping'|'noop'|'monitoring'}
     Automatically fetches provider identity from TequilAPI.
+    scraping <-> quic_scraping are always started together.
     """
+    LINKED = {'scraping': 'quic_scraping', 'quic_scraping': 'scraping'}
     try:
         body = request.get_json() or {}
         service_type = body.get('service_type', '')
@@ -6597,20 +6627,23 @@ def start_service():
                 except Exception:
                     pass
 
-                payload = {'type': service_type}
-                if provider_id:
-                    payload['provider_id'] = provider_id
+                def do_start(stype):
+                    payload = {'type': stype}
+                    if provider_id:
+                        payload['provider_id'] = provider_id
+                    r = requests.post(f'{node_url}/services', headers=headers, json=payload, timeout=10)
+                    return r.status_code in (200, 201)
 
-                resp = requests.post(
-                    f'{node_url}/services',
-                    headers=headers,
-                    json=payload,
-                    timeout=10
-                )
-                if resp.status_code in (200, 201):
+                ok = do_start(service_type)
+
+                # Start linked service if applicable (scraping <-> quic_scraping)
+                if service_type in LINKED:
+                    do_start(LINKED[service_type])
+
+                if ok:
                     return jsonify({'success': True, 'message': f'Service {service_type} started'}), 200
                 else:
-                    return jsonify({'success': False, 'error': f'HTTP {resp.status_code}: {resp.text[:200]}'}), 200
+                    return jsonify({'success': False, 'error': f'Start failed for {service_type}'}), 200
             except Exception as e:
                 return jsonify({'success': False, 'error': str(e)}), 200
 

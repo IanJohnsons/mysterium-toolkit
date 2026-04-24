@@ -5029,7 +5029,9 @@ const ServiceToggleRow = ({ svc, backendUrl, authHeaders }) => {
       if (isActive) {
         if (!svc.id) { setStatus('✗ service not running'); setBusy(false); return; }
         resp = await fetch(`${backendUrl}/services/${svc.id}/stop`, {
-          method: 'POST', headers: authHeaders || {}
+          method: 'POST',
+          headers: { ...(authHeaders || {}), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ service_type: svc.type }),
         });
       } else {
         resp = await fetch(`${backendUrl}/services/start`, {
