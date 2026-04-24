@@ -3678,15 +3678,31 @@ const AnalyticsCard = ({ sessions, backendUrl, authHeaders }) => {
 
 // ============ QUALITY HISTORY SPARKLINE ============
 const QualityHistorySparkline = ({ backendUrl, authHeaders }) => {
-  const [history, setHistory] = React.useState([]);
-  const [loading, setLoading] = React.useState(false);
-  const [open, setOpen]       = React.useState(false);
-  const [days, setDays]       = React.useState(30);
+  const [history, setHistory]       = React.useState([]);
+  const [loading, setLoading]       = React.useState(false);
+  const [open, setOpen]             = React.useState(false);
+  const [days, setDays]             = React.useState(30);
+  const [retentionDays, setRetentionDays] = React.useState(null);
+
+  // Fetch retention config once when component first opens
+  React.useEffect(() => {
+    if (!open || retentionDays !== null || !backendUrl) return;
+    fetch(`${backendUrl}/data/retention`, { headers: authHeaders || {} })
+      .then(r => r.json())
+      .then(d => setRetentionDays(d?.retention?.quality || 90))
+      .catch(() => setRetentionDays(90));
+  }, [open, backendUrl, authHeaders, retentionDays]);
+
+  // Build dynamic day buttons: fixed milestones up to retention max + All
+  const DAY_MILESTONES = [7, 14, 30, 60, 90, 180, 365, 730];
+  const maxDays = retentionDays || 90;
+  const dayOptions = DAY_MILESTONES.filter(d => d <= maxDays);
 
   const load = React.useCallback(() => {
     if (!open) return;
     setLoading(true);
-    fetch(`${backendUrl}/data/quality/history?days=${days}`, { headers: authHeaders || {} })
+    const fetchDays = days === 0 ? 3650 : days;
+    fetch(`${backendUrl}/data/quality/history?days=${fetchDays}`, { headers: authHeaders || {} })
       .then(r => r.json())
       .then(d => { setHistory(d.history || []); setLoading(false); })
       .catch(() => setLoading(false));
@@ -3744,8 +3760,8 @@ const QualityHistorySparkline = ({ backendUrl, authHeaders }) => {
 
       {open && (
         <div className="mt-3">
-          <div className="flex gap-1 mb-3">
-            {[7, 14, 30, 90].map(d => (
+          <div className="flex gap-1 flex-wrap mb-3">
+            {dayOptions.map(d => (
               <button key={d} onClick={() => setDays(d)}
                 className={`px-2 py-0.5 text-xs rounded border transition ${days === d
                   ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300'
@@ -3753,6 +3769,12 @@ const QualityHistorySparkline = ({ backendUrl, authHeaders }) => {
                 {d}d
               </button>
             ))}
+            <button onClick={() => setDays(0)}
+              className={`px-2 py-0.5 text-xs rounded border transition ${days === 0
+                ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300'
+                : 'border-slate-700 text-slate-500 hover:text-slate-300'}`}>
+              All
+            </button>
             {loading && <span className="text-xs text-slate-600 ml-2">loading…</span>}
           </div>
 
@@ -3777,15 +3799,31 @@ const QualityHistorySparkline = ({ backendUrl, authHeaders }) => {
 
 // ============ SYSTEM METRICS HISTORY CARD ============
 const SystemMetricsHistoryCard = ({ backendUrl, authHeaders }) => {
-  const [history, setHistory] = React.useState([]);
-  const [loading, setLoading] = React.useState(false);
-  const [open, setOpen]       = React.useState(false);
-  const [days, setDays]       = React.useState(7);
+  const [history, setHistory]             = React.useState([]);
+  const [loading, setLoading]             = React.useState(false);
+  const [open, setOpen]                   = React.useState(false);
+  const [days, setDays]                   = React.useState(7);
+  const [retentionDays, setRetentionDays] = React.useState(null);
+
+  // Fetch retention config once when component first opens
+  React.useEffect(() => {
+    if (!open || retentionDays !== null || !backendUrl) return;
+    fetch(`${backendUrl}/data/retention`, { headers: authHeaders || {} })
+      .then(r => r.json())
+      .then(d => setRetentionDays(d?.retention?.system || 30))
+      .catch(() => setRetentionDays(30));
+  }, [open, backendUrl, authHeaders, retentionDays]);
+
+  // Build dynamic day buttons: fixed milestones up to retention max + All
+  const DAY_MILESTONES = [1, 3, 7, 14, 30, 60, 90, 180, 365];
+  const maxDays = retentionDays || 30;
+  const dayOptions = DAY_MILESTONES.filter(d => d <= maxDays);
 
   const load = React.useCallback(() => {
     if (!open) return;
     setLoading(true);
-    fetch(`${backendUrl}/data/system/history?days=${days}`, { headers: authHeaders || {} })
+    const fetchDays = days === 0 ? 3650 : days;
+    fetch(`${backendUrl}/data/system/history?days=${fetchDays}`, { headers: authHeaders || {} })
       .then(r => r.json())
       .then(d => { setHistory(d.history || []); setLoading(false); })
       .catch(() => setLoading(false));
@@ -3841,8 +3879,8 @@ const SystemMetricsHistoryCard = ({ backendUrl, authHeaders }) => {
 
       {open && (
         <div className="mt-3">
-          <div className="flex gap-1 mb-3">
-            {[1, 3, 7, 14, 30].map(d => (
+          <div className="flex gap-1 flex-wrap mb-3">
+            {dayOptions.map(d => (
               <button key={d} onClick={() => setDays(d)}
                 className={`px-2 py-0.5 text-xs rounded border transition ${days === d
                   ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300'
@@ -3850,6 +3888,12 @@ const SystemMetricsHistoryCard = ({ backendUrl, authHeaders }) => {
                 {d}d
               </button>
             ))}
+            <button onClick={() => setDays(0)}
+              className={`px-2 py-0.5 text-xs rounded border transition ${days === 0
+                ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300'
+                : 'border-slate-700 text-slate-500 hover:text-slate-300'}`}>
+              All
+            </button>
             {loading && <span className="text-xs text-slate-600 ml-2">loading…</span>}
           </div>
 
