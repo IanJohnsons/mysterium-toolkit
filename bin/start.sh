@@ -3,6 +3,9 @@
 TOOLKIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$TOOLKIT_DIR"
 
+# Root check — LXC containers and Docker run as root without sudo installed.
+[ "$(id -u)" -eq 0 ] && SUDO="" || SUDO="sudo"
+
 # Colors
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -390,7 +393,7 @@ while true; do
             if systemctl is-active --quiet mysterium-toolkit 2>/dev/null; then
                 echo -e "  ${YELLOW}Backend is running via systemd service.${NC}"
                 echo -e "  Restarting via systemd..."
-                sudo systemctl restart mysterium-toolkit
+                $SUDO systemctl restart mysterium-toolkit
                 sleep 3
                 if systemctl is-active --quiet mysterium-toolkit 2>/dev/null; then
                     echo -e "  ${GREEN}✓ Backend restarted via systemd${NC}"
@@ -419,7 +422,7 @@ while true; do
                 # Stop service and backend BEFORE building to avoid conflicts
                 echo -e "  Stopping backend before build..."
                 if systemctl is-active --quiet mysterium-toolkit 2>/dev/null; then
-                    sudo systemctl stop mysterium-toolkit 2>/dev/null || true
+                    $SUDO systemctl stop mysterium-toolkit 2>/dev/null || true
                     echo -e "  ${DIM}  Systemd service stopped${NC}"
                 fi
                 stop_backend
@@ -637,19 +640,19 @@ IDXEOF
                 read -p "  Select (1-4): " diag_choice
                 case $diag_choice in
                     1)
-                        sudo bash "$TOOLKIT_DIR/bin/diagnose.sh"
+                        $SUDO bash "$TOOLKIT_DIR/bin/diagnose.sh"
                         ;;
                     2)
                         echo -e "  ${YELLOW}⚠ Stress test will briefly increase system load${NC}"
                         read -p "  Continue? [y/N]: " stress_confirm
                         if [[ "$stress_confirm" =~ ^[Yy] ]]; then
-                            sudo bash "$TOOLKIT_DIR/bin/diagnose.sh" --stress
+                            $SUDO bash "$TOOLKIT_DIR/bin/diagnose.sh" --stress
                         fi
                         ;;
                     3)
                         echo -e "  ${DIM}Applying fixes — each one asks for confirmation${NC}"
                         echo
-                        sudo bash "$TOOLKIT_DIR/bin/diagnose.sh" --fix
+                        $SUDO bash "$TOOLKIT_DIR/bin/diagnose.sh" --fix
                         ;;
                     *)
                         ;;
@@ -690,9 +693,9 @@ IDXEOF
                 read -p "  Select (1-2): " _auto_choice
                 case "$_auto_choice" in
                     1)
-                        sudo systemctl disable --now "$_SERVICE_NAME" 2>/dev/null || true
-                        sudo rm -f "$_SERVICE_FILE"
-                        sudo systemctl daemon-reload 2>/dev/null || true
+                        $SUDO systemctl disable --now "$_SERVICE_NAME" 2>/dev/null || true
+                        $SUDO rm -f "$_SERVICE_FILE"
+                        $SUDO systemctl daemon-reload 2>/dev/null || true
                         echo -e "  ${GREEN}✓ Autostart disabled${NC}"
                         ;;
                     *)
@@ -733,7 +736,7 @@ IDXEOF
                         fi
 
                         # Write systemd unit file
-                        sudo tee "$_SERVICE_FILE" > /dev/null << UNIT_EOF
+                        $SUDO tee "$_SERVICE_FILE" > /dev/null << UNIT_EOF
 [Unit]
 Description=Mysterium Node Monitoring Toolkit
 After=${_AFTER_DEPS}
@@ -757,8 +760,8 @@ Environment=HOME=$_REAL_HOME
 WantedBy=multi-user.target
 UNIT_EOF
 
-                        sudo systemctl daemon-reload
-                        sudo systemctl enable "$_SERVICE_NAME"
+                        $SUDO systemctl daemon-reload
+                        $SUDO systemctl enable "$_SERVICE_NAME"
                         echo -e "  ${GREEN}✓ Autostart enabled — toolkit starts at every boot${NC}"
                         echo -e "  ${DIM}  Service: $_SERVICE_NAME${NC}"
                         echo
@@ -771,7 +774,7 @@ UNIT_EOF
                         read -p "  Start the service now? [Y/n]: " _start_now
                         if [[ ! "$_start_now" =~ ^[Nn] ]]; then
                             # Stop ALL running backends — systemd service + any manual process
-                            sudo systemctl stop mysterium-toolkit 2>/dev/null || true
+                            $SUDO systemctl stop mysterium-toolkit 2>/dev/null || true
                             stop_backend
                             # Kill anything still holding port 5000
                             _PORT_PID=$(lsof -ti :${DASHBOARD_PORT} 2>/dev/null || true)
@@ -784,8 +787,8 @@ UNIT_EOF
                                 lsof -ti :${DASHBOARD_PORT} >/dev/null 2>&1 || break
                                 sleep 1; _PORT_WAIT=$((_PORT_WAIT+1))
                             done
-                            sudo systemctl reset-failed "$_SERVICE_NAME" 2>/dev/null || true
-                            sudo systemctl start "$_SERVICE_NAME"
+                            $SUDO systemctl reset-failed "$_SERVICE_NAME" 2>/dev/null || true
+                            $SUDO systemctl start "$_SERVICE_NAME"
                             # Wait up to 25 seconds — Python startup can be slow on laptops
                             echo -e "  ${DIM}  Starting service (may take up to 25s on first run)…${NC}"
                             _WAIT=0
@@ -802,9 +805,9 @@ UNIT_EOF
                                 # First-enable often fails due to a port/timing race.
                                 # Reset failed state and retry once — second attempt always works.
                                 echo -e "  ${YELLOW}⚠ First attempt failed — resetting and retrying…${NC}"
-                                sudo systemctl reset-failed "$_SERVICE_NAME" 2>/dev/null || true
+                                $SUDO systemctl reset-failed "$_SERVICE_NAME" 2>/dev/null || true
                                 sleep 3
-                                sudo systemctl start "$_SERVICE_NAME" 2>/dev/null || true
+                                $SUDO systemctl start "$_SERVICE_NAME" 2>/dev/null || true
                                 _RETRY=0
                                 while [ $_RETRY -lt 20 ]; do
                                     sleep 1; _RETRY=$((_RETRY+1))
