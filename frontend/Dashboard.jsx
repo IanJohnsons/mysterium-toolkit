@@ -426,6 +426,7 @@ const MysteriumDashboard = () => {
     } catch { return null; }
   });
   const selectedNodeRef = useRef(null); // keep ref in sync for fetchMetrics
+  const nodeAwareUrlRef = useRef('');   // keep ref in sync for fetchArchive (avoids stale closure)
   // healthBackendUrl: returns the correct URL base for health fix/scan/persist requests.
   // For fleet nodes: routes via /fleet/node/<id>/proxy/<endpoint> on the central backend.
   // This keeps the remote API key server-side and never exposes it to the browser.
@@ -797,15 +798,19 @@ const MysteriumDashboard = () => {
     }
   }, [isConnected]);
 
-  // Keep ref in sync with state (ref is readable inside fetchMetrics callback)
+  // Keep refs in sync with state (refs are readable inside stale callbacks)
   useEffect(() => { selectedNodeRef.current = selectedNodeId; }, [selectedNodeId]);
+
+  // Sync nodeAwareUrlRef whenever fleet node selection changes —
+  // fetchArchive uses this ref to avoid the stale-closure bug with useCallback([])
+  useEffect(() => { nodeAwareUrlRef.current = getNodeAwareUrl(); });
 
   // Fetch archive sessions from SessionDB when History tab is opened
   const fetchArchive = React.useCallback((offset = 0, replace = true) => {
     if (!backendUrlRef.current) return;
     setArchiveLoading(true);
     const hdrs = authHeaderRef.current || {};
-    fetch(`${getNodeAwareUrl()}/sessions/archive?limit=${ARCHIVE_PAGE}&offset=${offset}`, { headers: hdrs })
+    fetch(`${nodeAwareUrlRef.current}/sessions/archive?limit=${ARCHIVE_PAGE}&offset=${offset}`, { headers: hdrs })
       .then(r => r.json())
       .then(data => {
         const items = data.items || [];
@@ -2425,12 +2430,12 @@ const MysteriumDashboard = () => {
           {/* System Metrics History Card */}
           <SystemMetricsHistoryCard backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
 
-          {/* System Health Card — full width */}
+          {/* System Health Card — full width, inline expand */}
           <div className="mb-6">
             <button
               onClick={() => setActivePanel(activePanel === 'health' ? null : 'health')}
               className={`w-full text-left p-4 bg-slate-800/30 border rounded-lg backdrop-blur transition hover:border-rose-500/50 ${
-                activePanel === 'health' ? 'border-rose-500/50 ring-1 ring-rose-500/20' : 'border-slate-700'
+                activePanel === 'health' ? 'border-rose-500/50 ring-1 ring-rose-500/20 rounded-b-none' : 'border-slate-700'
               }`}
             >
               <div className="flex items-center gap-3">
@@ -2459,9 +2464,195 @@ const MysteriumDashboard = () => {
                     })}
                   </div>
                 </div>
-                <span className="text-xs text-slate-500">Click to view</span>
+                <span className="text-xs text-slate-500">{activePanel === 'health' ? '▲ collapse' : 'Click to view'}</span>
               </div>
             </button>
+            {activePanel === 'health' && (
+              <div className="border border-t-0 border-rose-500/30 rounded-b-lg bg-slate-800/30 backdrop-blur overflow-hidden">
+                {/* Action bar */}
+                <div className="px-5 py-3 border-b border-slate-700/50 flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={async () => {
+                      try {
+                        setHealthBusy(true);
+                        const r = await fetch(`${healthFixUrl('system-health/scan')}`, {
+                          method: 'POST', headers: { ...authHeaderRef.current, 'Content-Type': 'application/json' },
+                        });
+                        if (r.ok) fetchMetrics();
+                      } catch (e) { console.error(e); } finally { setHealthBusy(false); }
+                    }}
+                    className="px-3 py-1 text-xs bg-slate-600/30 text-slate-300 border border-slate-500/30 rounded hover:bg-slate-600/50 transition"
+                  >{healthBusy ? '⟳ Scanning…' : '⟳ Scan Now'}</button>
+                  <button
+                    onClick={async () => {
+                      try {
+                        setHealthBusy(true);
+                        const [fixR, persistR] = await Promise.all([
+                          fetch(`${healthFixUrl('system-health/fix')}`, {
+                            method: 'POST',
+                            headers: { ...authHeaderRef.current, 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ subsystem: 'all' }),
+                          }),
+                          fetch(`${healthFixUrl('system-health/persist')}`, {
+                            method: 'POST',
+                            headers: { ...authHeaderRef.current, 'Content-Type': 'application/json' },
+                          }),
+                        ]);
+                        if (fixR.ok) {
+                          const data = await fixR.json();
+                          const merged = {};
+                          (data.subsystems || []).forEach(s => { merged[s.name] = s.actions || []; });
+                          setFixResults(prev => ({ ...prev, ...merged }));
+                        }
+                        fetchMetrics();
+                      } catch (e) { console.error(e); } finally { setHealthBusy(false); }
+                    }}
+                    className="px-3 py-1 text-xs bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded hover:bg-emerald-500/30 transition font-semibold"
+                    title="Apply all fixes and lock them in permanently"
+                  >⚡ Optimize &amp; Lock All</button>
+                  <button
+                    onClick={async () => {
+                      try {
+                        await fetch(`${healthFixUrl('system-health/unpersist')}`, {
+                          method: 'POST', headers: { ...authHeaderRef.current, 'Content-Type': 'application/json' },
+                        });
+                        setFixResults({});
+                        fetchMetrics();
+                      } catch (e) { console.error(e); }
+                    }}
+                    className="px-3 py-1 text-xs bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded hover:bg-amber-500/20 transition"
+                    title="Remove all persisted settings — revert to defaults on next reboot"
+                  >Unpersist All</button>
+                </div>
+                {/* Subsystems */}
+                <div className="px-5 py-4 space-y-3 max-h-[70vh] overflow-y-auto">
+                  {(metrics.systemHealth.subsystems || []).map((sub) => (
+                    <div key={sub.name} className={`p-3 rounded-lg border ${
+                      sub.status === 'ok'      ? 'bg-emerald-500/5 border-emerald-500/20' :
+                      sub.status === 'warning' ? 'bg-amber-500/5  border-amber-500/20'   :
+                                                 'bg-red-500/5    border-red-500/20'
+                    }`}>
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className={`text-sm font-semibold flex-shrink-0 ${
+                          sub.status === 'ok' ? 'text-emerald-400' : sub.status === 'warning' ? 'text-amber-400' : 'text-red-400'
+                        }`}>{sub.status === 'ok' ? '●' : sub.status === 'warning' ? '▲' : '✗'}</span>
+                        <h4 className="text-xs font-semibold text-slate-200 flex-1 min-w-0 truncate">{sub.title || sub.name}</h4>
+                        <span className={`text-xs px-1.5 py-0.5 rounded flex-shrink-0 ${
+                          sub.status === 'ok' ? 'bg-emerald-500/10 text-emerald-400' :
+                          sub.status === 'warning' ? 'bg-amber-500/10 text-amber-400' : 'bg-red-500/10 text-red-400'
+                        }`}>{sub.status}</span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5 mb-2">
+                        <button
+                          onClick={async () => {
+                            try {
+                              const fixR = await fetch(`${healthFixUrl('system-health/fix')}`, {
+                                method: 'POST',
+                                headers: { ...authHeaderRef.current, 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ subsystem: sub.name }),
+                              });
+                              if (fixR.ok) {
+                                const data = await fixR.json();
+                                setFixResults(prev => ({ ...prev, [sub.name]: data.actions || [] }));
+                              }
+                              await fetch(`${healthFixUrl('system-health/persist')}`, {
+                                method: 'POST',
+                                headers: { ...authHeaderRef.current, 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ subsystem: sub.name }),
+                              });
+                              fetchMetrics();
+                            } catch (e) { console.error(e); }
+                          }}
+                          className="px-2.5 py-1 text-xs bg-emerald-500/15 text-emerald-300 rounded hover:bg-emerald-500/25 active:bg-emerald-500/35 transition border border-emerald-500/30 font-semibold"
+                          title="Fix now and persist — survives reboots"
+                        >⚡ Fix &amp; Lock</button>
+                        <button
+                          onClick={async () => {
+                            try {
+                              await fetch(`${healthFixUrl('system-health/unpersist')}`, {
+                                method: 'POST',
+                                headers: { ...authHeaderRef.current, 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ subsystem: sub.name }),
+                              });
+                              setFixResults(prev => { const n = {...prev}; delete n[sub.name]; return n; });
+                              fetchMetrics();
+                            } catch (e) { console.error(e); }
+                          }}
+                          className="px-2.5 py-1 text-xs bg-amber-500/10 text-amber-400 rounded hover:bg-amber-500/20 active:bg-amber-500/30 transition border border-amber-500/20"
+                          title="Remove persisted settings for this subsystem"
+                        >Unpersist</button>
+                        <button
+                          onClick={async () => {
+                            try {
+                              const r = await fetch(`${healthFixUrl('system-health/fix')}`, {
+                                method: 'POST',
+                                headers: { ...authHeaderRef.current, 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ subsystem: sub.name }),
+                              });
+                              if (r.ok) {
+                                const data = await r.json();
+                                setFixResults(prev => ({ ...prev, [sub.name]: data.actions || [] }));
+                              }
+                              fetchMetrics();
+                            } catch (e) { console.error(e); }
+                          }}
+                          className="px-2.5 py-1 text-xs bg-slate-600/15 text-slate-400 rounded hover:bg-slate-600/30 transition border border-slate-600/20"
+                          title="Apply fix in memory only — reverts on reboot"
+                        >Fix only</button>
+                      </div>
+                      <div className="space-y-1">
+                        {(sub.checks || []).map((check, ci) => (
+                          <div key={ci} className="flex items-start gap-2 text-xs">
+                            <span className={`w-2 h-2 rounded-full flex-shrink-0 mt-1 ${
+                              check.status === 'ok' ? 'bg-emerald-400' : check.status === 'warning' ? 'bg-amber-400' : 'bg-red-400'
+                            }`} />
+                            <span className="text-slate-400 w-36 flex-shrink-0 leading-relaxed">{check.name}</span>
+                            <span className="text-slate-500 flex-1 leading-relaxed break-words">{check.detail}</span>
+                          </div>
+                        ))}
+                      </div>
+                      {sub.recommendations && sub.recommendations.length > 0 && (
+                        <div className="mt-2 pt-2 border-t border-slate-700/30 space-y-1">
+                          {sub.recommendations.map((rec, ri) => (
+                            <div key={ri} className="text-xs text-amber-400/80 flex items-start gap-1">
+                              <span className="flex-shrink-0">→</span>
+                              <span className="break-words">{rec}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {fixResults[sub.name] && fixResults[sub.name].length > 0 && (
+                        <div className="mt-2 pt-2 border-t border-slate-700/40">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs text-slate-500 font-medium">Last fix result</span>
+                            <button
+                              onClick={() => setFixResults(prev => { const n = {...prev}; delete n[sub.name]; return n; })}
+                              className="text-xs text-slate-600 hover:text-slate-400 transition"
+                            >✕</button>
+                          </div>
+                          <div className="space-y-0.5">
+                            {fixResults[sub.name].map((action, ai) => (
+                              <div key={ai} className="flex items-start gap-2 text-xs">
+                                <span className={`flex-shrink-0 font-bold ${action.success ? 'text-emerald-400' : 'text-red-400'}`}>
+                                  {action.success ? '✓' : '✗'}
+                                </span>
+                                <span className={`break-words flex-1 ${action.success ? 'text-slate-400' : 'text-red-400/80'}`}>
+                                  {action.action}
+                                  {action.error && <span className="text-red-500/70 ml-1">({action.error})</span>}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  {(!metrics.systemHealth.subsystems || metrics.systemHealth.subsystems.length === 0) && (
+                    <div className="text-xs text-slate-500 py-8 text-center">No health data — click Scan Now</div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Data Management Card — full width */}
@@ -2630,233 +2821,6 @@ const MysteriumDashboard = () => {
             </>
           )}
 
-          {/* Expandable System Health Panel */}
-          {/* ======= HEALTH PANEL — centred modal, scrollable, same on all screen sizes ======= */}
-          {activePanel === 'health' && (
-            <>
-              {/* Backdrop */}
-              <div className="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm" onClick={() => setActivePanel(null)} />
-              {/* Modal */}
-              <div className="fixed inset-x-3 top-4 bottom-4 z-50 flex flex-col max-w-2xl mx-auto
-                              border border-rose-500/30 rounded-xl shadow-2xl overflow-hidden"
-                   style={{ backgroundColor: panelBg }}>
-                {/* Header — sticky */}
-                <div className="flex-shrink-0 px-5 py-4 border-b border-slate-700/50 flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <Heart className="w-4 h-4 text-rose-400" />
-                    <h3 className="text-sm font-semibold tracking-wide">System Health</h3>
-                    <span className={`text-xs px-2 py-0.5 rounded font-semibold ${
-                      metrics.systemHealth.overall === 'ok' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' :
-                      metrics.systemHealth.overall === 'warning' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' :
-                      'bg-red-500/20 text-red-300 border border-red-500/30'
-                    }`}>{(metrics.systemHealth.overall || 'unknown').toUpperCase()}</span>
-                  </div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    {/* Scan */}
-                    <button
-                      onClick={async () => {
-                        try {
-                          setHealthBusy(true);
-                          const r = await fetch(`${healthFixUrl('system-health/scan')}`, {
-                            method: 'POST', headers: { ...authHeaderRef.current, 'Content-Type': 'application/json' },
-                          });
-                          if (r.ok) fetchMetrics();
-                        } catch (e) { console.error(e); } finally { setHealthBusy(false); }
-                      }}
-                      className="px-3 py-1 text-xs bg-slate-600/30 text-slate-300 border border-slate-500/30 rounded hover:bg-slate-600/50 transition"
-                    >{healthBusy ? '⟳ Scanning…' : '⟳ Scan Now'}</button>
-                    {/* Optimize & Lock All — fix + persist in one shot */}
-                    <button
-                      onClick={async () => {
-                        try {
-                          setHealthBusy(true);
-                          const [fixR, persistR] = await Promise.all([
-                            fetch(`${healthFixUrl('system-health/fix')}`, {
-                              method: 'POST',
-                              headers: { ...authHeaderRef.current, 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ subsystem: 'all' }),
-                            }),
-                            fetch(`${healthFixUrl('system-health/persist')}`, {
-                              method: 'POST',
-                              headers: { ...authHeaderRef.current, 'Content-Type': 'application/json' },
-                            }),
-                          ]);
-                          if (fixR.ok) {
-                            const data = await fixR.json();
-                            const merged = {};
-                            (data.subsystems || []).forEach(s => { merged[s.name] = s.actions || []; });
-                            setFixResults(prev => ({ ...prev, ...merged }));
-                          }
-                          fetchMetrics();
-                        } catch (e) { console.error(e); } finally { setHealthBusy(false); }
-                      }}
-                      className="px-3 py-1 text-xs bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded hover:bg-emerald-500/30 transition font-semibold"
-                      title="Apply all fixes and lock them in permanently"
-                    >⚡ Optimize &amp; Lock All</button>
-                    {/* Unpersist All */}
-                    <button
-                      onClick={async () => {
-                        try {
-                          await fetch(`${healthFixUrl('system-health/unpersist')}`, {
-                            method: 'POST', headers: { ...authHeaderRef.current, 'Content-Type': 'application/json' },
-                          });
-                          setFixResults({});
-                          fetchMetrics();
-                        } catch (e) { console.error(e); }
-                      }}
-                      className="px-3 py-1 text-xs bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded hover:bg-amber-500/20 transition"
-                      title="Remove all persisted settings — revert to defaults on next reboot"
-                    >Unpersist All</button>
-                    <button
-                      onClick={() => setActivePanel(null)}
-                      className="px-3 py-1 text-xs bg-slate-700/50 text-slate-300 border border-slate-600/30 rounded hover:bg-slate-600/50 transition font-semibold"
-                    >✕ Close</button>
-                  </div>
-                </div>
-
-                {/* Scrollable content */}
-                <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
-                  {(metrics.systemHealth.subsystems || []).map((sub) => (
-                    <div key={sub.name} className={`p-3 rounded-lg border ${
-                      sub.status === 'ok'      ? 'bg-emerald-500/5 border-emerald-500/20' :
-                      sub.status === 'warning' ? 'bg-amber-500/5  border-amber-500/20'   :
-                                                 'bg-red-500/5    border-red-500/20'
-                    }`}>
-                      {/* Title row */}
-                      <div className="flex items-center gap-2 mb-2">
-                        <span className={`text-sm font-semibold flex-shrink-0 ${
-                          sub.status === 'ok' ? 'text-emerald-400' : sub.status === 'warning' ? 'text-amber-400' : 'text-red-400'
-                        }`}>{sub.status === 'ok' ? '●' : sub.status === 'warning' ? '▲' : '✗'}</span>
-                        <h4 className="text-xs font-semibold text-slate-200 flex-1 min-w-0 truncate">{sub.title || sub.name}</h4>
-                        <span className={`text-xs px-1.5 py-0.5 rounded flex-shrink-0 ${
-                          sub.status === 'ok' ? 'bg-emerald-500/10 text-emerald-400' :
-                          sub.status === 'warning' ? 'bg-amber-500/10 text-amber-400' : 'bg-red-500/10 text-red-400'
-                        }`}>{sub.status}</span>
-                      </div>
-
-                      {/* Action buttons — Fix & Lock is primary; Unpersist + Fix-only are secondary */}
-                      <div className="flex flex-wrap items-center gap-1.5 mb-2">
-                        {/* PRIMARY: Fix & Lock */}
-                        <button
-                          onClick={async () => {
-                            try {
-                              const fixR = await fetch(`${healthFixUrl('system-health/fix')}`, {
-                                method: 'POST',
-                                headers: { ...authHeaderRef.current, 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ subsystem: sub.name }),
-                              });
-                              if (fixR.ok) {
-                                const data = await fixR.json();
-                                setFixResults(prev => ({ ...prev, [sub.name]: data.actions || [] }));
-                              }
-                              await fetch(`${healthFixUrl('system-health/persist')}`, {
-                                method: 'POST',
-                                headers: { ...authHeaderRef.current, 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ subsystem: sub.name }),
-                              });
-                              fetchMetrics();
-                            } catch (e) { console.error(e); }
-                          }}
-                          className="px-2.5 py-1 text-xs bg-emerald-500/15 text-emerald-300 rounded hover:bg-emerald-500/25 active:bg-emerald-500/35 transition border border-emerald-500/30 font-semibold"
-                          title="Fix now and persist — survives reboots"
-                        >⚡ Fix &amp; Lock</button>
-                        {/* SECONDARY: Unpersist */}
-                        <button
-                          onClick={async () => {
-                            try {
-                              await fetch(`${healthFixUrl('system-health/unpersist')}`, {
-                                method: 'POST',
-                                headers: { ...authHeaderRef.current, 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ subsystem: sub.name }),
-                              });
-                              setFixResults(prev => { const n = {...prev}; delete n[sub.name]; return n; });
-                              fetchMetrics();
-                            } catch (e) { console.error(e); }
-                          }}
-                          className="px-2.5 py-1 text-xs bg-amber-500/10 text-amber-400 rounded hover:bg-amber-500/20 active:bg-amber-500/30 transition border border-amber-500/20"
-                          title="Remove persisted settings for this subsystem"
-                        >Unpersist</button>
-                        {/* TERTIARY: Fix in-memory only (advanced) */}
-                        <button
-                          onClick={async () => {
-                            try {
-                              const r = await fetch(`${healthFixUrl('system-health/fix')}`, {
-                                method: 'POST',
-                                headers: { ...authHeaderRef.current, 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ subsystem: sub.name }),
-                              });
-                              if (r.ok) {
-                                const data = await r.json();
-                                setFixResults(prev => ({ ...prev, [sub.name]: data.actions || [] }));
-                              }
-                              fetchMetrics();
-                            } catch (e) { console.error(e); }
-                          }}
-                          className="px-2.5 py-1 text-xs bg-slate-600/15 text-slate-400 rounded hover:bg-slate-600/30 transition border border-slate-600/20"
-                          title="Apply fix in memory only — reverts on reboot"
-                        >Fix only</button>
-                      </div>
-
-                      {/* Check details */}
-                      <div className="space-y-1">
-                        {(sub.checks || []).map((check, ci) => (
-                          <div key={ci} className="flex items-start gap-2 text-xs">
-                            <span className={`w-2 h-2 rounded-full flex-shrink-0 mt-1 ${
-                              check.status === 'ok' ? 'bg-emerald-400' : check.status === 'warning' ? 'bg-amber-400' : 'bg-red-400'
-                            }`} />
-                            <span className="text-slate-400 w-36 flex-shrink-0 leading-relaxed">{check.name}</span>
-                            <span className="text-slate-500 flex-1 leading-relaxed break-words">{check.detail}</span>
-                          </div>
-                        ))}
-                      </div>
-
-                      {/* Recommendations */}
-                      {sub.recommendations && sub.recommendations.length > 0 && (
-                        <div className="mt-2 pt-2 border-t border-slate-700/30 space-y-1">
-                          {sub.recommendations.map((rec, ri) => (
-                            <div key={ri} className="text-xs text-amber-400/80 flex items-start gap-1">
-                              <span className="flex-shrink-0">→</span>
-                              <span className="break-words">{rec}</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {/* Fix results — shown after any fix action */}
-                      {fixResults[sub.name] && fixResults[sub.name].length > 0 && (
-                        <div className="mt-2 pt-2 border-t border-slate-700/40">
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="text-xs text-slate-500 font-medium">Last fix result</span>
-                            <button
-                              onClick={() => setFixResults(prev => { const n = {...prev}; delete n[sub.name]; return n; })}
-                              className="text-xs text-slate-600 hover:text-slate-400 transition"
-                            >✕</button>
-                          </div>
-                          <div className="space-y-0.5">
-                            {fixResults[sub.name].map((action, ai) => (
-                              <div key={ai} className="flex items-start gap-2 text-xs">
-                                <span className={`flex-shrink-0 font-bold ${action.success ? 'text-emerald-400' : 'text-red-400'}`}>
-                                  {action.success ? '✓' : '✗'}
-                                </span>
-                                <span className={`break-words flex-1 ${action.success ? 'text-slate-400' : 'text-red-400/80'}`}>
-                                  {action.action}
-                                  {action.error && <span className="text-red-500/70 ml-1">({action.error})</span>}
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                  {(!metrics.systemHealth.subsystems || metrics.systemHealth.subsystems.length === 0) && (
-                    <div className="text-xs text-slate-500 py-8 text-center">No health data — click Scan Now</div>
-                  )}
-                </div>
-              </div>
-            </>
-          )}
-
           {/* Expandable Data Management Panel */}
           {activePanel === 'data' && (
             <>
@@ -2879,38 +2843,6 @@ const MysteriumDashboard = () => {
             </>
           )}
 
-          {showLogs && (
-          <div className="p-6 bg-slate-800/30 border border-slate-700 rounded-lg backdrop-blur">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <Terminal className="w-4 h-4 text-slate-400" />
-                <h3 className="text-sm font-semibold tracking-wide">Recent Logs</h3>
-              </div>
-              <button onClick={fetchMetrics} className="p-1 hover:bg-slate-700 rounded transition">
-                <RefreshCw className="w-4 h-4 text-slate-400" />
-              </button>
-            </div>
-            <div className="space-y-2 max-h-64 overflow-y-auto overflow-x-auto">
-              {metrics.logs && metrics.logs.length > 0 ? (
-                metrics.logs.map((log, i) => {
-                  const level = log.level || 'INFO';
-                  const levelColor = level === 'ERROR' || level === 'CRITICAL' ? 'text-red-400'
-                    : level === 'WARNING' ? 'text-amber-400'
-                    : 'text-slate-500';
-                  return (
-                    <div key={i} className="text-xs text-slate-400 font-mono py-1 px-2 bg-slate-900/50 rounded border border-slate-700/50">
-                      <span className="text-slate-500">[{log.timestamp || '—'}]</span>
-                      {' '}<span className={`font-semibold ${levelColor}`}>{level}</span>
-                      {' '}{log.message || log}
-                    </div>
-                  );
-                })
-              ) : (
-                <div className="text-xs text-slate-500 py-8 text-center">No logs available</div>
-              )}
-            </div>
-          </div>
-          )}
 
           <div className="mt-8 p-4 bg-slate-800/20 border border-slate-700/30 rounded-lg flex items-center justify-between flex-wrap gap-3">
             <div className="text-xs text-slate-400">
@@ -2954,6 +2886,40 @@ const MysteriumDashboard = () => {
               ))}
             </div>
           </div>
+
+          {/* Logs — expandable below the footer bar */}
+          {showLogs && (
+          <div className="mt-2 p-6 bg-slate-800/30 border border-slate-700 rounded-lg backdrop-blur">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <Terminal className="w-4 h-4 text-slate-400" />
+                <h3 className="text-sm font-semibold tracking-wide">Recent Logs</h3>
+              </div>
+              <button onClick={fetchMetrics} className="p-1 hover:bg-slate-700 rounded transition">
+                <RefreshCw className="w-4 h-4 text-slate-400" />
+              </button>
+            </div>
+            <div className="space-y-2 max-h-64 overflow-y-auto overflow-x-auto">
+              {metrics.logs && metrics.logs.length > 0 ? (
+                metrics.logs.map((log, i) => {
+                  const level = log.level || 'INFO';
+                  const levelColor = level === 'ERROR' || level === 'CRITICAL' ? 'text-red-400'
+                    : level === 'WARNING' ? 'text-amber-400'
+                    : 'text-slate-500';
+                  return (
+                    <div key={i} className="text-xs text-slate-400 font-mono py-1 px-2 bg-slate-900/50 rounded border border-slate-700/50">
+                      <span className="text-slate-500">[{log.timestamp || '—'}]</span>
+                      {' '}<span className={`font-semibold ${levelColor}`}>{level}</span>
+                      {' '}{log.message || log}
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="text-xs text-slate-500 py-8 text-center">No logs available</div>
+              )}
+            </div>
+          </div>
+          )}
 
           {/* ═══ Help Section ═══ */}
           {showHelp && (
@@ -5109,6 +5075,7 @@ const ServiceToggleRow = ({ svc, backendUrl, authHeaders }) => {
       </button>
       <div className="flex-1">
         <span className="font-semibold text-slate-200">{typeLabel}</span>
+        {svc.type === 'quic_scraping' && <span className="ml-2 text-xs text-slate-500">(QUIC variant of B2B Data Scraping)</span>}
         {busy && <span className="ml-2 text-xs text-slate-400">…</span>}
         {confirm && <span className="ml-2 text-xs text-red-400">Click again to stop</span>}
         {status && <span className={`ml-2 text-xs ${status.startsWith('✓') ? 'text-emerald-400' : 'text-red-400'}`}>{status}</span>}

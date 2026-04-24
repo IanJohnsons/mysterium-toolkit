@@ -1749,6 +1749,7 @@ class EarningsDeltaTracker:
     _snapshots = []   # [{'time': iso_str, 'unsettled': float, 'lifetime': float}]
     _loaded = False
     _load_date = None  # date of last full DB reload — triggers daily refresh
+    _was_rate_limited = False  # True after a rate-limited cycle — forces immediate snapshot on recovery
 
     @classmethod
     def _load(cls, force=False):
@@ -1789,13 +1790,19 @@ class EarningsDeltaTracker:
         """
         if not identity_ok:
             logger.info("EarningsDeltaTracker: skipping snapshot — identity API not available")
+            cls._was_rate_limited = True  # flag: force immediate snapshot on recovery
             return
 
         cls._load()
         now = datetime.now(timezone.utc)
         now_iso = now.isoformat()
 
-        # Only record if last snapshot is >15 minutes old
+        # On recovery from rate limit: bypass cooldown so the snapshot is timestamped
+        # at the actual recovery moment — correct day attribution after a gap.
+        recovering = cls._was_rate_limited
+        cls._was_rate_limited = False  # clear flag regardless
+
+        # Only record if last snapshot is >9 minutes old (or recovering from rate limit)
         if cls._snapshots:
             last_time = cls._snapshots[-1].get('time', '')
             last_lifetime = float(cls._snapshots[-1].get('lifetime', 0) or 0)
@@ -1804,11 +1811,14 @@ class EarningsDeltaTracker:
                 if last_dt.tzinfo is None:
                     last_dt = last_dt.replace(tzinfo=timezone.utc)
                 elapsed = (now - last_dt).total_seconds()
-                if elapsed < 540:  # 9 minutes — safely below the 10-min slow tier interval
+                if elapsed < 540 and not recovering:  # 9 min — bypass on rate-limit recovery
                     logger.info(f"EarningsDeltaTracker: skip snapshot — only {int(elapsed)}s since last ({last_time[:16]})")
                     return  # Too soon
                 else:
-                    logger.info(f"EarningsDeltaTracker: {int(elapsed)}s since last snapshot — recording new one")
+                    if recovering:
+                        logger.info(f"EarningsDeltaTracker: rate-limit recovery — forcing snapshot after {int(elapsed)}s gap")
+                    else:
+                        logger.info(f"EarningsDeltaTracker: {int(elapsed)}s since last snapshot — recording new one")
             except (ValueError, TypeError) as e:
                 logger.warning(f"EarningsDeltaTracker: bad last_time format '{last_time}' — {e}")
                 last_lifetime = 0.0
@@ -6162,7 +6172,7 @@ def get_earnings_chart():
         if daily_map:
             from datetime import date as _date
             oldest_d = _date.fromisoformat(list(daily_map.keys())[0])
-            newest_d = _date.today()
+            newest_d = datetime.now(timezone.utc).date()  # UTC — matches snapshot timestamps
             filled_map = OrderedDict()
             last_lifetime = list(daily_map.values())[0]['first']
             cur = oldest_d
