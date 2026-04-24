@@ -1366,6 +1366,24 @@ const MysteriumDashboard = () => {
                         <span className="text-emerald-300 font-semibold">{(Number(n.earnings?.unsettled)||0).toFixed(4)} MYST</span>
                         {n.sessions?.active > 0 && <span className="text-slate-400">{n.sessions.active} sessions</span>}
                       </div>
+                      {/* Today earnings + uptime + efficiency */}
+                      <div className="flex gap-3 text-[10px] mt-0.5">
+                        {n.earnings?.daily != null && (
+                          <span className="text-cyan-400/80">
+                            Today: <span className="font-semibold">{Number(n.earnings.daily).toFixed(4)}</span> MYST
+                          </span>
+                        )}
+                        {(n.node_quality?.uptime_24h_local ?? n.node_quality?.uptime_24h_net) != null && (
+                          <span className={`${(n.node_quality?.uptime_24h_local ?? n.node_quality?.uptime_24h_net) >= 90 ? 'text-emerald-400/70' : (n.node_quality?.uptime_24h_local ?? n.node_quality?.uptime_24h_net) >= 70 ? 'text-amber-400/70' : 'text-red-400/70'}`}>
+                            Up: {(n.node_quality?.uptime_24h_local ?? n.node_quality?.uptime_24h_net).toFixed(1)}%
+                          </span>
+                        )}
+                        {n.earnings?.daily != null && (n.node_quality?.uptime_24h_local ?? n.node_quality?.uptime_24h_net) > 0 && (() => {
+                          const up = (n.node_quality?.uptime_24h_local ?? n.node_quality?.uptime_24h_net) / 100;
+                          const eff = Number(n.earnings.daily) / up;
+                          return <span className="text-slate-500" title="MYST/day normalized for uptime">{eff.toFixed(4)} eff</span>;
+                        })()}
+                      </div>
                       {n.error && <div className="text-red-400/80 text-[10px]">⚠ {n.error}</div>}
                     </div>
                     <div className="mt-3 pt-2 border-t border-slate-700/50 text-[10px] text-slate-600 flex items-center justify-between">
@@ -1586,6 +1604,12 @@ const MysteriumDashboard = () => {
 
           {/* Analytics — lifetime totals, service breakdown, consumer origin */}
           <AnalyticsCard sessions={metrics.sessions} backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
+
+          {/* Service Split over Time — stacked bar per day/week */}
+          <ServiceSplitChart backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
+
+          {/* Earnings Efficiency — MYST/GB timeseries */}
+          <EarningsEfficiencyChart backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
 
           {/* Bandwidth — VPN tunnel traffic */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
@@ -2126,6 +2150,11 @@ const MysteriumDashboard = () => {
                                   ? '<0.00001'
                                   : session.earnings_myst.toFixed(6)
                                 : '—'}
+                              {session.is_paid && session.data_total > 0 && (
+                                <div className="text-[9px] text-slate-500 font-normal" title="MYST per GB transferred">
+                                  {(session.earnings_myst / (session.data_total / 1024)).toFixed(4)}/GB
+                                </div>
+                              )}
                             </div>
                             <div className="col-span-1 text-slate-500 font-mono text-xs truncate" title={session.id}>
                               {session.id ? session.id.slice(0, 8) + '…' : '—'}
@@ -2214,6 +2243,11 @@ const MysteriumDashboard = () => {
                                   <div className="col-span-1 text-slate-400">{formatDataSize(s.data_total)}</div>
                                   <div className={`col-span-1 font-semibold text-xs ${s.is_paid ? 'text-emerald-400/80' : 'text-slate-600'}`}>
                                     {s.is_paid ? s.earnings_myst.toFixed(6) : '—'}
+                                    {s.is_paid && s.data_total > 0 && (
+                                      <div className="text-[9px] text-slate-500 font-normal" title="MYST per GB transferred">
+                                        {(s.earnings_myst / (s.data_total / 1024)).toFixed(4)}/GB
+                                      </div>
+                                    )}
                                   </div>
                                   <div className="col-span-1 text-slate-600 font-mono text-xs truncate">{s.id ? s.id.slice(0,8)+'…' : '—'}</div>
                                 </div>
@@ -3138,6 +3172,202 @@ const MysteriumDashboard = () => {
 };
 
 // ============ COMPONENTS ============
+
+// ---- Service Split Chart (Feature 2) ----
+const SERVICE_COLORS = {
+  wireguard:     { hex: 'rgb(52,211,153)',  cls: 'text-emerald-400' },
+  scraping:      { hex: 'rgb(56,189,248)',  cls: 'text-sky-400' },
+  quic_scraping: { hex: 'rgb(167,139,250)', cls: 'text-violet-400' },
+  dvpn:          { hex: 'rgb(251,191,36)',  cls: 'text-amber-400' },
+  data_transfer: { hex: 'rgb(251,113,133)', cls: 'text-rose-400' },
+};
+const svcColor = (t) => SERVICE_COLORS[t] || { hex: 'rgb(148,163,184)', cls: 'text-slate-400' };
+
+const ServiceSplitChart = ({ backendUrl, authHeaders }) => {
+  const [data, setData]   = React.useState([]);
+  const [days, setDays]   = React.useState(90);
+  const [open, setOpen]   = React.useState(false);
+  const [loading, setLoading] = React.useState(false);
+
+  const DAY_OPTIONS = [7, 14, 30, 90, 180, 365];
+
+  const load = React.useCallback(() => {
+    if (!open) return;
+    setLoading(true);
+    fetch(`${backendUrl}/analytics/service-split?days=${days}`, { headers: authHeaders || {} })
+      .then(r => r.json())
+      .then(d => { setData(d.data || []); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [open, days, backendUrl, authHeaders]);
+
+  React.useEffect(() => { load(); }, [load]);
+
+  // Aggregate by date → [{date, perType: {wireguard: N, scraping: N}}]
+  const dates = [...new Set(data.map(r => r.date))].sort();
+  const types = [...new Set(data.map(r => r.service_type))];
+  const byDate = {};
+  data.forEach(r => {
+    if (!byDate[r.date]) byDate[r.date] = {};
+    byDate[r.date][r.service_type] = r.earnings_myst;
+  });
+  const maxTotal = Math.max(...dates.map(d => types.reduce((s, t) => s + (byDate[d]?.[t] || 0), 0)), 0.0001);
+
+  const W = 600; const H = 80; const barW = Math.max(2, Math.floor(W / Math.max(dates.length, 1)) - 1);
+
+  return (
+    <div className="mb-6 p-4 bg-slate-800/30 border border-slate-700 rounded-lg backdrop-blur">
+      <button onClick={() => setOpen(o => !o)} className="w-full flex items-center justify-between">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-300 tracking-wide text-left">Service Split Over Time</h3>
+          <p className="text-[10px] text-slate-600 mt-0.5 text-left">Daily earnings by service type</p>
+        </div>
+        <span className="text-xs text-slate-500">{open ? '▲ collapse' : '▼ expand'}</span>
+      </button>
+
+      {open && (
+        <div className="mt-3">
+          <div className="flex gap-1 flex-wrap mb-3">
+            {DAY_OPTIONS.map(d => (
+              <button key={d} onClick={() => setDays(d)}
+                className={`px-2 py-0.5 text-xs rounded border transition ${days === d
+                  ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300'
+                  : 'border-slate-700 text-slate-500 hover:text-slate-300'}`}>{d}d</button>
+            ))}
+            {loading && <span className="text-xs text-slate-600 ml-2">loading…</span>}
+          </div>
+
+          {/* Legend */}
+          <div className="flex gap-3 flex-wrap mb-2">
+            {types.map(t => (
+              <span key={t} className={`text-[10px] flex items-center gap-1 ${svcColor(t).cls}`}>
+                <span style={{background: svcColor(t).hex}} className="inline-block w-2 h-2 rounded-sm" />
+                {t}
+              </span>
+            ))}
+          </div>
+
+          {dates.length === 0 && !loading && (
+            <div className="text-xs text-slate-500 py-4 text-center">No data for this period</div>
+          )}
+
+          {dates.length > 0 && (
+            <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{height: '80px'}} preserveAspectRatio="none">
+              {dates.map((date, i) => {
+                const x = (i / Math.max(dates.length - 1, 1)) * (W - barW);
+                let yOff = H;
+                return types.map(t => {
+                  const val = byDate[date]?.[t] || 0;
+                  if (!val) return null;
+                  const barH = (val / maxTotal) * H;
+                  yOff -= barH;
+                  return (
+                    <rect key={`${date}-${t}`} x={x} y={yOff} width={barW} height={barH}
+                      fill={svcColor(t).hex} opacity="0.8">
+                      <title>{date} · {t}: {val.toFixed(4)} MYST</title>
+                    </rect>
+                  );
+                });
+              })}
+            </svg>
+          )}
+
+          {/* X-axis labels */}
+          {dates.length > 0 && (
+            <div className="flex justify-between text-[9px] text-slate-600 mt-1">
+              <span>{dates[0]}</span>
+              {dates.length > 2 && <span>{dates[Math.floor(dates.length / 2)]}</span>}
+              <span>{dates[dates.length - 1]}</span>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ---- Earnings Efficiency Chart (Feature 5) ----
+const EarningsEfficiencyChart = ({ backendUrl, authHeaders }) => {
+  const [data, setData]   = React.useState([]);
+  const [days, setDays]   = React.useState(90);
+  const [open, setOpen]   = React.useState(false);
+  const [loading, setLoading] = React.useState(false);
+
+  const DAY_OPTIONS = [7, 14, 30, 90, 180, 365];
+
+  const load = React.useCallback(() => {
+    if (!open) return;
+    setLoading(true);
+    fetch(`${backendUrl}/analytics/earnings-efficiency?days=${days}`, { headers: authHeaders || {} })
+      .then(r => r.json())
+      .then(d => { setData(d.data || []); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [open, days, backendUrl, authHeaders]);
+
+  React.useEffect(() => { load(); }, [load]);
+
+  const vals = data.map(d => d.myst_per_gb).filter(v => v != null);
+  const mn = vals.length ? Math.min(...vals) * 0.9 : 0;
+  const mx = vals.length ? Math.max(...vals) * 1.1 : 1;
+  const W = 600; const H = 60;
+  const pts = data.map((d, i) => {
+    if (d.myst_per_gb == null) return null;
+    const x = (i / Math.max(data.length - 1, 1)) * W;
+    const y = H - ((d.myst_per_gb - mn) / (mx - mn || 1)) * H;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).filter(Boolean).join(' ');
+  const avg = vals.length ? (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(4) : null;
+  const last = vals.length ? vals[vals.length - 1].toFixed(4) : null;
+
+  return (
+    <div className="mb-6 p-4 bg-slate-800/30 border border-slate-700 rounded-lg backdrop-blur">
+      <button onClick={() => setOpen(o => !o)} className="w-full flex items-center justify-between">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-300 tracking-wide text-left">Earnings Efficiency</h3>
+          <p className="text-[10px] text-slate-600 mt-0.5 text-left">MYST per GB transferred over time</p>
+        </div>
+        <span className="text-xs text-slate-500">{open ? '▲ collapse' : '▼ expand'}</span>
+      </button>
+
+      {open && (
+        <div className="mt-3">
+          <div className="flex gap-1 flex-wrap mb-3">
+            {DAY_OPTIONS.map(d => (
+              <button key={d} onClick={() => setDays(d)}
+                className={`px-2 py-0.5 text-xs rounded border transition ${days === d
+                  ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300'
+                  : 'border-slate-700 text-slate-500 hover:text-slate-300'}`}>{d}d</button>
+            ))}
+            {loading && <span className="text-xs text-slate-600 ml-2">loading…</span>}
+          </div>
+
+          {avg && (
+            <div className="flex gap-4 text-xs mb-2">
+              <span className="text-slate-500">Avg: <span className="text-cyan-400 font-semibold">{avg} MYST/GB</span></span>
+              <span className="text-slate-500">Latest: <span className="text-emerald-400 font-semibold">{last} MYST/GB</span></span>
+            </div>
+          )}
+
+          {data.length === 0 && !loading && (
+            <div className="text-xs text-slate-500 py-4 text-center">No data for this period</div>
+          )}
+
+          {data.length > 1 && (
+            <>
+              <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{height: '60px'}} preserveAspectRatio="none">
+                <polyline points={pts} fill="none" stroke="rgb(52,211,153)" strokeWidth="1.5" />
+              </svg>
+              <div className="flex justify-between text-[9px] text-slate-600 mt-1">
+                <span>{data[0]?.date}</span>
+                {data.length > 2 && <span>{data[Math.floor(data.length / 2)]?.date}</span>}
+                <span>{data[data.length - 1]?.date}</span>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
 
 // ---- Analytics Card ----
 const EarningsHistoryCard = ({ backendUrl, authHeaders }) => {

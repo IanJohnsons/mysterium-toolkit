@@ -5865,6 +5865,7 @@ def fleet_node_proxy(node_id, endpoint):
         'firewall/cleanup',
         'data/stats', 'data/delete', 'data/retention',
         'data/quality/history', 'data/system/history',
+        'analytics/service-split', 'analytics/earnings-efficiency',
     }
     endpoint_base = endpoint.split('?')[0]
     if (endpoint_base not in ALLOWED
@@ -6650,6 +6651,89 @@ def start_service():
         return jsonify({'success': False, 'error': 'No node available'}), 200
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 200
+
+
+@app.route('/analytics/service-split', methods=['GET'])
+@require_auth
+def get_service_split():
+    """Return per-day service type breakdown for stacked bar chart (Feature 2).
+    Query param: days (default 90)
+    Returns: [{date, service_type, earnings_myst, sessions, data_mb}, ...]
+    """
+    try:
+        days = request.args.get('days', 90, type=int)
+        node_id = request.args.get('node_id')
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+        conn = SessionDB._conn()
+        q = """
+            SELECT
+                substr(started_at, 1, 10) AS date,
+                service_type,
+                COUNT(*) AS sessions,
+                SUM(COALESCE(earnings_myst, 0)) AS earnings_myst,
+                SUM(COALESCE(data_total, 0)) AS data_mb
+            FROM sessions
+            WHERE started_at >= ?
+              AND service_type NOT IN ('monitoring', 'noop', '')
+              AND earnings_myst > 0
+        """
+        params = [cutoff]
+        if node_id:
+            q += " AND provider_id = ?"
+            params.append(node_id)
+        q += " GROUP BY date, service_type ORDER BY date ASC"
+        rows = conn.execute(q, params).fetchall()
+        conn.close()
+        result = [{'date': r[0], 'service_type': r[1], 'sessions': r[2],
+                   'earnings_myst': round(r[3], 6), 'data_mb': round(r[4], 2)} for r in rows]
+        return jsonify({'data': result, 'days': days}), 200
+    except Exception as e:
+        logger.error(f'service-split error: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/analytics/earnings-efficiency', methods=['GET'])
+@require_auth
+def get_earnings_efficiency():
+    """Return per-day MYST/GB timeseries (Feature 5).
+    Query param: days (default 90)
+    Returns: [{date, earnings_myst, data_mb, myst_per_gb}, ...]
+    """
+    try:
+        days = request.args.get('days', 90, type=int)
+        node_id = request.args.get('node_id')
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+        conn = SessionDB._conn()
+        q = """
+            SELECT
+                substr(started_at, 1, 10) AS date,
+                SUM(COALESCE(earnings_myst, 0)) AS earnings_myst,
+                SUM(COALESCE(data_total, 0)) AS data_mb
+            FROM sessions
+            WHERE started_at >= ?
+              AND service_type NOT IN ('monitoring', 'noop', '')
+              AND earnings_myst > 0
+              AND data_total > 0
+        """
+        params = [cutoff]
+        if node_id:
+            q += " AND provider_id = ?"
+            params.append(node_id)
+        q += " GROUP BY date ORDER BY date ASC"
+        rows = conn.execute(q, params).fetchall()
+        conn.close()
+        result = []
+        for r in rows:
+            data_gb = r[2] / 1024 if r[2] else 0
+            myst_per_gb = round(r[1] / data_gb, 6) if data_gb > 0 else None
+            result.append({'date': r[0], 'earnings_myst': round(r[1], 6),
+                           'data_mb': round(r[2], 2), 'myst_per_gb': myst_per_gb})
+        return jsonify({'data': result, 'days': days}), 200
+    except Exception as e:
+        logger.error(f'earnings-efficiency error: {e}')
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/settle/history', methods=['GET'])
