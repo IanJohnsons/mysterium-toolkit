@@ -6725,12 +6725,12 @@ def get_service_split():
             SELECT
                 started_at,
                 service_type,
-                COALESCE(earnings_myst, 0) AS earnings_myst,
-                COALESCE(data_total, 0) AS data_mb
+                COALESCE(tokens, 0) AS tokens,
+                COALESCE(bytes_sent, 0) + COALESCE(bytes_received, 0) AS total_bytes
             FROM sessions
             WHERE started_at >= ?
               AND service_type NOT IN ('monitoring', 'noop', '')
-              AND earnings_myst > 0
+              AND tokens > 0
         """
         params = [cutoff]
         if node_id:
@@ -6752,8 +6752,8 @@ def get_service_split():
                 day = str(r[0])[:10]
             key = (day, r[1])
             day_type_map[key]['sessions']      += 1
-            day_type_map[key]['earnings_myst'] += float(r[2])
-            day_type_map[key]['data_mb']       += float(r[3])
+            day_type_map[key]['earnings_myst'] += float(r[2]) / 1e18
+            day_type_map[key]['data_mb']       += float(r[3]) / (1024 * 1024)
 
         result = sorted([
             {'date': k[0], 'service_type': k[1],
@@ -6786,13 +6786,13 @@ def get_earnings_efficiency():
         q = """
             SELECT
                 started_at,
-                COALESCE(earnings_myst, 0) AS earnings_myst,
-                COALESCE(data_total, 0) AS data_mb
+                COALESCE(tokens, 0) AS tokens,
+                COALESCE(bytes_sent, 0) + COALESCE(bytes_received, 0) AS total_bytes
             FROM sessions
             WHERE started_at >= ?
               AND service_type NOT IN ('monitoring', 'noop', '')
-              AND earnings_myst > 0
-              AND data_total > 0
+              AND tokens > 0
+              AND (bytes_sent > 0 OR bytes_received > 0)
         """
         params = [cutoff]
         if node_id:
@@ -6812,8 +6812,8 @@ def get_earnings_efficiency():
                 day = t.astimezone(TOOLKIT_TZ).strftime('%Y-%m-%d')
             except Exception:
                 day = str(r[0])[:10]
-            day_map[day]['earnings_myst'] += float(r[1])
-            day_map[day]['data_mb']       += float(r[2])
+            day_map[day]['earnings_myst'] += float(r[1]) / 1e18
+            day_map[day]['data_mb']       += float(r[2]) / (1024 * 1024)
 
         result = []
         for day in sorted(day_map.keys()):
