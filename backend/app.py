@@ -138,11 +138,55 @@ if setup_config_path.exists():
 # ============ TIMEZONE ============
 # All "today" and "this month" calculations use this timezone.
 # Earnings snapshot timestamps stay in UTC — only display bucketing uses local tz.
+#
+# Priority: setup.json 'timezone' → OS /etc/localtime symlink → UTC
+# Auto-detected timezone is written back to setup.json so it persists across restarts.
+# After a git pull + restart the correct timezone is picked up automatically.
+
+def _detect_system_tz() -> str:
+    """Detect OS timezone from /etc/localtime symlink. Returns IANA name or 'UTC'."""
+    try:
+        import os as _os
+        lt = _os.readlink('/etc/localtime')
+        # Typical: /usr/share/zoneinfo/Europe/Brussels
+        if 'zoneinfo/' in lt:
+            tz = lt.split('zoneinfo/')[-1].strip('/')
+            if tz:
+                return tz
+    except Exception:
+        pass
+    try:
+        # Fallback: read /etc/timezone (Debian/Ubuntu)
+        with open('/etc/timezone') as _f:
+            tz = _f.read().strip()
+            if tz:
+                return tz
+    except Exception:
+        pass
+    return 'UTC'
+
 try:
     from zoneinfo import ZoneInfo
-    _tz_name = setup_config.get('timezone', 'UTC')
+    _tz_name = setup_config.get('timezone') or ''
+    _tz_source = 'config'
+    if not _tz_name:
+        _tz_name = _detect_system_tz()
+        _tz_source = 'auto-detected'
+        # Persist detected timezone to setup.json so it survives restarts/updates
+        try:
+            _cfg_data = {}
+            if setup_config_path.exists():
+                with open(setup_config_path) as _f:
+                    _cfg_data = json.load(_f)
+            if not _cfg_data.get('timezone'):
+                _cfg_data['timezone'] = _tz_name
+                with open(setup_config_path, 'w') as _f:
+                    json.dump(_cfg_data, _f, indent=2)
+                logger.info(f"Timezone auto-detected and saved to setup.json: {_tz_name}")
+        except Exception as _save_e:
+            logger.warning(f"Could not save timezone to setup.json: {_save_e}")
     TOOLKIT_TZ = ZoneInfo(_tz_name)
-    logger.info(f"Toolkit timezone: {_tz_name}")
+    logger.info(f"Toolkit timezone: {_tz_name} (source: {_tz_source})")
 except Exception as _tz_e:
     from datetime import timezone as _dtz
     TOOLKIT_TZ = _dtz.utc
@@ -4270,7 +4314,14 @@ class MetricsCollector:
                     for s in snaps:
                         if s.get('time', '') < cutoff_90:
                             continue
-                        day = s.get('time', '')[:10]
+                        # Use TOOLKIT_TZ for date bucketing (same as /earnings/chart endpoint)
+                        try:
+                            _t = datetime.fromisoformat(str(s['time']).replace('Z', '+00:00'))
+                            if _t.tzinfo is None:
+                                _t = _t.replace(tzinfo=timezone.utc)
+                            day = _t.astimezone(TOOLKIT_TZ).strftime('%Y-%m-%d')
+                        except Exception:
+                            day = s.get('time', '')[:10]
                         lt  = float(s.get('lifetime', 0) or 0)
                         if day not in daily_map_cli:
                             daily_map_cli[day] = {'first': lt, 'last': lt, 'date': day}
@@ -6162,7 +6213,10 @@ def get_earnings_chart():
         from collections import OrderedDict
         daily_map = OrderedDict()
         for entry in clean:
-            day = entry['t'].strftime('%Y-%m-%d')
+            # Use TOOLKIT_TZ for date bucketing so bars align with local midnight,
+            # not UTC midnight. Without this, Belgium (UTC+2) sees the first 2h of
+            # each local day attributed to the previous bar.
+            day = entry['t'].astimezone(TOOLKIT_TZ).strftime('%Y-%m-%d')
             if day not in daily_map:
                 daily_map[day] = {'first': entry['lifetime'], 'last': entry['lifetime'], 'date': day}
             else:
@@ -6173,7 +6227,7 @@ def get_earnings_chart():
         if daily_map:
             from datetime import date as _date
             oldest_d = _date.fromisoformat(list(daily_map.keys())[0])
-            newest_d = datetime.now(timezone.utc).date()  # UTC — matches snapshot timestamps
+            newest_d = datetime.now(TOOLKIT_TZ).date()  # local date — matches bucketing above
             filled_map = OrderedDict()
             last_lifetime = list(daily_map.values())[0]['first']
             cur = oldest_d
