@@ -3009,10 +3009,16 @@ const MysteriumDashboard = () => {
                 <div>
                   <h4 className="text-emerald-400 font-semibold mb-1">Data Management &amp; Retention</h4>
                   <p className="text-slate-400">The <strong className="text-slate-300">Data Management</strong> panel (below System Health) shows all 7 databases with record counts and date ranges. Use it to manually delete data older than N days or wipe a type entirely — two-click confirmation required.</p>
-                  <p className="text-slate-400 mt-1"><strong className="text-slate-300">Auto-retention</strong> — databases are pruned automatically once per calendar day during the slow-tier cycle. Default windows: earnings 365d · sessions 90d · traffic 730d · quality 90d · system 30d · services 30d · uptime 90d. The panel shows the active limits and the date of the last prune.</p>
+                  <p className="text-slate-400 mt-1"><strong className="text-slate-300">Auto-retention</strong> — databases are pruned automatically once per calendar day. Default windows: earnings 365d · sessions 365d · traffic 730d · quality 365d · system 365d · services 365d · uptime 365d.</p>
                   <p className="text-slate-400 mt-1"><strong className="text-slate-300">Override retention</strong> — add a <code className="bg-slate-800 px-1 rounded">data_retention</code> object to <code className="bg-slate-800 px-1 rounded">config/setup.json</code> to change any window (in days):<br/>
-                  <code className="bg-slate-800 px-1 rounded text-cyan-300">{`"data_retention": {"earnings": 730, "sessions": 180, "quality": 60}`}</code><br/>
-                  Only the keys you specify are overridden — the rest keep their defaults. Restart the backend after editing.</p>
+                  <code className="bg-slate-800 px-1 rounded text-cyan-300">{`"data_retention": {"earnings": 730, "sessions": 180}`}</code><br/>
+                  Only the keys you specify are overridden. Restart the backend after editing.</p>
+                  <p className="text-slate-400 mt-1"><strong className="text-slate-300">Period selectors</strong> — all history cards use uniform buttons: <strong className="text-slate-300">7d · 30d · 90d · 1y · All</strong>. The buttons auto-scale to your retention setting — if you set quality to 90d, the 1y button disappears automatically.</p>
+                </div>
+
+                <div>
+                  <h4 className="text-emerald-400 font-semibold mb-1">Analytics Charts</h4>
+                  <p className="text-slate-400"><strong className="text-slate-300">Service Split Over Time</strong> — stacked bar chart showing daily earnings split by service type (B2B scraping, VPN, Public, QUIC). Reveals trends: if scraping share drops suddenly, check service config. <strong className="text-slate-300">Earnings Efficiency</strong> — MYST per GB transferred per day. Detects when your node forwards more data but earns less per byte — indicates lower-value consumers. Both charts use <strong className="text-slate-300">7d · 30d · 90d · 1y · All</strong>.</p>
                 </div>
 
                 <div>
@@ -3028,7 +3034,7 @@ const MysteriumDashboard = () => {
 
                 <div>
                   <h4 className="text-slate-300 font-semibold mb-1">Data Traffic Card</h4>
-                  <p className="text-slate-400"><strong className="text-slate-300">Today / Month</strong> = live from vnstat. <strong className="text-slate-300">3 Months / Year / All Time</strong> = from traffic_history.db (SQLite). At first start, all historical vnstat monthly data is auto-imported — history goes back to when vnstat was installed. The database grows ~1 KB/day and is migrated automatically between versions.</p>
+                  <p className="text-slate-400"><strong className="text-slate-300">Today</strong> = live from vnstat. <strong className="text-slate-300">7d · 30d · 90d · 1y · All</strong> = from traffic_history.db (SQLite). At first start, all historical vnstat monthly data is auto-imported — history goes back to when vnstat was installed. The database grows ~1 KB/day and is migrated automatically between versions.</p>
                 </div>
 
                 <div>
@@ -3189,12 +3195,12 @@ const ServiceSplitChart = ({ backendUrl, authHeaders }) => {
   const [open, setOpen]   = React.useState(false);
   const [loading, setLoading] = React.useState(false);
 
-  const DAY_OPTIONS = [7, 14, 30, 90, 180, 365];
+  const DAY_OPTIONS = [7, 30, 90, 365];
 
   const load = React.useCallback(() => {
     if (!open) return;
     setLoading(true);
-    fetch(`${backendUrl}/analytics/service-split?days=${days}`, { headers: authHeaders || {} })
+    fetch(`${backendUrl}/analytics/service-split?days=${days === 0 ? 3650 : days}`, { headers: authHeaders || {} })
       .then(r => r.json())
       .then(d => { setData(d.data || []); setLoading(false); })
       .catch(() => setLoading(false));
@@ -3233,10 +3239,12 @@ const ServiceSplitChart = ({ backendUrl, authHeaders }) => {
                   ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300'
                   : 'border-slate-700 text-slate-500 hover:text-slate-300'}`}>{d}d</button>
             ))}
+            <button onClick={() => setDays(0)}
+              className={`px-2 py-0.5 text-xs rounded border transition ${days === 0
+                ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300'
+                : 'border-slate-700 text-slate-500 hover:text-slate-300'}`}>All</button>
             {loading && <span className="text-xs text-slate-600 ml-2">loading…</span>}
           </div>
-
-          {/* Legend */}
           <div className="flex gap-3 flex-wrap mb-2">
             {types.map(t => (
               <span key={t} className={`text-[10px] flex items-center gap-1 ${svcColor(t).cls}`}>
@@ -3292,12 +3300,12 @@ const EarningsEfficiencyChart = ({ backendUrl, authHeaders }) => {
   const [open, setOpen]   = React.useState(false);
   const [loading, setLoading] = React.useState(false);
 
-  const DAY_OPTIONS = [7, 14, 30, 90, 180, 365];
+  const DAY_OPTIONS = [7, 30, 90, 365];
 
   const load = React.useCallback(() => {
     if (!open) return;
     setLoading(true);
-    fetch(`${backendUrl}/analytics/earnings-efficiency?days=${days}`, { headers: authHeaders || {} })
+    fetch(`${backendUrl}/analytics/earnings-efficiency?days=${days === 0 ? 3650 : days}`, { headers: authHeaders || {} })
       .then(r => r.json())
       .then(d => { setData(d.data || []); setLoading(false); })
       .catch(() => setLoading(false));
@@ -3337,6 +3345,10 @@ const EarningsEfficiencyChart = ({ backendUrl, authHeaders }) => {
                   ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300'
                   : 'border-slate-700 text-slate-500 hover:text-slate-300'}`}>{d}d</button>
             ))}
+            <button onClick={() => setDays(0)}
+              className={`px-2 py-0.5 text-xs rounded border transition ${days === 0
+                ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300'
+                : 'border-slate-700 text-slate-500 hover:text-slate-300'}`}>All</button>
             {loading && <span className="text-xs text-slate-600 ml-2">loading…</span>}
           </div>
 
@@ -3604,11 +3616,11 @@ const DataTrafficCard = ({ bandwidth, backendUrl, authHeaders }) => {
   const [loading, setLoading] = React.useState(false);
 
 
-  // Fetch history when view changes to anything other than today/month
+  // Fetch history when view changes to anything other than today
   React.useEffect(() => {
-    if (view === 'today' || view === 'month') { setHistData(null); return; }
+    if (view === 'today') { setHistData(null); return; }
     if (!backendUrl) return;
-    const rangeMap = { '3month': '3month', 'year': 'year', 'all': 'all' };
+    const rangeMap = { '7d': '7d', '30d': '30d', '90d': '90d', '1y': '1y', 'all': 'all' };
     const r = rangeMap[view] || 'all';
     setLoading(true);
     fetch(`${backendUrl}/traffic/history?range=${r}`, { headers: authHeaders || {} })
@@ -3658,16 +3670,15 @@ const DataTrafficCard = ({ bandwidth, backendUrl, authHeaders }) => {
 
   const alltime = histData?.alltime;
 
-  const d = view === 'today' ? live.today
-          : view === 'month' ? live.month
-          : hist;
+  const d = view === 'today' ? live.today : hist;
 
   const tabs = [
-    { key: 'today',  label: 'Today' },
-    { key: 'month',  label: 'Month' },
-    { key: '3month', label: '3 Months' },
-    { key: 'year',   label: 'Year' },
-    { key: 'all',    label: 'All Time' },
+    { key: 'today', label: 'Today' },
+    { key: '7d',    label: '7d' },
+    { key: '30d',   label: '30d' },
+    { key: '90d',   label: '90d' },
+    { key: '1y',    label: '1y' },
+    { key: 'all',   label: 'All' },
   ];
 
   // Today and Month come from live vnstat (bandwidth prop).
@@ -3924,7 +3935,7 @@ const QualityHistorySparkline = ({ backendUrl, authHeaders }) => {
   }, [open, backendUrl, authHeaders, retentionDays]);
 
   // Build dynamic day buttons: fixed milestones up to retention max + All
-  const DAY_MILESTONES = [7, 14, 30, 60, 90, 180, 365, 730];
+  const DAY_MILESTONES = [7, 30, 90, 365];
   const maxDays = retentionDays || 90;
   const dayOptions = DAY_MILESTONES.filter(d => d <= maxDays);
 
@@ -4045,7 +4056,7 @@ const SystemMetricsHistoryCard = ({ backendUrl, authHeaders }) => {
   }, [open, backendUrl, authHeaders, retentionDays]);
 
   // Build dynamic day buttons: fixed milestones up to retention max + All
-  const DAY_MILESTONES = [1, 3, 7, 14, 30, 60, 90, 180, 365];
+  const DAY_MILESTONES = [7, 30, 90, 365];
   const maxDays = retentionDays || 30;
   const dayOptions = DAY_MILESTONES.filter(d => d <= maxDays);
 

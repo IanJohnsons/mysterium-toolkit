@@ -1,6 +1,6 @@
 # Mysterium Node Toolkit
 
-![Version](https://img.shields.io/badge/version-1.0.14-brightgreen) ![License](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Version](https://img.shields.io/badge/version-1.0.15-brightgreen) ![License](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 
 A professional monitoring and management dashboard for [Mysterium Network](https://mysterium.network) VPN node operators. Runs fully local on your node machine — no cloud account, no third-party service, no data leaving your server.
 
@@ -578,13 +578,15 @@ Every session is saved to SQLite with token values frozen the moment the session
 - Discovery quality score, latency, and bandwidth from the Mysterium Discovery API
 - Uptime 24h and 30d — tracked locally, independent of the Discovery API
 - Packet loss percentage, connected percentage
-- Expandable sparkline — quality score, latency, and bandwidth over 7 / 14 / 30 / 90 days
+- Expandable sparkline — quality score, latency, and bandwidth over 7 / 30 / 90 / 365 days / All
 
 ### Session analytics
 
 - Active tunnels — live consumer connections with identity and service type
 - Consumer breakdown by country and service type
-- Full session history with duration, data transferred, and earnings per session
+- Full session history with duration, data transferred, earnings per session, and **MYST/GB efficiency** per session
+- **Service Split Over Time** — stacked bar chart of daily earnings by service type (7d / 30d / 90d / 1y / All). Reveals trends in scraping vs VPN vs Public traffic over time
+- **Earnings Efficiency** — MYST per GB transferred as a daily timeseries. Detects when your node forwards more data but earns less per byte
 
 ### On-chain wallet
 
@@ -594,7 +596,7 @@ Every session is saved to SQLite with token values frozen the moment the session
 
 ### Data traffic
 
-VPN traffic vs total NIC traffic vs overhead — Today / Month / 3 Months / Year / All Time, backed by vnstat. Separate per-interface tracking for `myst*` tunnel interfaces via udev auto-registration.
+VPN traffic vs total NIC traffic vs overhead — Today / 7d / 30d / 90d / 1y / All, backed by vnstat. Separate per-interface tracking for `myst*` tunnel interfaces via udev auto-registration.
 
 ### Node control
 
@@ -857,12 +859,12 @@ Default retention windows — pruned once per calendar day:
 | Database | Default retention |
 |----------|-------------------|
 | Earnings history | 365 days |
-| Session archive | 90 days |
+| Session archive | 365 days |
 | Traffic history | 730 days |
-| Node quality | 90 days |
-| System metrics | 30 days |
-| Service events | 30 days |
-| Uptime log | 90 days |
+| Node quality | 365 days |
+| System metrics | 365 days |
+| Service events | 365 days |
+| Uptime log | 365 days |
 
 Override in `config/setup.json`:
 

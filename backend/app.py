@@ -574,12 +574,12 @@ TIER_SLOW_INTERVAL = 600    # 10 minutes — reduced API calls (was 300)
 # Override in config/setup.json under key 'data_retention': {'earnings': 365, ...}
 _DEFAULT_RETENTION = {
     'earnings': 365,
-    'sessions': 90,
+    'sessions': 365,
     'traffic':  730,
-    'quality':  90,
-    'system':   30,
-    'services': 30,
-    'uptime':   90,
+    'quality':  365,
+    'system':   365,
+    'services': 365,
+    'uptime':   365,
 }
 _last_prune_date = ''   # 'YYYY-MM-DD' — retention prune runs once per calendar day
 
@@ -6381,9 +6381,13 @@ def get_traffic_history():
     """
     try:
         rng = request.args.get('range', 'all')
-        if rng == '3month':
+        if rng == '7d':
+            rows = TrafficDB.get_range(days_back=7)
+        elif rng == '30d':
+            rows = TrafficDB.get_range(days_back=30)
+        elif rng == '90d' or rng == '3month':
             rows = TrafficDB.get_range(months_back=3)
-        elif rng == 'year':
+        elif rng == '1y' or rng == 'year':
             rows = TrafficDB.get_range(months_back=12)
         else:
             rows = TrafficDB.get_range()

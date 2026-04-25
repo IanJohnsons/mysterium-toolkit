@@ -133,7 +133,7 @@ const DataManagerInner = ({ nodeId, isFleetMode = false, authHeaders = {} }) => 
   const [deleteDone, setDeleteDone]      = useState(false);
   const [selectedType, setSelectedType] = useState('all');
   const [deleteMode, setDeleteMode]     = useState('keep_days');
-  const [keepDays, setKeepDays]         = useState(30);
+  const [keepDays, setKeepDays]         = useState(90);
   const [showConfirm, setShowConfirm]   = useState(false);
   const [error, setError]               = useState(null);
   const [expanded, setExpanded]         = useState(true);
@@ -368,11 +368,21 @@ const DataManagerInner = ({ nodeId, isFleetMode = false, authHeaders = {} }) => 
             <input type="radio" value="keep_days" checked={deleteMode === 'keep_days'}
               onChange={() => setDeleteMode('keep_days')} className="accent-emerald-500" />
             <span className="text-sm text-slate-300">Keep last</span>
-            <input type="number" min="1" max="365" value={keepDays}
-              onChange={e => setKeepDays(parseInt(e.target.value) || 30)}
+            <input type="number" min="1" max="730" value={keepDays}
+              onChange={e => setKeepDays(parseInt(e.target.value) || 90)}
               disabled={deleteMode !== 'keep_days'}
               className="w-16 px-2 py-0.5 bg-slate-800 border border-slate-600 rounded text-white text-sm disabled:opacity-40" />
             <span className="text-sm text-slate-300">days</span>
+            {deleteMode === 'keep_days' && (
+              <div className="flex gap-1 ml-1">
+                {[7, 30, 90, 365].map(p => (
+                  <button key={p} onClick={() => setKeepDays(p)}
+                    className={`px-1.5 py-0.5 text-[10px] rounded border transition ${keepDays === p
+                      ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300'
+                      : 'border-slate-700 text-slate-500 hover:text-slate-300'}`}>{p}d</button>
+                ))}
+              </div>
+            )}
           </label>
           <label className="flex items-center gap-2 cursor-pointer">
             <input type="radio" value="all" checked={deleteMode === 'all'}
