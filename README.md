@@ -516,7 +516,7 @@ Prints your dashboard URL and opens `start.sh` automatically:
 ✓ Config:     config/setup.json
 
 Key tips:
-  · Option 9 — enable autostart so toolkit survives reboots
+  · Option 8 — enable autostart so toolkit survives reboots
   · Option 4 — open the CLI dashboard (terminal UI)
   · Option 7 — maintenance, uninstall, cleanup old versions
 ```
@@ -719,11 +719,11 @@ Backend only — no web dashboard, no Node.js required. Minimal resource usage. 
 
 ## Autostart
 
-Open `./start.sh` → option 9 — **Autostart on Boot**.
+Open `./start.sh` → option 8 — **Autostart on Boot** (Type 1/2) or option 6 (Type 3).
 
 Installs a systemd service that starts automatically at boot, after the Mysterium node service, and restarts on crash. Works on laptops and headless VPS servers — no login required.
 
-> **Type 3 (lightweight) nodes:** start the backend manually first via `./start.sh` → option 1 and verify it runs, then activate autostart via option 9. The systemd service needs the venv and config to exist before it can start at boot.
+> **Type 3 (lightweight) nodes:** start the backend manually first via `./start.sh` → option 1 and verify it runs, then activate autostart via option 6. The systemd service needs the venv and config to exist before it can start at boot.
 
 ```bash
 sudo systemctl status mysterium-toolkit
