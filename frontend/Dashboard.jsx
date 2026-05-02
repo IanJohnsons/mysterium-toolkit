@@ -3289,7 +3289,7 @@ const ServiceSplitChart = ({ backendUrl, authHeaders }) => {
             {types.map(t => (
               <span key={t} className={`text-[10px] flex items-center gap-1 ${svcColor(t).cls}`}>
                 <span style={{background: svcColor(t).hex}} className="inline-block w-2 h-2 rounded-sm" />
-                {t}
+                {fmtType(t)}
               </span>
             ))}
           </div>
@@ -3311,7 +3311,7 @@ const ServiceSplitChart = ({ backendUrl, authHeaders }) => {
                   return (
                     <rect key={`${date}-${t}`} x={x} y={yOff} width={barW} height={barH}
                       fill={svcColor(t).hex} opacity="0.8">
-                      <title>{date} · {t}: {val.toFixed(4)} MYST</title>
+                      <title>{date} · {fmtType(t)}: {val.toFixed(4)} MYST</title>
                     </rect>
                   );
                 });
