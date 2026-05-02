@@ -312,23 +312,462 @@ stop_frontend() {
 
 # ============ MAIN MENU LOOP ============
 
+# ── Detect install type ──────────────────────────────────────────────────────
+# Reads setup_mode from config/setup.json — written by setup_wizard.py.
+# Values: 'full' (1), 'fleet_master' (2), 'lightweight' (3).
+# Falls back to '1' if config is missing or unreadable.
+_detect_setup_mode() {
+    python3 -c "
+import json
+try:
+    d = json.load(open('config/setup.json'))
+    m = str(d.get('setup_mode', 'full'))
+    if m in ('3', 'lightweight'):   print('3')
+    elif m in ('2', 'fleet_master'): print('2')
+    else:                            print('1')
+except: print('1')
+" 2>/dev/null || echo "1"
+}
+
+# ── Action functions — one per menu action ───────────────────────────────────
+
+_action_start_dashboard() {
+    echo
+    echo -e "  ${BOLD}Starting dashboard...${NC}"
+    echo
+    start_backend
+    echo
+    if is_backend_running; then
+        _banner "Dashboard Running!" "$GREEN"
+        echo
+        echo -e "  Open: ${CYAN}${BOLD}${DASHBOARD_URL}${NC}"
+        echo
+        echo -e "  ${DIM}Opening browser...${NC}"
+        open_browser
+        echo
+        echo -e "  ${DIM}Logs: logs/backend.log${NC}"
+    fi
+    echo
+    echo "  Press Enter to return to menu..."
+    read -r
+}
+
+_action_start_backend() {
+    echo
+    if systemctl is-active --quiet mysterium-toolkit 2>/dev/null; then
+        echo -e "  ${YELLOW}Backend is running via systemd service.${NC}"
+        echo -e "  Restarting via systemd..."
+        $SUDO systemctl restart mysterium-toolkit
+        sleep 3
+        if systemctl is-active --quiet mysterium-toolkit 2>/dev/null; then
+            echo -e "  ${GREEN}✓ Backend restarted via systemd${NC}"
+        else
+            echo -e "  ${RED}✗ Restart failed — check: sudo journalctl -u mysterium-toolkit -n 20${NC}"
+        fi
+    else
+        start_backend
+    fi
+    echo
+    echo "  Press Enter to return to menu..."
+    read -r
+}
+
+_action_stop() {
+    echo
+    echo -e "  ${BOLD}Stopping toolkit...${NC}"
+    echo
+    stop_backend
+    echo
+    echo -e "  ${GREEN}✓ Stopped.${NC}"
+    echo
+    echo "  Press Enter to return to menu..."
+    read -r
+}
+
+_action_logs() {
+    echo
+    echo -e "  ${BOLD}Which log to view?${NC}"
+    echo
+    echo "  1. Backend log"
+    echo "  2. Frontend log"
+    echo "  3. Both (interleaved)"
+    echo "  4. Back to menu"
+    echo
+    read -p "  Select (1-4): " log_choice
+
+    view_log() {
+        trap '' INT
+        "$@" &
+        local tail_pid=$!
+        trap "kill $tail_pid 2>/dev/null; wait $tail_pid 2>/dev/null" INT
+        wait $tail_pid 2>/dev/null
+        trap - INT
+    }
+
+    case $log_choice in
+        1)
+            if [ -f "$BACKEND_LOG" ]; then
+                echo; echo -e "  ${DIM}Showing backend log (Ctrl+C to return to menu)${NC}"; echo
+                view_log tail -f "$BACKEND_LOG"
+            else
+                echo -e "  ${YELLOW}No backend log found${NC}"; sleep 2
+            fi ;;
+        2)
+            if [ -f "$FRONTEND_LOG" ]; then
+                echo; echo -e "  ${DIM}Showing frontend log (Ctrl+C to return to menu)${NC}"; echo
+                view_log tail -f "$FRONTEND_LOG"
+            else
+                echo -e "  ${YELLOW}No frontend log found${NC}"; sleep 2
+            fi ;;
+        3)
+            if [ -f "$BACKEND_LOG" ] || [ -f "$FRONTEND_LOG" ]; then
+                echo; echo -e "  ${DIM}Showing logs (Ctrl+C to return to menu)${NC}"; echo
+                view_log tail -f "$BACKEND_LOG" "$FRONTEND_LOG"
+            else
+                echo -e "  ${YELLOW}No log files found${NC}"; sleep 2
+            fi ;;
+        *) ;;
+    esac
+    echo
+    echo -e "  ${DIM}Returned to menu${NC}"
+    sleep 1
+}
+
+_action_cli() {
+    echo
+    echo -e "  ${BOLD}Starting CLI Dashboard...${NC}"
+    echo
+    if ! is_backend_running; then
+        echo -e "  ${YELLOW}Backend not running — starting it first...${NC}"
+        start_backend
+        sleep 2
+    fi
+    if is_backend_running; then
+        echo -e "  ${GREEN}✓ Backend ready — launching terminal UI${NC}"
+        echo -e "  ${DIM}Press 'q' to exit CLI and return to menu${NC}"
+        echo
+        sleep 1
+        CLI_PY=""
+        if [ -f "$TOOLKIT_DIR/venv/bin/python" ]; then
+            CLI_PY="$TOOLKIT_DIR/venv/bin/python"
+        else
+            CLI_PY="$(command -v python3 || command -v python)"
+        fi
+        "$CLI_PY" "$TOOLKIT_DIR/cli/dashboard.py"
+    else
+        echo -e "  ${RED}✗ Backend failed to start. Cannot launch CLI.${NC}"
+    fi
+    echo
+    echo "  Press Enter to return to menu..."
+    read -r
+}
+
+_action_rebuild() {
+    echo
+    echo -e "  ${BOLD}Rebuilding frontend...${NC}"
+    echo
+    if ! command -v npm &>/dev/null; then
+        echo -e "  ${RED}✗ npm not found. Install Node.js first.${NC}"
+        echo -e "  ${DIM}  sudo apt install nodejs npm${NC}"
+    elif ! command -v node &>/dev/null; then
+        echo -e "  ${RED}✗ Node.js not found.${NC}"
+    else
+        cd "$TOOLKIT_DIR"
+        echo -e "  Stopping backend before build..."
+        if systemctl is-active --quiet mysterium-toolkit 2>/dev/null; then
+            $SUDO systemctl stop mysterium-toolkit 2>/dev/null || true
+            echo -e "  ${DIM}  Systemd service stopped${NC}"
+        fi
+        stop_backend
+        sleep 2
+        if [ ! -f "package.json" ] && [ -f ".build/package.json" ]; then
+            cp .build/package.json package.json
+            cp .build/vite.config.js vite.config.js 2>/dev/null || true
+            cp .build/postcss.config.js postcss.config.js 2>/dev/null || true
+            cp .build/tailwind.config.js tailwind.config.js 2>/dev/null || true
+            cat > index.html << 'IDXEOF'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Mysterium Dashboard</title>
+<script>
+(function(){try{var t=localStorage.getItem('myst-theme')||'emerald';document.documentElement.setAttribute('data-theme',t);var b={'cyber':'#050e18','sunset':'#170c05','violet':'#0e0514','crimson':'#140205','matrix':'#000a00','phosphor':'#020800','ghost':'#080808','midnight':'#020414','steel':'#080808','military':'#060800'};if(b[t])document.body.style.background=b[t];}catch(e){}})()</script>
+</head>
+<body><div id="root"></div>
+<script type="module" src="/frontend/main.jsx"></script>
+</body>
+</html>
+IDXEOF
+        fi
+        echo -e "  Installing build tools..."
+        npm install --legacy-peer-deps > /dev/null 2>&1
+        rm -rf dist/
+        echo -e "  Building..."
+        BUILD_OUTPUT=$(npm run build 2>&1)
+        BUILD_EXIT=$?
+        if [ -f "dist/index.html" ]; then
+            if [ $BUILD_EXIT -ne 0 ]; then
+                echo -e "  ${YELLOW}⚠ Build completed with warnings — dist/ looks valid.${NC}"
+                echo "$BUILD_OUTPUT" | grep -iE "error|warn" | head -5 || true
+            else
+                echo -e "  ${GREEN}✓ Frontend rebuilt → dist/${NC}"
+            fi
+            echo -e "  Cleaning up build tools..."
+            rm -rf node_modules
+            rm -f vite.config.js postcss.config.js tailwind.config.js
+            rm -f package.json package-lock.json index.html
+            echo -e "  ${GREEN}✓ Clean. Restarting backend...${NC}"
+            stop_backend; sleep 1; start_backend
+        else
+            echo -e "  ${RED}✗ Build failed — dist/index.html not produced.${NC}"
+            echo "$BUILD_OUTPUT"
+            echo
+            echo -e "  ${YELLOW}node_modules kept for debugging. Fix the error and try again.${NC}"
+        fi
+    fi
+    echo
+    echo "  Press Enter to return to menu..."
+    read -r
+}
+
+_action_diagnostics() {
+    echo
+    if [ -f "$TOOLKIT_DIR/bin/diagnose.sh" ]; then
+        echo -e "  ${CYAN}${BOLD}System Diagnostics${NC}"
+        echo -e "  ${DIM}Checks: thermal, memory, NIC, IRQ, conntrack, WireGuard, kernel${NC}"
+        echo
+        echo "  1. Run diagnostics (recommended)"
+        echo "  2. Run with stress test (--stress)"
+        echo "  3. Apply fixes for found issues (--fix)"
+        echo "  4. Back to menu"
+        echo
+        read -p "  Select (1-4): " diag_choice
+        case $diag_choice in
+            1) $SUDO bash "$TOOLKIT_DIR/bin/diagnose.sh" ;;
+            2)
+                echo -e "  ${YELLOW}⚠ Stress test will briefly increase system load${NC}"
+                read -p "  Continue? [y/N]: " stress_confirm
+                if [[ "$stress_confirm" =~ ^[Yy] ]]; then
+                    $SUDO bash "$TOOLKIT_DIR/bin/diagnose.sh" --stress
+                fi ;;
+            3)
+                echo -e "  ${DIM}Applying fixes — each one asks for confirmation${NC}"; echo
+                $SUDO bash "$TOOLKIT_DIR/bin/diagnose.sh" --fix ;;
+            *) ;;
+        esac
+    else
+        echo -e "  ${RED}Diagnostic script not found at: $TOOLKIT_DIR/bin/diagnose.sh${NC}"
+        echo -e "  ${DIM}Re-extract the toolkit to restore it.${NC}"
+    fi
+    echo
+    echo "  Press Enter to return to menu..."
+    read -r
+}
+
+_action_maintenance() {
+    echo
+    echo -e "  ${CYAN}${BOLD}Maintenance${NC}"
+    echo
+    echo "  1. Scan for old toolkit installs"
+    echo "  2. Clean runtime (venv, node_modules, logs)"
+    echo "  3. Cleanup / Uninstall (full options)"
+    echo "  4. Back to menu"
+    echo
+    read -p "  Select (1-4): " maint_choice
+    case $maint_choice in
+        1) echo; "$TOOLKIT_DIR/venv/bin/python" scripts/env_scanner.py ;;
+        2|3)
+            echo
+            stop_backend; stop_frontend
+            if [ -f "$TOOLKIT_DIR/bin/cleanup.sh" ]; then
+                bash "$TOOLKIT_DIR/bin/cleanup.sh"
+            else
+                echo -e "  ${RED}Cleanup script not found.${NC}"
+            fi ;;
+        *) ;;
+    esac
+    echo
+    echo "  Press Enter to return to menu..."
+    read -r
+}
+
+_action_autostart() {
+    echo
+    echo -e "  ${CYAN}${BOLD}Autostart on Boot${NC}"
+    echo
+    _SERVICE_NAME="mysterium-toolkit"
+    _SERVICE_FILE="/etc/systemd/system/${_SERVICE_NAME}.service"
+    _VENV_PYTHON="$TOOLKIT_DIR/venv/bin/python"
+
+    _svc_active=false
+    if [ -f "/etc/systemd/system/${_SERVICE_NAME}.service" ] && \
+       systemctl is-enabled "$_SERVICE_NAME" 2>/dev/null | grep -qE '^(enabled|enabled-runtime)'; then
+        _svc_active=true
+    fi
+
+    if [ "$_svc_active" = true ]; then
+        echo -e "  ${GREEN}✓ Autostart is currently ENABLED${NC}"
+        echo -e "  ${DIM}  Service: $_SERVICE_NAME${NC}"
+        echo -e "  ${DIM}  The toolkit backend starts automatically at boot.${NC}"
+        echo
+        echo "  1. Disable autostart"
+        echo "  2. Back to menu"
+        echo
+        read -p "  Select (1-2): " _auto_choice
+        case "$_auto_choice" in
+            1)
+                $SUDO systemctl disable --now "$_SERVICE_NAME" 2>/dev/null || true
+                $SUDO rm -f "$_SERVICE_FILE"
+                $SUDO systemctl daemon-reload 2>/dev/null || true
+                echo -e "  ${GREEN}✓ Autostart disabled${NC}" ;;
+            *) ;;
+        esac
+    else
+        echo -e "  ${YELLOW}Autostart is currently DISABLED${NC}"
+        echo -e "  ${DIM}  The toolkit backend does NOT start automatically at boot.${NC}"
+        echo
+        echo "  1. Enable autostart (systemd service)"
+        echo "  2. Back to menu"
+        echo
+        read -p "  Select (1-2): " _auto_choice
+        case "$_auto_choice" in
+            1)
+                _REAL_USER="${SUDO_USER:-$USER}"
+                _REAL_HOME=$(getent passwd "$_REAL_USER" | cut -d: -f6)
+                mkdir -p "$TOOLKIT_DIR/logs"
+                chown -R "$_REAL_USER:$_REAL_USER" "$TOOLKIT_DIR/logs" 2>/dev/null || true
+                _MYST_SVC=""
+                for _svc in mysterium-node myst mysterium mysterium-node.service; do
+                    if systemctl list-units --all --no-legend 2>/dev/null | grep -q "^.*${_svc}"; then
+                        _MYST_SVC="$_svc"; break
+                    fi
+                done
+                if [ -n "$_MYST_SVC" ]; then
+                    _AFTER_DEPS="network-online.target $_MYST_SVC"
+                    echo -e "  ${DIM}  Detected Mysterium service: $_MYST_SVC — toolkit will start after it${NC}"
+                else
+                    _AFTER_DEPS="network-online.target"
+                    echo -e "  ${DIM}  Mysterium node service not detected — using network-only dependency${NC}"
+                fi
+                $SUDO tee "$_SERVICE_FILE" > /dev/null << UNIT_EOF
+[Unit]
+Description=Mysterium Node Monitoring Toolkit
+After=${_AFTER_DEPS}
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$_REAL_USER
+WorkingDirectory=$TOOLKIT_DIR
+ExecStartPre=/bin/bash -c 'mkdir -p $TOOLKIT_DIR/logs && touch $TOOLKIT_DIR/logs/backend.log'
+ExecStart=$_VENV_PYTHON backend/app.py
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=0
+StandardInput=null
+StandardOutput=append:$TOOLKIT_DIR/logs/backend.log
+StandardError=append:$TOOLKIT_DIR/logs/backend.log
+Environment=HOME=$_REAL_HOME
+
+[Install]
+WantedBy=multi-user.target
+UNIT_EOF
+                $SUDO systemctl daemon-reload
+                $SUDO systemctl enable "$_SERVICE_NAME"
+                echo -e "  ${GREEN}✓ Autostart enabled — toolkit starts at every boot${NC}"
+                echo -e "  ${DIM}  Service: $_SERVICE_NAME${NC}"
+                echo
+                echo -e "  ${DIM}  Useful commands:${NC}"
+                echo -e "  ${DIM}    sudo systemctl status $_SERVICE_NAME${NC}"
+                echo -e "  ${DIM}    sudo systemctl stop $_SERVICE_NAME${NC}"
+                echo -e "  ${DIM}    sudo journalctl -u $_SERVICE_NAME -f${NC}"
+                echo
+                read -p "  Start the service now? [Y/n]: " _start_now
+                if [[ ! "$_start_now" =~ ^[Nn] ]]; then
+                    $SUDO systemctl stop mysterium-toolkit 2>/dev/null || true
+                    stop_backend
+                    _PORT_PID=$(lsof -ti :${DASHBOARD_PORT} 2>/dev/null || true)
+                    [ -n "$_PORT_PID" ] && kill -9 "$_PORT_PID" 2>/dev/null || true
+                    echo -e "  ${DIM}  Waiting for port to clear…${NC}"
+                    sleep 5
+                    _PORT_WAIT=0
+                    while [ $_PORT_WAIT -lt 10 ]; do
+                        lsof -ti :${DASHBOARD_PORT} >/dev/null 2>&1 || break
+                        sleep 1; _PORT_WAIT=$((_PORT_WAIT+1))
+                    done
+                    $SUDO systemctl reset-failed "$_SERVICE_NAME" 2>/dev/null || true
+                    $SUDO systemctl start "$_SERVICE_NAME"
+                    echo -e "  ${DIM}  Starting service (may take up to 25s on first run)…${NC}"
+                    _WAIT=0
+                    while [ $_WAIT -lt 25 ]; do
+                        sleep 1; _WAIT=$((_WAIT + 1))
+                        if systemctl is-active --quiet "$_SERVICE_NAME"; then
+                            echo -e "  ${GREEN}✓ Service running${NC}"; break
+                        fi
+                    done
+                    if ! systemctl is-active --quiet "$_SERVICE_NAME"; then
+                        echo -e "  ${YELLOW}⚠ First attempt failed — resetting and retrying…${NC}"
+                        $SUDO systemctl reset-failed "$_SERVICE_NAME" 2>/dev/null || true
+                        sleep 3
+                        $SUDO systemctl start "$_SERVICE_NAME" 2>/dev/null || true
+                        _RETRY=0
+                        while [ $_RETRY -lt 20 ]; do
+                            sleep 1; _RETRY=$((_RETRY+1))
+                            if systemctl is-active --quiet "$_SERVICE_NAME"; then
+                                echo -e "  ${GREEN}✓ Service running${NC}"; break
+                            fi
+                        done
+                        if ! systemctl is-active --quiet "$_SERVICE_NAME"; then
+                            echo -e "  ${YELLOW}⚠ Service not running. Check:${NC}"
+                            echo -e "  ${DIM}    sudo journalctl -u $_SERVICE_NAME -n 20${NC}"
+                        fi
+                    fi
+                fi ;;
+            *) ;;
+        esac
+    fi
+    echo
+    echo "  Press Enter to return to menu..."
+    read -r
+}
+
+_action_exit() {
+    echo
+    if is_backend_running; then
+        echo -e "  ${YELLOW}⚠ Backend is still running in the background.${NC}"
+        echo -e "  ${DIM}  It will keep running after you exit this menu.${NC}"
+        echo -e "  ${DIM}  Use Stop to shut it down, or run: ./stop.sh${NC}"
+        echo
+        read -p "  Exit anyway? [Y/n]: " confirm
+        if [[ "$confirm" =~ ^[Nn] ]]; then
+            return
+        fi
+    fi
+    echo
+    echo -e "  ${GREEN}Thank you for using the Mysterium Node Toolkit!${NC}"
+    echo -e "  ${DIM}Happy earning — Ian Johnsons ♥${NC}"
+    echo
+    exit 0
+}
+
+# ── Menu loop ────────────────────────────────────────────────────────────────
+
 while true; do
     VERSION=$(cat "$TOOLKIT_DIR/VERSION" 2>/dev/null || echo "?")
+    SETUP_MODE=$(_detect_setup_mode)
     clear
 
-    # Dynamic banner — auto-fits content
     _banner() {
         local text="$1"
         local color="${2:-}"
         local len=${#text}
         local total=68
-        if [ $((len + 8)) -gt $total ]; then
-            total=$((len + 8))
-        fi
+        if [ $((len + 8)) -gt $total ]; then total=$((len + 8)); fi
         local pad=$(( (total - len) / 2 ))
         local rpad=$(( total - pad - len ))
-        local border=""
-        for ((i=0; i<total; i++)); do border+="═"; done
+        local border=""; for ((i=0; i<total; i++)); do border+="═"; done
         if [ -n "$color" ]; then
             echo -e "${color}╔${border}╗${NC}"
             printf "${color}║%*s%s%*s║${NC}\n" $pad "" "$text" $rpad ""
@@ -352,508 +791,58 @@ while true; do
     echo
     echo "  What do you want to do?"
     echo
-    echo "  1. Start Dashboard"
-    echo "  2. Start Backend Only"
-    echo "  3. Rebuild Frontend (after code update)"
-    echo "  4. Start CLI Dashboard (Terminal UI)"
-    echo "  5. Stop Everything"
-    echo "  6. View Logs (live tail)"
-    echo "  7. Maintenance (scan, cleanup, uninstall)"
-    echo "  8. System Diagnostics"
-    echo "  9. Autostart on Boot (enable/disable)"
-    echo "  0. Exit"
-    echo
 
-    read -p "  Select (0-9): " choice
-
-    case $choice in
-        1)
-            echo
-            echo -e "  ${BOLD}Starting dashboard...${NC}"
-            echo
-            start_backend
-            echo
-            if is_backend_running; then
-                _banner "Dashboard Running!" "$GREEN"
-                echo
-                echo -e "  Open: ${CYAN}${BOLD}${DASHBOARD_URL}${NC}"
-                echo
-                echo -e "  ${DIM}Opening browser...${NC}"
-                open_browser
-                echo
-                echo -e "  ${DIM}Logs: logs/backend.log${NC}"
-            fi
-            echo
-            echo "  Press Enter to return to menu..."
-            read -r
-            ;;
-
-        2)
-            echo
-            if systemctl is-active --quiet mysterium-toolkit 2>/dev/null; then
-                echo -e "  ${YELLOW}Backend is running via systemd service.${NC}"
-                echo -e "  Restarting via systemd..."
-                $SUDO systemctl restart mysterium-toolkit
-                sleep 3
-                if systemctl is-active --quiet mysterium-toolkit 2>/dev/null; then
-                    echo -e "  ${GREEN}✓ Backend restarted via systemd${NC}"
-                else
-                    echo -e "  ${RED}✗ Restart failed — check: sudo journalctl -u mysterium-toolkit -n 20${NC}"
-                fi
-            else
-                start_backend
-            fi
-            echo
-            echo "  Press Enter to return to menu..."
-            read -r
-            ;;
-
-        3)
-            echo
-            echo -e "  ${BOLD}Rebuilding frontend...${NC}"
-            echo
-            if ! command -v npm &>/dev/null; then
-                echo -e "  ${RED}✗ npm not found. Install Node.js first.${NC}"
-                echo -e "  ${DIM}  sudo apt install nodejs npm${NC}"
-            elif ! command -v node &>/dev/null; then
-                echo -e "  ${RED}✗ Node.js not found.${NC}"
-            else
-                cd "$TOOLKIT_DIR"
-                # Stop service and backend BEFORE building to avoid conflicts
-                echo -e "  Stopping backend before build..."
-                if systemctl is-active --quiet mysterium-toolkit 2>/dev/null; then
-                    $SUDO systemctl stop mysterium-toolkit 2>/dev/null || true
-                    echo -e "  ${DIM}  Systemd service stopped${NC}"
-                fi
-                stop_backend
-                sleep 2
-                # Restore build config from .build/ if not present
-                if [ ! -f "package.json" ] && [ -f ".build/package.json" ]; then
-                    cp .build/package.json package.json
-                    cp .build/vite.config.js vite.config.js 2>/dev/null || true
-                    cp .build/postcss.config.js postcss.config.js 2>/dev/null || true
-                    cp .build/tailwind.config.js tailwind.config.js 2>/dev/null || true
-                    # Generate index.html with correct path (not from .build/ which may have wrong path)
-                    cat > index.html << 'IDXEOF'
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>Mysterium Dashboard</title>
-<script>
-(function(){try{var t=localStorage.getItem('myst-theme')||'emerald';document.documentElement.setAttribute('data-theme',t);var b={'cyber':'#050e18','sunset':'#170c05','violet':'#0e0514','crimson':'#140205','matrix':'#000a00','phosphor':'#020800','ghost':'#080808','midnight':'#020414','steel':'#080808','military':'#060800'};if(b[t])document.body.style.background=b[t];}catch(e){}})()</script>
-</head>
-<body><div id="root"></div>
-<script type="module" src="/frontend/main.jsx"></script>
-</body>
-</html>
-IDXEOF
-                fi
-                echo -e "  Installing build tools..."
-                npm install --legacy-peer-deps > /dev/null 2>&1
-
-                # Remove stale dist/ — always build fresh
-                rm -rf dist/
-
-                echo -e "  Building..."
-                BUILD_OUTPUT=$(npm run build 2>&1)
-                BUILD_EXIT=$?
-
-                if [ -f "dist/index.html" ]; then
-                    if [ $BUILD_EXIT -ne 0 ]; then
-                        echo -e "  ${YELLOW}⚠ Build completed with warnings (exit $BUILD_EXIT) — dist/ looks valid.${NC}"
-                        echo "$BUILD_OUTPUT" | grep -iE "error|warn" | head -5 || true
-                    else
-                        echo -e "  ${GREEN}✓ Frontend rebuilt → dist/${NC}"
-                    fi
-                    echo -e "  Cleaning up build tools..."
-                    rm -rf node_modules
-                    rm -f vite.config.js postcss.config.js tailwind.config.js
-                    rm -f package.json package-lock.json package-lock.json.bak index.html
-                    echo -e "  ${GREEN}✓ Clean. Restarting backend...${NC}"
-                    stop_backend
-                    sleep 1
-                    start_backend
-                else
-                    echo -e "  ${RED}✗ Build failed — dist/index.html not produced. Full output:${NC}"
-                    echo "$BUILD_OUTPUT"
-                    echo
-                    echo -e "  ${YELLOW}node_modules kept for debugging. Fix the error above and try again.${NC}"
-                fi
-            fi
-            echo
-            echo "  Press Enter to return to menu..."
-            read -r
-            ;;
-
-        4)
-            echo
-            echo -e "  ${BOLD}Starting CLI Dashboard...${NC}"
-            echo
-            # Start backend if not running
-            if ! is_backend_running; then
-                echo -e "  ${YELLOW}Backend not running — starting it first...${NC}"
-                start_backend
-                sleep 2
-            fi
-            if is_backend_running; then
-                echo -e "  ${GREEN}✓ Backend ready — launching terminal UI${NC}"
-                echo -e "  ${DIM}Press 'q' to exit CLI and return to menu${NC}"
-                echo
-                sleep 1
-                # Use venv python, fall back to python3
-            CLI_PY=""
-            if [ -f "$TOOLKIT_DIR/venv/bin/python" ]; then
-                CLI_PY="$TOOLKIT_DIR/venv/bin/python"
-            else
-                CLI_PY="$(command -v python3 || command -v python)"
-            fi
-            "$CLI_PY" "$TOOLKIT_DIR/cli/dashboard.py"
-            else
-                echo -e "  ${RED}✗ Backend failed to start. Cannot launch CLI.${NC}"
-            fi
-            echo
-            echo "  Press Enter to return to menu..."
-            read -r
-            ;;
-
-        5)
-            echo
-            echo -e "  ${BOLD}Stopping toolkit...${NC}"
-            echo
-            stop_backend
-            echo
-            echo -e "  ${GREEN}✓ Stopped.${NC}"
-            echo
-            echo "  Press Enter to return to menu..."
-            read -r
-            ;;
-
-        6)
-            echo
-            echo -e "  ${BOLD}Which log to view?${NC}"
-            echo
-            echo "  1. Backend log"
-            echo "  2. Frontend log"
-            echo "  3. Both (interleaved)"
-            echo "  4. Back to menu"
-            echo
-            read -p "  Select (1-4): " log_choice
-
-            # Trap SIGINT (Ctrl+C) so it stops tail but returns to menu
-            view_log() {
-                trap '' INT   # Ignore SIGINT in parent
-                "$@" &        # Run tail in background
-                local tail_pid=$!
-                trap "kill $tail_pid 2>/dev/null; wait $tail_pid 2>/dev/null" INT
-                wait $tail_pid 2>/dev/null
-                trap - INT    # Restore default
-            }
-
-            case $log_choice in
-                1)
-                    if [ -f "$BACKEND_LOG" ]; then
-                        echo
-                        echo -e "  ${DIM}Showing backend log (Ctrl+C to return to menu)${NC}"
-                        echo
-                        view_log tail -f "$BACKEND_LOG"
-                    else
-                        echo -e "  ${YELLOW}No backend log found${NC}"
-                        sleep 2
-                    fi
-                    ;;
-                2)
-                    if [ -f "$FRONTEND_LOG" ]; then
-                        echo
-                        echo -e "  ${DIM}Showing frontend log (Ctrl+C to return to menu)${NC}"
-                        echo
-                        view_log tail -f "$FRONTEND_LOG"
-                    else
-                        echo -e "  ${YELLOW}No frontend log found${NC}"
-                        sleep 2
-                    fi
-                    ;;
-                3)
-                    if [ -f "$BACKEND_LOG" ] || [ -f "$FRONTEND_LOG" ]; then
-                        echo
-                        echo -e "  ${DIM}Showing logs (Ctrl+C to return to menu)${NC}"
-                        echo
-                        view_log tail -f "$BACKEND_LOG" "$FRONTEND_LOG"
-                    else
-                        echo -e "  ${YELLOW}No log files found${NC}"
-                        sleep 2
-                    fi
-                    ;;
-                *)
-                    ;;
-            esac
-            echo
-            echo -e "  ${DIM}Returned to menu${NC}"
-            sleep 1
-            ;;
-
-        7)
-            echo
-            echo -e "  ${CYAN}${BOLD}Maintenance${NC}"
-            echo
-            echo "  1. Scan for old toolkit installs"
-            echo "  2. Clean runtime (venv, node_modules, logs)"
-            echo "  3. Cleanup / Uninstall (full options)"
-            echo "  4. Back to menu"
-            echo
-            read -p "  Select (1-4): " maint_choice
-            case $maint_choice in
-                1)
-                    echo
-                    "$TOOLKIT_DIR/venv/bin/python" scripts/env_scanner.py
-                    ;;
-                2|3)
-                    echo
-                    stop_backend
-                    stop_frontend
-                    if [ -f "$TOOLKIT_DIR/bin/cleanup.sh" ]; then
-                        bash "$TOOLKIT_DIR/bin/cleanup.sh"
-                    else
-                        echo -e "  ${RED}Cleanup script not found.${NC}"
-                    fi
-                    ;;
-                *)
-                    ;;
-            esac
-            echo
-            echo "  Press Enter to return to menu..."
-            read -r
-            ;;
-
-        8)
-            echo
-            if [ -f "$TOOLKIT_DIR/bin/diagnose.sh" ]; then
-                echo -e "  ${CYAN}${BOLD}System Diagnostics${NC}"
-                echo -e "  ${DIM}Checks: thermal, memory, NIC, IRQ, conntrack, WireGuard, kernel${NC}"
-                echo
-                echo "  1. Run diagnostics (recommended)"
-                echo "  2. Run with stress test (--stress)"
-                echo "  3. Apply fixes for found issues (--fix)"
-                echo "  4. Back to menu"
-                echo
-                read -p "  Select (1-4): " diag_choice
-                case $diag_choice in
-                    1)
-                        $SUDO bash "$TOOLKIT_DIR/bin/diagnose.sh"
-                        ;;
-                    2)
-                        echo -e "  ${YELLOW}⚠ Stress test will briefly increase system load${NC}"
-                        read -p "  Continue? [y/N]: " stress_confirm
-                        if [[ "$stress_confirm" =~ ^[Yy] ]]; then
-                            $SUDO bash "$TOOLKIT_DIR/bin/diagnose.sh" --stress
-                        fi
-                        ;;
-                    3)
-                        echo -e "  ${DIM}Applying fixes — each one asks for confirmation${NC}"
-                        echo
-                        $SUDO bash "$TOOLKIT_DIR/bin/diagnose.sh" --fix
-                        ;;
-                    *)
-                        ;;
-                esac
-            else
-                echo -e "  ${RED}Diagnostic script not found at: $TOOLKIT_DIR/bin/diagnose.sh${NC}"
-                echo -e "  ${DIM}Re-extract the toolkit to restore it.${NC}"
-            fi
-            echo
-            echo "  Press Enter to return to menu..."
-            read -r
-            ;;
-
-
-        9)
-            echo
-            echo -e "  ${CYAN}${BOLD}Autostart on Boot${NC}"
-            echo
-            _SERVICE_NAME="mysterium-toolkit"
-            _SERVICE_FILE="/etc/systemd/system/${_SERVICE_NAME}.service"
-            _VENV_PYTHON="$TOOLKIT_DIR/venv/bin/python"
-
-            # Check current status — file check is more reliable than is-enabled
-            # (some systemd versions return false for failed-but-enabled services)
-            _svc_active=false
-            if [ -f "/etc/systemd/system/${_SERVICE_NAME}.service" ] &&                systemctl is-enabled "$_SERVICE_NAME" 2>/dev/null | grep -qE '^(enabled|enabled-runtime)'; then
-                _svc_active=true
-            fi
-
-            if [ "$_svc_active" = true ]; then
-                echo -e "  ${GREEN}✓ Autostart is currently ENABLED${NC}"
-                echo -e "  ${DIM}  Service: $_SERVICE_NAME${NC}"
-                echo -e "  ${DIM}  The toolkit backend starts automatically at boot.${NC}"
-                echo
-                echo "  1. Disable autostart"
-                echo "  2. Back to menu"
-                echo
-                read -p "  Select (1-2): " _auto_choice
-                case "$_auto_choice" in
-                    1)
-                        $SUDO systemctl disable --now "$_SERVICE_NAME" 2>/dev/null || true
-                        $SUDO rm -f "$_SERVICE_FILE"
-                        $SUDO systemctl daemon-reload 2>/dev/null || true
-                        echo -e "  ${GREEN}✓ Autostart disabled${NC}"
-                        ;;
-                    *)
-                        ;;
-                esac
-            else
-                echo -e "  ${YELLOW}Autostart is currently DISABLED${NC}"
-                echo -e "  ${DIM}  The toolkit backend does NOT start automatically at boot.${NC}"
-                echo
-                echo "  1. Enable autostart (systemd service)"
-                echo "  2. Back to menu"
-                echo
-                read -p "  Select (1-2): " _auto_choice
-                case "$_auto_choice" in
-                    1)
-                        # Detect current user (even under sudo)
-                        _REAL_USER="${SUDO_USER:-$USER}"
-                        _REAL_HOME=$(getent passwd "$_REAL_USER" | cut -d: -f6)
-                        mkdir -p "$TOOLKIT_DIR/logs"
-                        # Ensure logs/ is owned by the real user, not root
-                        # Without this, the systemd service (running as real user) can't write logs
-                        chown -R "$_REAL_USER:$_REAL_USER" "$TOOLKIT_DIR/logs" 2>/dev/null || true
-
-                        # Detect Mysterium node service name so toolkit starts after it
-                        _MYST_SVC=""
-                        for _svc in mysterium-node myst mysterium mysterium-node.service; do
-                            if systemctl list-units --all --no-legend 2>/dev/null | grep -q "^.*${_svc}"; then
-                                _MYST_SVC="$_svc"
-                                break
-                            fi
-                        done
-                        if [ -n "$_MYST_SVC" ]; then
-                            _AFTER_DEPS="network-online.target $_MYST_SVC"
-                            echo -e "  ${DIM}  Detected Mysterium service: $_MYST_SVC — toolkit will start after it${NC}"
-                        else
-                            _AFTER_DEPS="network-online.target"
-                            echo -e "  ${DIM}  Mysterium node service not detected — using network-only dependency${NC}"
-                        fi
-
-                        # Write systemd unit file
-                        $SUDO tee "$_SERVICE_FILE" > /dev/null << UNIT_EOF
-[Unit]
-Description=Mysterium Node Monitoring Toolkit
-After=${_AFTER_DEPS}
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=$_REAL_USER
-WorkingDirectory=$TOOLKIT_DIR
-ExecStartPre=/bin/bash -c 'mkdir -p $TOOLKIT_DIR/logs && touch $TOOLKIT_DIR/logs/backend.log'
-ExecStart=$_VENV_PYTHON backend/app.py
-Restart=on-failure
-RestartSec=10
-StartLimitIntervalSec=0
-StandardInput=null
-StandardOutput=append:$TOOLKIT_DIR/logs/backend.log
-StandardError=append:$TOOLKIT_DIR/logs/backend.log
-Environment=HOME=$_REAL_HOME
-
-[Install]
-WantedBy=multi-user.target
-UNIT_EOF
-
-                        $SUDO systemctl daemon-reload
-                        $SUDO systemctl enable "$_SERVICE_NAME"
-                        echo -e "  ${GREEN}✓ Autostart enabled — toolkit starts at every boot${NC}"
-                        echo -e "  ${DIM}  Service: $_SERVICE_NAME${NC}"
-                        echo
-                        echo -e "  ${DIM}  Useful commands:${NC}"
-                        echo -e "  ${DIM}    sudo systemctl status $_SERVICE_NAME${NC}"
-                        echo -e "  ${DIM}    sudo systemctl stop $_SERVICE_NAME${NC}"
-                        echo -e "  ${DIM}    sudo journalctl -u $_SERVICE_NAME -f${NC}"
-                        echo
-                        # Offer to start now
-                        read -p "  Start the service now? [Y/n]: " _start_now
-                        if [[ ! "$_start_now" =~ ^[Nn] ]]; then
-                            # Stop ALL running backends — systemd service + any manual process
-                            $SUDO systemctl stop mysterium-toolkit 2>/dev/null || true
-                            stop_backend
-                            # Kill anything still holding port 5000
-                            _PORT_PID=$(lsof -ti :${DASHBOARD_PORT} 2>/dev/null || true)
-                            [ -n "$_PORT_PID" ] && kill -9 "$_PORT_PID" 2>/dev/null || true
-                            # Wait for port to be fully free
-                            echo -e "  ${DIM}  Waiting for port to clear…${NC}"
-                            sleep 5
-                            _PORT_WAIT=0
-                            while [ $_PORT_WAIT -lt 10 ]; do
-                                lsof -ti :${DASHBOARD_PORT} >/dev/null 2>&1 || break
-                                sleep 1; _PORT_WAIT=$((_PORT_WAIT+1))
-                            done
-                            $SUDO systemctl reset-failed "$_SERVICE_NAME" 2>/dev/null || true
-                            $SUDO systemctl start "$_SERVICE_NAME"
-                            # Wait up to 25 seconds — Python startup can be slow on laptops
-                            echo -e "  ${DIM}  Starting service (may take up to 25s on first run)…${NC}"
-                            _WAIT=0
-                            while [ $_WAIT -lt 25 ]; do
-                                sleep 1
-                                _WAIT=$((_WAIT + 1))
-                                if systemctl is-active --quiet "$_SERVICE_NAME"; then
-                                    echo -e "  ${GREEN}✓ Service running${NC}"
-                                    break
-                                fi
-                                # Still activating — keep waiting silently
-                            done
-                            if ! systemctl is-active --quiet "$_SERVICE_NAME"; then
-                                # First-enable often fails due to a port/timing race.
-                                # Reset failed state and retry once — second attempt always works.
-                                echo -e "  ${YELLOW}⚠ First attempt failed — resetting and retrying…${NC}"
-                                $SUDO systemctl reset-failed "$_SERVICE_NAME" 2>/dev/null || true
-                                sleep 3
-                                $SUDO systemctl start "$_SERVICE_NAME" 2>/dev/null || true
-                                _RETRY=0
-                                while [ $_RETRY -lt 20 ]; do
-                                    sleep 1; _RETRY=$((_RETRY+1))
-                                    if systemctl is-active --quiet "$_SERVICE_NAME"; then
-                                        echo -e "  ${GREEN}✓ Service running${NC}"
-                                        break
-                                    fi
-                                done
-                                if ! systemctl is-active --quiet "$_SERVICE_NAME"; then
-                                    echo -e "  ${YELLOW}⚠ Service not running. Check:${NC}"
-                                    echo -e "  ${DIM}    sudo journalctl -u $_SERVICE_NAME -n 20${NC}"
-                                fi
-                            fi
-                        fi
-                        ;;
-                    *)
-                        ;;
-                esac
-            fi
-            echo
-            echo "  Press Enter to return to menu..."
-            read -r
-            ;;
-
-        0)
-            echo
-            if is_backend_running; then
-                echo -e "  ${YELLOW}⚠ Servers are still running in the background.${NC}"
-                echo -e "  ${DIM}  They will keep running after you exit this menu.${NC}"
-                echo -e "  ${DIM}  Use option 5 to stop them, or run: ./stop.sh${NC}"
-                echo
-                read -p "  Exit anyway? [Y/n]: " confirm
-                if [[ "$confirm" =~ ^[Nn] ]]; then
-                    continue
-                fi
-            fi
-            echo
-            echo -e "  ${GREEN}Thank you for using the Mysterium Node Toolkit!${NC}"
-            echo -e "  ${DIM}Happy earning — Ian Johnsons ♥${NC}"
-            echo
-            exit 0
-            ;;
-
-        *)
-            echo -e "  ${RED}Invalid choice${NC}"
-            sleep 1
-            ;;
-    esac
+    if [ "$SETUP_MODE" = "3" ]; then
+        # ── Type 3: Lightweight backend — no frontend ─────────────────────
+        echo "  ── Run ──────────────────────────────"
+        echo "  1. Start Backend"
+        echo "  2. Stop Backend"
+        echo "  ── Monitor ──────────────────────────"
+        echo "  3. View Logs"
+        echo "  ── Maintenance ──────────────────────"
+        echo "  4. System Diagnostics"
+        echo "  5. Maintenance"
+        echo "  6. Autostart on Boot"
+        echo "  0. Exit"
+        echo
+        read -p "  Select (0-6): " choice
+        case $choice in
+            1) _action_start_backend ;;
+            2) _action_stop ;;
+            3) _action_logs ;;
+            4) _action_diagnostics ;;
+            5) _action_maintenance ;;
+            6) _action_autostart ;;
+            0) _action_exit ;;
+            *) echo -e "  ${RED}Invalid choice${NC}"; sleep 1 ;;
+        esac
+    else
+        # ── Type 1 / Type 2: Full or Fleet Master ─────────────────────────
+        echo "  ── Run ──────────────────────────────"
+        echo "  1. Start Dashboard"
+        echo "  2. Stop Everything"
+        echo "  ── Monitor ──────────────────────────"
+        echo "  3. View Logs"
+        echo "  4. CLI Dashboard (Terminal UI)"
+        echo "  ── Maintenance ──────────────────────"
+        echo "  5. Rebuild Frontend"
+        echo "  6. System Diagnostics"
+        echo "  7. Maintenance"
+        echo "  8. Autostart on Boot"
+        echo "  0. Exit"
+        echo
+        read -p "  Select (0-8): " choice
+        case $choice in
+            1) _action_start_dashboard ;;
+            2) _action_stop ;;
+            3) _action_logs ;;
+            4) _action_cli ;;
+            5) _action_rebuild ;;
+            6) _action_diagnostics ;;
+            7) _action_maintenance ;;
+            8) _action_autostart ;;
+            0) _action_exit ;;
+            *) echo -e "  ${RED}Invalid choice${NC}"; sleep 1 ;;
+        esac
+    fi
 done
