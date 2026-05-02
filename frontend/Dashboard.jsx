@@ -1348,9 +1348,9 @@ const MysteriumDashboard = () => {
                     onClick={() => {
                       setSelectedNodeId(n.id);
                       selectedNodeRef.current = n.id;
+                      setArchiveOffset(0);
                       setTimeout(fetchMetrics, 50);
                     }}
-                    className={`text-left p-4 rounded-xl border transition-all duration-200 hover:scale-[1.01] ${
                       isOn
                         ? 'bg-slate-800/50 border-slate-700 hover:border-violet-500/50 hover:bg-violet-500/5'
                         : 'bg-slate-900/50 border-red-500/20 hover:border-red-400/30 opacity-80'
@@ -1540,6 +1540,7 @@ const MysteriumDashboard = () => {
                         const next = isSel ? null : n.id;
                         setSelectedNodeId(next);
                         selectedNodeRef.current = next;
+                        setArchiveOffset(0);
                         setTimeout(fetchMetrics, 50);
                       }}
                       className={`text-left px-3 py-2.5 rounded-lg border transition flex-1 min-w-[150px] max-w-[240px] ${
@@ -2033,7 +2034,7 @@ const MysteriumDashboard = () => {
                               </div>
                               <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-400">
                                 <span>{countryFlag(s.consumer_country) || '—'}</span>
-                                <span className="text-slate-300">{s.service_type || '—'}</span>
+                                <span className="text-slate-300">{fmtType(s.service_type) || '—'}</span>
                                 <span>{s.duration}</span>
                                 <span>↑{s.bytes_pending ? <span className="text-slate-600 italic">—</span> : formatDataSize(s.data_out)}</span>
                                 <span>↓{s.bytes_pending ? <span className="text-slate-600 italic">—</span> : formatDataSize(s.data_in)}</span>
@@ -2117,7 +2118,7 @@ const MysteriumDashboard = () => {
                             </div>
                             <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-400">
                               <span>{countryFlag(s.consumer_country) || '—'}</span>
-                              <span className="text-slate-300">{s.service_type}</span>
+                              <span className="text-slate-300">{fmtType(s.service_type)}</span>
                               <span className="font-mono">{s.duration}</span>
                               <span>{formatDataSize(s.data_total)}</span>
                               {s.started_fmt && <span className="text-slate-500">{s.started_fmt}</span>}
@@ -2233,7 +2234,7 @@ const MysteriumDashboard = () => {
                                   </div>
                                   <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-400">
                                     <span>{countryFlag(s.consumer_country) || '—'}</span>
-                                    <span className="text-slate-300">{s.service_type}</span>
+                                    <span className="text-slate-300">{fmtType(s.service_type)}</span>
                                     <span className="font-mono">{s.duration}</span>
                                     <span>{formatDataSize(s.data_total)}</span>
                                     {s.started_fmt && <span className="text-slate-500">{s.started_fmt}</span>}
@@ -2309,7 +2310,7 @@ const MysteriumDashboard = () => {
                             <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-400">
                               <span>{countryFlag(c.consumer_country) || '—'}</span>
                               {(c.service_types || []).map(st => (
-                                <span key={st} className="text-slate-300">{st}</span>
+                                <span key={st} className="text-slate-300">{fmtType(st)}</span>
                               ))}
                               <span>{c.sessions}{c.active_sessions > 0 ? ` (${c.active_sessions} live)` : ''}</span>
                               <span>{formatDataSize(c.total_data_mb)}</span>
@@ -4336,7 +4337,7 @@ const NodeQualityCard = ({ nodeQuality: q, nodeStatus, backendUrl, authHeaders, 
                   <div className="flex flex-wrap gap-1">
                     {testResult.services.map((s, i) => (
                       <span key={i} className={`px-1.5 py-0.5 rounded text-xs ${s.monitoring_failed ? 'bg-red-500/20 text-red-300' : 'bg-slate-700 text-slate-300'}`}>
-                        {s.service_type} {s.quality_score != null ? `· ${s.quality_score.toFixed(2)}` : ''} {s.monitoring_failed ? '⚠' : ''}
+                        {fmtType(s.service_type)} {s.quality_score != null ? `· ${s.quality_score.toFixed(2)}` : ''} {s.monitoring_failed ? '⚠' : ''}
                       </span>
                     ))}
                   </div>

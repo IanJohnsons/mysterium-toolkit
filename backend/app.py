@@ -2702,6 +2702,7 @@ class MetricsCollector:
 
                 # Duration calculation
                 api_duration = session.get('duration')
+                delta_secs = 0  # initialised before try so duration_secs is always defined
                 try:
                     if api_duration is not None and not is_active:
                         # Completed session: use API-provided duration (seconds integer) — exact
@@ -2739,6 +2740,7 @@ class MetricsCollector:
                     'started': started,
                     'started_fmt': started_fmt,
                     'duration': duration_str,
+                    'duration_secs': round(delta_secs),
                     'data_in': round(b_in / (1024 * 1024), 2),
                     'data_out': round(b_out / (1024 * 1024), 2),
                     'data_total': round((b_in + b_out) / (1024 * 1024), 2),
