@@ -1,6 +1,6 @@
 # Mysterium Node Toolkit
 
-![Version](https://img.shields.io/badge/version-1.0.16-brightgreen) ![License](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Version](https://img.shields.io/badge/version-1.0.16-brightgreen) ![License](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Ubuntu%20%7C%20Pi%20OS-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 
 A professional monitoring and management dashboard for [Mysterium Network](https://mysterium.network) VPN node operators. Runs fully local on your node machine — no cloud account, no third-party service, no data leaving your server.
 
@@ -21,6 +21,23 @@ sudo ./setup.sh
 `setup.sh` is fully interactive. Follow the prompts from start to finish.
 
 > Always clone to a fixed directory name without a version number. The autostart systemd service points to the directory path — if the path changes, autostart breaks.
+
+---
+
+## Supported Platforms
+
+| OS | Architecture | Status |
+|---|---|---|
+| Kali Linux | x86_64 / arm64 | ✅ Supported |
+| Parrot OS | x86_64 | ✅ Supported |
+| Ubuntu 22.04 / 24.04 LTS | x86_64 / arm64 | ✅ Supported — fixed in v1.0.16 |
+| Raspberry Pi OS (Debian Bookworm) | arm64 / armhf | ✅ Supported — fixed in v1.0.16 |
+| Debian 11 / 12 | x86_64 / arm64 | ✅ Supported |
+| Fedora / RHEL / Rocky / Alma | x86_64 | ✅ Supported |
+| Arch / Manjaro | x86_64 | ✅ Supported |
+| Alpine Linux | x86_64 | ✅ Supported |
+
+> **Ubuntu and Raspberry Pi OS users:** update to v1.0.16 or later. Earlier versions had a path bug in `setup.sh` that caused the installation to fail at Step 6. Run `sudo ./update.sh` on existing installs.
 
 ---
 
@@ -257,6 +274,7 @@ Select (1-3) [default: 1]:
 - Checks Python 3.8+ — exits with install instructions if missing or too old
 - Checks pip — installs it if missing
 - Lists optional tools already present: vnstat, ethtool, ufw, docker, node, npm
+- Installs Node.js 20 via NodeSource on apt-based systems (Ubuntu, Raspberry Pi OS, Debian) — plain `apt install nodejs` gives outdated versions on these distros
 - Warns if Node.js/npm not found (web dashboard won't work without it — CLI still works)
 
 ---
