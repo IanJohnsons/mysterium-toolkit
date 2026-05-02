@@ -2755,11 +2755,15 @@ class MetricsCollector:
             sessions.sort(key=lambda s: s['is_active'], reverse=True)          # active on top
             active_count = sum(1 for s in sessions if s['is_active'])
 
-            # FIX 1+2: VPN ground truth override
-            # If we have live VPN tunnels but TequilAPI says 0 active, force-mark
-            # the most recent non-monitoring sessions as active
+            # VPN ground truth override — last resort only.
+            # WireGuard interfaces linger for minutes after a consumer disconnects.
+            # If we compared vpn_tunnel_count > active_count we would force-mark
+            # recently-completed sessions as active (causing the same consumer to
+            # appear twice when they reconnect before the stale interface is cleaned up).
+            # Only trigger when TequilAPI reports ZERO active sessions despite live
+            # tunnels existing — that is the real "API hasn't caught up yet" case.
             effective_active = max(vpn_tunnel_count, total_svc_connections)
-            if effective_active > 0 and active_count < effective_active and sessions:
+            if effective_active > 0 and active_count == 0 and sessions:
                 # Mark the N most recent sessions as active
                 marked = 0
                 for s in sessions:

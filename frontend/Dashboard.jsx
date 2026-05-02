@@ -835,7 +835,7 @@ const MysteriumDashboard = () => {
 
   useEffect(() => {
     if (sessionTab === 'history') fetchArchive(0, true);
-  }, [sessionTab, fetchArchive]);
+  }, [sessionTab, fetchArchive, selectedNodeId]);
 
   // Auto-refresh every 5s
   useEffect(() => {
