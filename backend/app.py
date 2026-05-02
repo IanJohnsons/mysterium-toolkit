@@ -2777,6 +2777,25 @@ class MetricsCollector:
                         marked += 1
                 active_count = sum(1 for s in sessions if s['is_active'])
 
+            # Reconnect ghost de-duplication.
+            # Mysterium only uses "New" and "Completed" statuses. When a consumer
+            # disconnects without a clean teardown the old session stays "New"
+            # while a new "New" session is created on reconnect — both appear active.
+            # Sessions are already sorted newest-first within active, so the first
+            # occurrence of each (consumer_id, service_type) pair is the live tunnel;
+            # any later occurrence is a ghost from an incomplete disconnect.
+            seen_active = set()
+            for s in sessions:
+                if not s['is_active']:
+                    continue
+                key = (s.get('consumer_id', ''), s.get('service_type', ''))
+                if key in seen_active:
+                    s['is_active'] = False
+                    s['status'] = '(ghost — reconnect)'
+                else:
+                    seen_active.add(key)
+            active_count = sum(1 for s in sessions if s['is_active'])
+
             # ===== CONSUMER ANALYTICS (Items 4-6) =====
             consumer_map = {}
             for s in sessions:
