@@ -2831,6 +2831,25 @@ class MetricsCollector:
             unique_consumers = len(consumer_map)
             paying_consumers = sum(1 for c in consumer_map.values() if c['total_earnings'] > 0)
 
+            # Detect Mysterium network probes — infrastructure quality bots that test
+            # node reachability. They never pay and make many short low-traffic sessions.
+            # Criteria: ≥5 sessions, zero earnings, avg data < 2 MB/session.
+            probe_ids = set()
+            for c in top_consumers:
+                avg_mb = c['total_data_mb'] / c['sessions'] if c['sessions'] > 0 else 0
+                c['is_probe'] = (
+                    c['sessions'] >= 5
+                    and c['total_earnings'] == 0
+                    and avg_mb < 2.0
+                )
+                if c['is_probe']:
+                    probe_ids.add(c['consumer_id'])
+            probe_consumers = len(probe_ids)
+
+            # Propagate is_probe to individual session items for UI indicators
+            for s in sessions:
+                s['is_probe'] = s.get('consumer_id', '') in probe_ids
+
             # ===== SERVICE TYPE BREAKDOWN =====
             # Count sessions, earnings and data per business service type.
             # Combine live TequilAPI sessions with all historical sessions from SessionDB.
@@ -2997,6 +3016,7 @@ class MetricsCollector:
                 'live_vpn_tx_mb': round(live_vpn_tx / (1024 * 1024), 2),
                 'unique_consumers': unique_consumers,
                 'paying_consumers': paying_consumers,
+                'probe_consumers':  probe_consumers,
                 'top_consumers': top_consumers,
                 'service_breakdown': service_breakdown,
                 'monitoring_sessions': monitoring_sessions,

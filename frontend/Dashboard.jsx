@@ -413,6 +413,7 @@ const MysteriumDashboard = () => {
   const [sessionTab, setSessionTab] = useState('live'); // 'live' | 'history'
   const [consumerSort, setConsumerSort] = useState({ key: 'total_earnings', dir: 'desc' });
   const [historySort, setHistorySort] = useState({ key: 'started', dir: 'desc' });
+  const [showProbes, setShowProbes] = useState(false);
   const [archiveSessions, setArchiveSessions] = useState([]);
   const [archiveTotal, setArchiveTotal] = useState(0);
   const [archiveLoading, setArchiveLoading] = useState(false);
@@ -2034,7 +2035,7 @@ const MysteriumDashboard = () => {
                                 </span>
                               </div>
                               <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-400">
-                                <span>{countryFlag(s.consumer_country) || '—'}</span>
+                                <span>{s.is_probe ? <span title="Mysterium network probe">🔧</span> : (countryFlag(s.consumer_country) || '—')}</span>
                                 <span className="text-slate-300">{fmtType(s.service_type) || '—'}</span>
                                 <span>{s.duration}</span>
                                 <span>↑{s.bytes_pending ? <span className="text-slate-600 italic">—</span> : formatDataSize(s.data_out)}</span>
@@ -2059,7 +2060,7 @@ const MysteriumDashboard = () => {
                             <div key={s.id || i} className="grid grid-cols-12 gap-2 text-xs px-3 py-2.5 rounded border bg-emerald-500/5 border-emerald-500/20">
                               <div className="col-span-1"><div className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse mt-0.5" /></div>
                               <div className="col-span-3 min-w-0"><CopyableId id={s.consumer_id} /></div>
-                              <div className="col-span-1 text-sm">{countryFlag(s.consumer_country) || '—'}</div>
+                              <div className="col-span-1 text-sm">{s.is_probe ? <span title="Mysterium network probe">🔧</span> : (countryFlag(s.consumer_country) || '—')}</div>
                               <div className="col-span-1 text-slate-300 text-xs truncate">{fmtType(s.service_type) || '—'}</div>
                               <div className="col-span-1 text-slate-300">{s.duration}</div>
                               <div className="col-span-2 text-emerald-300">
@@ -2281,100 +2282,126 @@ const MysteriumDashboard = () => {
                 </>
               )}
 
+
               {/* ======= CONSUMERS TAB ======= */}
-              {sessionTab === 'consumers' && (
-                <>
-                  <div className="mb-3 flex gap-4 text-xs text-slate-400">
-                    <span>Unique: <span className="text-slate-200 font-semibold">{safeNum(metrics.sessions?.unique_consumers || 0)}</span></span>
-                    <span>Paying: <span className="text-emerald-300 font-semibold">{safeNum(metrics.sessions?.paying_consumers || 0)}</span></span>
-                    <span>Sessions: <span className="text-slate-200">{safeNum(metrics.sessions?.total || 0)}</span></span>
+              {sessionTab === 'consumers' && (() => {
+                const allConsumers = metrics.sessions?.top_consumers || [];
+                const realConsumers = allConsumers.filter(c => !c.is_probe);
+                const probeList    = allConsumers.filter(c => c.is_probe);
+                const probeCount   = safeNum(metrics.sessions?.probe_consumers || probeList.length);
+                const realCount    = safeNum(metrics.sessions?.unique_consumers || 0) - probeCount;
+
+                const ConsumerCard = ({ c }) => (
+                  <div className={`p-3 rounded border ${c.active_sessions > 0 ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-slate-900/30 border-slate-700/30'}`}>
+                    <div className="flex items-center justify-between mb-1">
+                      <CopyableId id={c.consumer_id} />
+                      <span className={`text-xs font-semibold ${c.total_earnings > 0 ? 'text-emerald-400' : 'text-slate-500'}`}>
+                        {c.total_earnings > 0 ? `${c.total_earnings.toFixed(4)} MYST` : '—'}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-400">
+                      <span>{c.is_probe ? '🔧' : (countryFlag(c.consumer_country) || '—')}</span>
+                      {(c.service_types || []).map(st => <span key={st} className="text-slate-300">{fmtType(st)}</span>)}
+                      <span>{c.sessions}{c.active_sessions > 0 ? ` (${c.active_sessions} live)` : ''}</span>
+                      <span>{formatDataSize(c.total_data_mb)}</span>
+                      {c.active_sessions > 0 ? <span className="text-emerald-400">● connected</span> : <span className="text-slate-500">○ offline</span>}
+                    </div>
                   </div>
-                  {(metrics.sessions?.top_consumers || []).length > 0 ? (
-                    <>
-                      {/* Mobile stacked view */}
-                      <div className="sm:hidden space-y-2">
-                        <MobileSortBar state={consumerSort} setState={setConsumerSort} keys={[
-                          { key: 'total_earnings', label: 'Earned' },
-                          { key: 'total_data_mb',  label: 'Data' },
-                          { key: 'sessions',       label: 'Sessions' },
-                        ]} />
-                        {sortRows(metrics.sessions.top_consumers || [], consumerSort).map((c, i) => (
-                          <div key={c.consumer_id || i} className={`p-3 rounded border ${
-                            c.active_sessions > 0 ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-slate-900/30 border-slate-700/30'
-                          }`}>
-                            <div className="flex items-center justify-between mb-1">
-                              <CopyableId id={c.consumer_id} />
-                              <span className={`text-xs font-semibold ${c.total_earnings > 0 ? 'text-emerald-400' : 'text-slate-500'}`}>
-                                {c.total_earnings > 0 ? `${c.total_earnings.toFixed(4)} MYST` : '—'}
-                              </span>
-                            </div>
-                            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-400">
-                              <span>{countryFlag(c.consumer_country) || '—'}</span>
-                              {(c.service_types || []).map(st => (
-                                <span key={st} className="text-slate-300">{fmtType(st)}</span>
-                              ))}
-                              <span>{c.sessions}{c.active_sessions > 0 ? ` (${c.active_sessions} live)` : ''}</span>
-                              <span>{formatDataSize(c.total_data_mb)}</span>
-                              {c.active_sessions > 0
-                                ? <span className="text-emerald-400">● connected</span>
-                                : <span className="text-slate-500">○ offline</span>}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                      {/* Desktop sortable table */}
-                      <div className="hidden sm:block space-y-1.5">
-                        <div className="grid grid-cols-12 gap-2 text-xs text-slate-500 font-semibold uppercase tracking-widest px-3 py-1">
-                          <div className="col-span-3">Consumer</div>
-                          <div className="col-span-1">🌍</div>
-                          <div className="col-span-2">Service</div>
-                          <div
-                            className={`col-span-1 cursor-pointer select-none flex items-center gap-1 hover:text-slate-200 transition ${consumerSort.key === 'sessions' ? 'text-slate-200' : ''}`}
-                            onClick={() => setConsumerSort(prev => ({ key: 'sessions', dir: prev.key === 'sessions' && prev.dir === 'desc' ? 'asc' : 'desc' }))}
-                          >Sessions <span className="text-[10px]">{consumerSort.key === 'sessions' ? (consumerSort.dir === 'desc' ? '▼' : '▲') : '⇅'}</span></div>
-                          <div
-                            className={`col-span-2 cursor-pointer select-none flex items-center gap-1 hover:text-slate-200 transition ${consumerSort.key === 'total_data_mb' ? 'text-slate-200' : ''}`}
-                            onClick={() => setConsumerSort(prev => ({ key: 'total_data_mb', dir: prev.key === 'total_data_mb' && prev.dir === 'desc' ? 'asc' : 'desc' }))}
-                          >Data <span className="text-[10px]">{consumerSort.key === 'total_data_mb' ? (consumerSort.dir === 'desc' ? '▼' : '▲') : '⇅'}</span></div>
-                          <div
-                            className={`col-span-2 cursor-pointer select-none flex items-center gap-1 hover:text-slate-200 transition ${consumerSort.key === 'total_earnings' ? 'text-slate-200' : ''}`}
-                            onClick={() => setConsumerSort(prev => ({ key: 'total_earnings', dir: prev.key === 'total_earnings' && prev.dir === 'desc' ? 'asc' : 'desc' }))}
-                          >Earned <span className="text-[10px]">{consumerSort.key === 'total_earnings' ? (consumerSort.dir === 'desc' ? '▼' : '▲') : '⇅'}</span></div>
-                          <div className="col-span-1">Status</div>
+                );
+
+                const ConsumerRow = ({ c }) => (
+                  <div className={`grid grid-cols-12 gap-2 text-xs px-3 py-2 rounded border transition ${c.active_sessions > 0 ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-slate-900/30 border-slate-700/30'}`}>
+                    <div className="col-span-3 min-w-0"><CopyableId id={c.consumer_id} /></div>
+                    <div className="col-span-1 text-sm">{c.is_probe ? '🔧' : (countryFlag(c.consumer_country) || '—')}</div>
+                    <div className="col-span-2 text-slate-300 text-xs truncate">{(c.service_types || []).map(t => fmtType(t)).join(', ') || '—'}</div>
+                    <div className="col-span-1 text-slate-300">{c.sessions}{c.active_sessions > 0 ? ` (${c.active_sessions} live)` : ''}</div>
+                    <div className="col-span-2 text-slate-300">{formatDataSize(c.total_data_mb)}</div>
+                    <div className={`col-span-2 font-semibold ${c.total_earnings > 0 ? 'text-emerald-400' : 'text-slate-500'}`}>
+                      {c.total_earnings > 0 ? `${c.total_earnings.toFixed(4)} MYST` : '—'}
+                    </div>
+                    <div className="col-span-1">
+                      {c.active_sessions > 0 ? <span className="text-emerald-400 text-xs">● live</span> : <span className="text-slate-500 text-xs">○</span>}
+                    </div>
+                  </div>
+                );
+
+                const desktopHeader = (
+                  <div className="grid grid-cols-12 gap-2 text-xs text-slate-500 font-semibold uppercase tracking-widest px-3 py-1">
+                    <div className="col-span-3">Consumer</div>
+                    <div className="col-span-1">🌍</div>
+                    <div className="col-span-2">Service</div>
+                    <div className={`col-span-1 cursor-pointer select-none flex items-center gap-1 hover:text-slate-200 transition ${consumerSort.key === 'sessions' ? 'text-slate-200' : ''}`}
+                      onClick={() => setConsumerSort(prev => ({ key: 'sessions', dir: prev.key === 'sessions' && prev.dir === 'desc' ? 'asc' : 'desc' }))}>
+                      Sessions <span className="text-[10px]">{consumerSort.key === 'sessions' ? (consumerSort.dir === 'desc' ? '▼' : '▲') : '⇅'}</span>
+                    </div>
+                    <div className={`col-span-2 cursor-pointer select-none flex items-center gap-1 hover:text-slate-200 transition ${consumerSort.key === 'total_data_mb' ? 'text-slate-200' : ''}`}
+                      onClick={() => setConsumerSort(prev => ({ key: 'total_data_mb', dir: prev.key === 'total_data_mb' && prev.dir === 'desc' ? 'asc' : 'desc' }))}>
+                      Data <span className="text-[10px]">{consumerSort.key === 'total_data_mb' ? (consumerSort.dir === 'desc' ? '▼' : '▲') : '⇅'}</span>
+                    </div>
+                    <div className={`col-span-2 cursor-pointer select-none flex items-center gap-1 hover:text-slate-200 transition ${consumerSort.key === 'total_earnings' ? 'text-slate-200' : ''}`}
+                      onClick={() => setConsumerSort(prev => ({ key: 'total_earnings', dir: prev.key === 'total_earnings' && prev.dir === 'desc' ? 'asc' : 'desc' }))}>
+                      Earned <span className="text-[10px]">{consumerSort.key === 'total_earnings' ? (consumerSort.dir === 'desc' ? '▼' : '▲') : '⇅'}</span>
+                    </div>
+                    <div className="col-span-1">Status</div>
+                  </div>
+                );
+
+                return (
+                  <>
+                    <div className="mb-3 flex flex-wrap gap-4 text-xs text-slate-400">
+                      <span>Consumers: <span className="text-slate-200 font-semibold">{realCount}</span></span>
+                      <span>Paying: <span className="text-emerald-300 font-semibold">{safeNum(metrics.sessions?.paying_consumers || 0)}</span></span>
+                      {probeCount > 0 && <span>Probes: <span className="text-slate-500 font-semibold">{probeCount}</span></span>}
+                      <span>Sessions: <span className="text-slate-200">{safeNum(metrics.sessions?.total || 0)}</span></span>
+                    </div>
+
+                    {realConsumers.length > 0 ? (
+                      <>
+                        <div className="sm:hidden space-y-2">
+                          <MobileSortBar state={consumerSort} setState={setConsumerSort} keys={[
+                            { key: 'total_earnings', label: 'Earned' },
+                            { key: 'total_data_mb',  label: 'Data' },
+                            { key: 'sessions',       label: 'Sessions' },
+                          ]} />
+                          {sortRows(realConsumers, consumerSort).map((c, i) => <ConsumerCard key={c.consumer_id || i} c={c} />)}
                         </div>
-                        {[...(metrics.sessions.top_consumers || [])]
-                          .sort((a, b) => {
+                        <div className="hidden sm:block space-y-1.5">
+                          {desktopHeader}
+                          {[...realConsumers].sort((a, b) => {
                             const mul = consumerSort.dir === 'desc' ? -1 : 1;
                             const av = a[consumerSort.key] ?? 0;
                             const bv = b[consumerSort.key] ?? 0;
                             return av > bv ? -mul : av < bv ? mul : 0;
-                          })
-                          .map((c, i) => (
-                          <div key={c.consumer_id || i} className={`grid grid-cols-12 gap-2 text-xs px-3 py-2 rounded border transition ${
-                            c.active_sessions > 0 ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-slate-900/30 border-slate-700/30'
-                          }`}>
-                            <div className="col-span-3 min-w-0"><CopyableId id={c.consumer_id} /></div>
-                            <div className="col-span-1 text-sm">{countryFlag(c.consumer_country) || '—'}</div>
-                            <div className="col-span-2 text-slate-300 text-xs truncate">{(c.service_types || []).map(t => fmtType(t)).join(', ') || '—'}</div>
-                            <div className="col-span-1 text-slate-300">{c.sessions}{c.active_sessions > 0 ? ` (${c.active_sessions} live)` : ''}</div>
-                            <div className="col-span-2 text-slate-300">{formatDataSize(c.total_data_mb)}</div>
-                            <div className={`col-span-2 font-semibold ${c.total_earnings > 0 ? 'text-emerald-400' : 'text-slate-500'}`}>
-                              {c.total_earnings > 0 ? `${c.total_earnings.toFixed(4)} MYST` : '—'}
+                          }).map((c, i) => <ConsumerRow key={c.consumer_id || i} c={c} />)}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-xs text-slate-500 py-4 text-center">No consumer data available</div>
+                    )}
+
+                    {probeList.length > 0 && (
+                      <div className="mt-4 pt-3 border-t border-slate-700/40">
+                        <button onClick={() => setShowProbes(v => !v)}
+                          className="flex items-center gap-2 text-xs text-slate-500 hover:text-slate-300 transition mb-2">
+                          <span>{showProbes ? '▼' : '▶'}</span>
+                          <span className="font-semibold uppercase tracking-wider">🔧 Network probes ({probeList.length})</span>
+                          <span className="text-slate-600 normal-case font-normal">— Mysterium quality monitoring · never pay</span>
+                        </button>
+                        {showProbes && (
+                          <>
+                            <div className="sm:hidden space-y-1.5">
+                              {probeList.map((c, i) => <ConsumerCard key={c.consumer_id || i} c={c} />)}
                             </div>
-                            <div className="col-span-1">
-                              {c.active_sessions > 0
-                                ? <span className="text-emerald-400 text-xs">● live</span>
-                                : <span className="text-slate-500 text-xs">○</span>}
+                            <div className="hidden sm:block space-y-1">
+                              {probeList.map((c, i) => <ConsumerRow key={c.consumer_id || i} c={c} />)}
                             </div>
-                          </div>
-                        ))}
+                          </>
+                        )}
                       </div>
-                    </>
-                  ) : (
-                    <div className="text-xs text-slate-500 py-8 text-center">No consumer data available</div>
-                  )}
-                </>
-              )}
+                    )}
+                  </>
+                );
+              })()}
 
             </div>
             </>
