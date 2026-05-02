@@ -875,12 +875,12 @@ Default retention windows — pruned once per calendar day:
 | Database | Default retention |
 |----------|-------------------|
 | Earnings history | 365 days |
-| Session archive | 365 days |
+| Session archive | 90 days |
 | Traffic history | 730 days |
-| Node quality | 365 days |
-| System metrics | 365 days |
-| Service events | 365 days |
-| Uptime log | 365 days |
+| Node quality | 90 days |
+| System metrics | 30 days |
+| Service events | 30 days |
+| Uptime log | 90 days |
 
 Override in `config/setup.json`:
 
@@ -888,7 +888,7 @@ Override in `config/setup.json`:
 "data_retention": { "earnings": 730, "sessions": 180, "quality": 60 }
 ```
 
-Only the keys you specify are overridden. Restart the backend after editing.
+Only the keys you specify are overridden. Changes via the dashboard take effect immediately. After manual edits to `config/setup.json`, restart the backend to apply.
 
 ---
 

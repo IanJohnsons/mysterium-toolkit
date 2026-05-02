@@ -574,12 +574,12 @@ TIER_SLOW_INTERVAL = 600    # 10 minutes — reduced API calls (was 300)
 # Override in config/setup.json under key 'data_retention': {'earnings': 365, ...}
 _DEFAULT_RETENTION = {
     'earnings': 365,
-    'sessions': 365,
+    'sessions':  90,
     'traffic':  730,
-    'quality':  365,
-    'system':   365,
-    'services': 365,
-    'uptime':   365,
+    'quality':   90,
+    'system':    30,
+    'services':  30,
+    'uptime':    90,
 }
 _last_prune_date = ''   # 'YYYY-MM-DD' — retention prune runs once per calendar day
 
