@@ -184,7 +184,7 @@ def _write_file(path, value):
         Path(path).write_text(str(value))
         return True
     except PermissionError:
-        rc, _, _ = _run(['sudo', '-n', 'bash', '-c', f'echo {value} > {path}'])
+        rc, _, _ = _run(['sudo', '-n', 'tee', path], stdin_bytes=str(value) + '\n')
         return rc == 0
     except Exception:
         return False
@@ -2033,9 +2033,9 @@ exit 0
 """
 
         try:
-            rc, _, err = _run(['sudo', '-n', 'bash', '-c',
-                               f'cat > {RPS_WATCHER_SCRIPT} << "SCRIPT_EOF"\n{watcher_script}SCRIPT_EOF\n'
-                               f'chmod +x {RPS_WATCHER_SCRIPT}'])
+            rc, _, err = _run(['sudo', '-n', 'tee', RPS_WATCHER_SCRIPT], stdin_bytes=watcher_script)
+            if rc == 0:
+                _run(['sudo', '-n', 'chmod', '+x', RPS_WATCHER_SCRIPT])
             ok = rc == 0
             actions.append({'action': f'Wrote {RPS_WATCHER_SCRIPT}', 'success': ok,
                             'error': err if not ok else None})
@@ -2072,8 +2072,7 @@ WantedBy=timers.target
             (tmr_path, timer_unit, 'timer unit'),
         ]:
             try:
-                rc, _, err = _run(['sudo', '-n', 'bash', '-c',
-                                   f'cat > {path} << "UNIT_EOF"\n{content}UNIT_EOF'])
+                rc, _, err = _run(['sudo', '-n', 'tee', path], stdin_bytes=content)
                 ok = rc == 0
                 actions.append({'action': f'Wrote {label}', 'success': ok,
                                 'error': err if not ok else None})
@@ -2090,7 +2089,7 @@ WantedBy=timers.target
         })
 
         # Step 4: Run the script once immediately
-        rc, _, _ = _run(['sudo', '-n', 'bash', RPS_WATCHER_SCRIPT])
+        rc, _, _ = _run(['sudo', '-n', RPS_WATCHER_SCRIPT])
         actions.append({'action': 'Apply RPS now (immediate run)', 'success': rc == 0})
 
         return {'name': 'rps_watcher', 'actions': actions,
@@ -3105,16 +3104,15 @@ def persist_all():
         sysctl_lines.append(f'net.netfilter.nf_conntrack_max = {ct_max}')
         # Write modules-load.d so nf_conntrack loads BEFORE sysctl at boot
         try:
-            _run(['sudo', '-n', 'bash', '-c',
-                  'echo nf_conntrack > /etc/modules-load.d/nf_conntrack.conf'])
+            _run(['sudo', '-n', 'tee', '/etc/modules-load.d/nf_conntrack.conf'],
+                 stdin_bytes='nf_conntrack\n')
         except Exception:
             pass
 
     sysctl_content = '\n'.join(sysctl_lines) + '\n'
 
     try:
-        rc, _, err = _run(['sudo', '-n', 'bash', '-c',
-                           f'cat > {SYSCTL_PERSIST_FILE} << SYSCTL_EOF\n{sysctl_content}SYSCTL_EOF'])
+        rc, _, err = _run(['sudo', '-n', 'tee', SYSCTL_PERSIST_FILE], stdin_bytes=sysctl_content)
         ok = rc == 0
         actions.append({
             'action': f'Wrote {SYSCTL_PERSIST_FILE}',
@@ -3168,9 +3166,9 @@ exit 0
 """
 
     try:
-        rc, _, err = _run(['sudo', '-n', 'bash', '-c',
-                           f'cat > {RPS_SCRIPT_FILE} << "SCRIPT_EOF"\n{rps_script}SCRIPT_EOF\n'
-                           f'chmod +x {RPS_SCRIPT_FILE}'])
+        rc, _, err = _run(['sudo', '-n', 'tee', RPS_SCRIPT_FILE], stdin_bytes=rps_script)
+        if rc == 0:
+            _run(['sudo', '-n', 'chmod', '+x', RPS_SCRIPT_FILE])
         ok = rc == 0
         actions.append({
             'action': f'Wrote {RPS_SCRIPT_FILE}',
@@ -3196,9 +3194,10 @@ WantedBy=multi-user.target
 """
 
     try:
-        rc, _, err = _run(['sudo', '-n', 'bash', '-c',
-                           f'cat > {RPS_SERVICE_FILE} << "SVC_EOF"\n{service_unit}SVC_EOF\n'
-                           f'systemctl daemon-reload && systemctl enable {RPS_SERVICE_NAME}'])
+        rc, _, err = _run(['sudo', '-n', 'tee', RPS_SERVICE_FILE], stdin_bytes=service_unit)
+        if rc == 0:
+            _run(['sudo', '-n', 'systemctl', 'daemon-reload'])
+            rc, _, err = _run(['sudo', '-n', 'systemctl', 'enable', RPS_SERVICE_NAME])
         ok = rc == 0
         actions.append({
             'action': f'Created and enabled {RPS_SERVICE_NAME}.service',
@@ -3278,8 +3277,7 @@ def persist_one(subsystem_name):
         for k, v in sorted(existing_map.items()):
             merged.append(f'{k} = {v}')
         merged_content = '\n'.join(merged) + '\n'
-        rc, _, err = _run(['sudo', '-n', 'bash', '-c',
-                           f'printf "%s" {chr(39)}{merged_content}{chr(39)} > {SYSCTL_PERSIST_FILE}'])
+        rc, _, err = _run(['sudo', '-n', 'tee', SYSCTL_PERSIST_FILE], stdin_bytes=merged_content)
         return rc == 0, err
 
     # ── conntrack ────────────────────────────────────────────
@@ -3290,8 +3288,8 @@ def persist_one(subsystem_name):
             actions.append({'action': f'Persisted nf_conntrack_max={ct_max} → {SYSCTL_PERSIST_FILE}',
                             'success': ok, 'error': err if not ok else None})
             try:
-                rc2, _, err2 = _run(['sudo', '-n', 'bash', '-c',
-                                     'echo nf_conntrack > /etc/modules-load.d/nf_conntrack.conf'])
+                rc2, _, err2 = _run(['sudo', '-n', 'tee', '/etc/modules-load.d/nf_conntrack.conf'],
+                                    stdin_bytes='nf_conntrack\n')
                 actions.append({
                     'action': 'nf_conntrack → /etc/modules-load.d/nf_conntrack.conf (loads before sysctl at boot)',
                     'success': rc2 == 0, 'error': err2 if rc2 != 0 else None,
@@ -3334,14 +3332,15 @@ for q in /sys/class/net/$IFACE/queues/rx-*/rps_cpus; do
 done
 exit 0
 """
-            rc, _, err = _run(['sudo', '-n', 'bash', '-c',
-                               f'printf "%s" {chr(39)}{rps_script}{chr(39)} > {RPS_SCRIPT_FILE} && chmod +x {RPS_SCRIPT_FILE}'])
+            rc, _, err = _run(['sudo', '-n', 'tee', RPS_SCRIPT_FILE], stdin_bytes=rps_script)
+            if rc == 0:
+                _run(['sudo', '-n', 'chmod', '+x', RPS_SCRIPT_FILE])
             ok = rc == 0
             actions.append({'action': f'Persisted NIC coalescing (rx-usecs={rx_usecs}) + RPS → {RPS_SCRIPT_FILE}',
                             'success': ok, 'error': err if not ok else None})
             # Enable systemd service
-            rc2, _, err2 = _run(['sudo', '-n', 'bash', '-c',
-                                  f'systemctl daemon-reload && systemctl enable {RPS_SERVICE_NAME}'])
+            _run(['sudo', '-n', 'systemctl', 'daemon-reload'])
+            rc2, _, err2 = _run(['sudo', '-n', 'systemctl', 'enable', RPS_SERVICE_NAME])
             actions.append({'action': f'Enabled {RPS_SERVICE_NAME}.service',
                             'success': rc2 == 0, 'error': err2 if rc2 != 0 else None})
             # Write service unit if it doesn't exist
@@ -3357,8 +3356,9 @@ RemainAfterExit=yes
 [Install]
 WantedBy=multi-user.target
 """
-                _run(['sudo', '-n', 'bash', '-c',
-                      f'printf "%s" {chr(39)}{service_unit}{chr(39)} > {RPS_SERVICE_FILE} && systemctl daemon-reload && systemctl enable {RPS_SERVICE_NAME}'])
+                _run(['sudo', '-n', 'tee', RPS_SERVICE_FILE], stdin_bytes=service_unit)
+                _run(['sudo', '-n', 'systemctl', 'daemon-reload'])
+                _run(['sudo', '-n', 'systemctl', 'enable', RPS_SERVICE_NAME])
         else:
             actions.append({'action': 'No primary interface found', 'success': False})
 
@@ -3380,8 +3380,9 @@ for q in /sys/class/net/$IFACE/queues/rx-*/rps_cpus; do
 done
 exit 0
 """
-            rc, _, err = _run(['sudo', '-n', 'bash', '-c',
-                               f'printf "%s" {chr(39)}{rps_script}{chr(39)} > {RPS_SCRIPT_FILE} && chmod +x {RPS_SCRIPT_FILE}'])
+            rc, _, err = _run(['sudo', '-n', 'tee', RPS_SCRIPT_FILE], stdin_bytes=rps_script)
+            if rc == 0:
+                _run(['sudo', '-n', 'chmod', '+x', RPS_SCRIPT_FILE])
             ok = rc == 0
             actions.append({'action': f'Persisted RPS (mask={all_mask}) → {RPS_SCRIPT_FILE}',
                             'success': ok, 'error': err if not ok else None})
@@ -3397,10 +3398,9 @@ RemainAfterExit=yes
 [Install]
 WantedBy=multi-user.target
 """
-                _run(['sudo', '-n', 'bash', '-c',
-                      f'printf "%s" {chr(39)}{service_unit}{chr(39)} > {RPS_SERVICE_FILE}'])
-            rc2, _, err2 = _run(['sudo', '-n', 'bash', '-c',
-                                  'systemctl daemon-reload && systemctl enable ' + RPS_SERVICE_NAME])
+                _run(['sudo', '-n', 'tee', RPS_SERVICE_FILE], stdin_bytes=service_unit)
+            _run(['sudo', '-n', 'systemctl', 'daemon-reload'])
+            rc2, _, err2 = _run(['sudo', '-n', 'systemctl', 'enable', RPS_SERVICE_NAME])
             actions.append({'action': f'Enabled {RPS_SERVICE_NAME}.service',
                             'success': rc2 == 0, 'error': err2 if rc2 != 0 else None})
         else:
@@ -3426,8 +3426,8 @@ WantedBy=multi-user.target
                 except Exception:
                     existing = ''
                 if 'ethtool -K' not in existing:
-                    rc, _, err = _run(['sudo', '-n', 'bash', '-c',
-                                       f'echo \'ethtool -K "{iface}" rx off 2>/dev/null\' >> {RPS_SCRIPT_FILE}'])
+                    new_content = existing.rstrip('\n') + f'\nethtool -K "{iface}" rx off 2>/dev/null\n'
+                    rc, _, err = _run(['sudo', '-n', 'tee', RPS_SCRIPT_FILE], stdin_bytes=new_content)
                     actions.append({'action': f'Added ethtool -K rx off to {RPS_SCRIPT_FILE}',
                                     'success': rc == 0, 'error': err if rc != 0 else None})
                 else:
@@ -3435,8 +3435,9 @@ WantedBy=multi-user.target
             else:
                 # Create minimal boot script
                 script = f'#!/bin/bash\nethtool -K "{iface}" rx off 2>/dev/null\n'
-                rc, _, err = _run(['sudo', '-n', 'bash', '-c',
-                                   f"printf '%s' '{script}' > {RPS_SCRIPT_FILE} && chmod +x {RPS_SCRIPT_FILE}"])
+                rc, _, err = _run(['sudo', '-n', 'tee', RPS_SCRIPT_FILE], stdin_bytes=script)
+                if rc == 0:
+                    _run(['sudo', '-n', 'chmod', '+x', RPS_SCRIPT_FILE])
                 actions.append({'action': f'Created {RPS_SCRIPT_FILE} with csum fix',
                                 'success': rc == 0, 'error': err if rc != 0 else None})
         else:
@@ -3540,8 +3541,8 @@ WantedBy=multi-user.target
         # Persist module load
         modules_dir = Path('/etc/modules-load.d')
         if modules_dir.exists():
-            rc, _, err = _run(['sudo', '-n', 'bash', '-c',
-                               'echo tcp_bbr > /etc/modules-load.d/tcp_bbr.conf'])
+            rc, _, err = _run(['sudo', '-n', 'tee', '/etc/modules-load.d/tcp_bbr.conf'],
+                               stdin_bytes='tcp_bbr\n')
             actions.append({'action': 'Persisted tcp_bbr → /etc/modules-load.d/tcp_bbr.conf',
                             'success': rc == 0, 'error': err if rc != 0 else None})
         else:

@@ -215,7 +215,7 @@ UNIT_EOF
     _SUDOERS_FILE="/etc/sudoers.d/mysterium-toolkit"
     sudo tee "$_SUDOERS_FILE" > /dev/null << SUDOERS_EOF
 # Mysterium Toolkit — passwordless sudo for specific commands only
-$_REAL_USER ALL=(ALL) NOPASSWD: /sbin/sysctl, /usr/sbin/ethtool, /usr/sbin/conntrack, /usr/local/bin/mysterium-rps-watcher.sh, /usr/local/bin/mysterium-rps-setup.sh, /usr/bin/tee /etc/sysctl.d/*, /usr/bin/tee /usr/local/bin/*, /usr/bin/tee /etc/systemd/system/mysterium-*.service, /usr/bin/tee /etc/systemd/system/mysterium-*.timer, /bin/systemctl start mysterium-*, /bin/systemctl stop mysterium-*, /bin/systemctl enable mysterium-*, /bin/systemctl disable mysterium-*, /bin/systemctl daemon-reload, /usr/sbin/iptables, /sbin/iptables, /usr/sbin/iptables-legacy, /sbin/iptables-legacy, /usr/sbin/ip6tables, /sbin/ip6tables, /usr/sbin/nft, /sbin/nft
+$_REAL_USER ALL=(ALL) NOPASSWD: /sbin/sysctl, /usr/sbin/sysctl, /usr/sbin/ethtool, /usr/sbin/conntrack, /usr/local/bin/mysterium-rps-watcher.sh, /usr/local/bin/mysterium-rps-setup.sh, /usr/bin/tee /etc/sysctl.d/*, /usr/bin/tee /etc/modules-load.d/*, /usr/bin/tee /sys/module/nf_conntrack/parameters/hashsize, /usr/bin/tee /usr/local/bin/*, /usr/bin/tee /etc/systemd/system/mysterium-*.service, /usr/bin/tee /etc/systemd/system/mysterium-*.timer, /usr/bin/chmod +x /usr/local/bin/mysterium-*, /bin/systemctl start mysterium-*, /bin/systemctl stop mysterium-*, /bin/systemctl enable mysterium-*, /bin/systemctl disable mysterium-*, /bin/systemctl daemon-reload, /usr/sbin/iptables, /sbin/iptables, /usr/sbin/iptables-legacy, /sbin/iptables-legacy, /usr/sbin/ip6tables, /sbin/ip6tables, /usr/sbin/nft, /sbin/nft
 SUDOERS_EOF
     sudo chmod 440 "$_SUDOERS_FILE"
     echo -e "  ${GREEN}✓ Sudoers updated${NC}"
