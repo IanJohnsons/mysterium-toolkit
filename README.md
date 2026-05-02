@@ -24,23 +24,6 @@ sudo ./setup.sh
 
 ---
 
-## Context-Aware Health Monitoring
-
-The System Health panel automatically detects your hardware profile and adjusts its checks accordingly. You only see warnings that are actually relevant to your setup.
-
-| Profile | Detected by | Behaviour |
-|---|---|---|
-| **Laptop** | `/sys/class/power_supply/BAT*` | CPU governor warnings suppressed — OS manages governor for battery/thermal |
-| **VM / VPS** | `systemd-detect-virt` | CPU governor and bare-metal NIC checks skipped — hypervisor manages these |
-| **LXC / Container** | `systemd-detect-virt`, cgroup | Kernel sysctl tuning checks skipped — host controls these values |
-| **Raspberry Pi** | `/proc/device-tree/model` | ARM-aware checks, Pi-specific false positives removed |
-| **High RAM (8+ GB)** | `psutil` | Missing swap downgraded from critical to warning |
-| **Bare-metal server** | None of the above | All checks active — full optimisation recommended |
-
-The profile is detected once at startup and shown in the health panel. No configuration needed.
-
----
-
 ## What setup.sh does — full walkthrough
 
 ---
@@ -599,7 +582,7 @@ Every session is saved to SQLite with token values frozen the moment the session
 
 ### Session analytics
 
-- Active tunnels — live consumer connections with identity and service type
+- Active tunnels — live consumer connections with identity and service type. Mysterium network quality monitoring bots are automatically detected and labelled with 🔧, separated from paying consumers in the Consumers tab
 - Consumer breakdown by country and service type
 - Full session history with duration, data transferred, earnings per session, and **MYST/GB efficiency** per session
 - **Service Split Over Time** — stacked bar chart of daily earnings by service type (7d / 30d / 90d / 1y / All). Reveals trends in scraping vs VPN vs Public traffic over time
@@ -656,6 +639,17 @@ Two built-in presets: **Node Defaults** and **High Load** (optimised for 50+ con
 | BBR Congestion Control | tcp_congestion_control | Enable BBR and fq |
 
 **Fix & Lock** — apply a fix and persist it so it survives the next reboot. **Unlock** — remove the persisted setting and revert to system defaults.
+
+The health panel automatically detects your hardware profile at startup and adjusts its checks accordingly — you only see warnings that are relevant to your setup.
+
+| Profile | Detected by | Behaviour |
+|---|---|---|
+| **Laptop** | `/sys/class/power_supply/BAT*` | CPU governor warnings suppressed — OS manages governor for battery/thermal |
+| **VM / VPS** | `systemd-detect-virt` | CPU governor and bare-metal NIC checks skipped — hypervisor manages these |
+| **LXC / Container** | `systemd-detect-virt`, cgroup | Kernel sysctl tuning checks skipped — host controls these values |
+| **Raspberry Pi** | `/proc/device-tree/model` | ARM-aware checks, Pi-specific false positives removed |
+| **High RAM (8+ GB)** | `psutil` | Missing swap downgraded from critical to warning |
+| **Bare-metal server** | None of the above | All checks active — full optimisation recommended |
 
 ### System metrics history
 
@@ -780,14 +774,19 @@ The backend always runs as your normal user, never as root. During setup, `setup
 
 | Command | Purpose |
 |---------|---------|
-| `sysctl` | Kernel network tuning |
-| `ethtool` | NIC coalescing and checksum |
-| `modprobe` | Load kernel modules (tcp_bbr, nf_conntrack) |
-| `bash` | Write config to /etc/sysctl.d/, /usr/local/bin/, /etc/systemd/ |
-| `systemctl restart mysterium-*` | Node restart from dashboard |
-| `cpupower frequency-set` | Adaptive CPU governor |
-| `iptables` / `nft` | Read and manage firewall rules |
-| `fallocate` / `mkswap` / `swapon` | Create swapfile |
+| `sysctl` | Apply kernel network parameters live |
+| `ethtool` | NIC interrupt coalescing and checksum offload |
+| `conntrack` | Read connection tracking table |
+| `tee /etc/sysctl.d/*` | Persist kernel parameters to survive reboot |
+| `tee /etc/modules-load.d/*` | Persist kernel module loading at boot |
+| `tee /sys/module/nf_conntrack/parameters/hashsize` | Set conntrack hash size |
+| `tee /usr/local/bin/*` | Write RPS and governor boot scripts |
+| `tee /etc/systemd/system/mysterium-*.service` | Write systemd service units |
+| `tee /etc/systemd/system/mysterium-*.timer` | Write systemd timer units |
+| `chmod +x /usr/local/bin/mysterium-*` | Make boot scripts executable |
+| `systemctl start/stop/enable/disable mysterium-*` | Node and toolkit service management |
+| `systemctl daemon-reload` | Reload systemd after unit changes |
+| `iptables` / `ip6tables` / `nft` | Read and manage firewall rules |
 
 To regenerate after an update: `sudo ./update.sh`
 
