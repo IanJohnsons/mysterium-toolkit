@@ -1,6 +1,6 @@
 # Mysterium Node Toolkit
 
-![Version](https://img.shields.io/badge/version-1.0.16-brightgreen) ![License](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Ubuntu%20%7C%20Pi%20OS-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Version](https://img.shields.io/badge/version-1.0.15-brightgreen) ![License](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 
 A professional monitoring and management dashboard for [Mysterium Network](https://mysterium.network) VPN node operators. Runs fully local on your node machine — no cloud account, no third-party service, no data leaving your server.
 
@@ -24,20 +24,20 @@ sudo ./setup.sh
 
 ---
 
-## Supported Platforms
+## Context-Aware Health Monitoring
 
-| OS | Architecture | Status |
+The System Health panel automatically detects your hardware profile and adjusts its checks accordingly. You only see warnings that are actually relevant to your setup.
+
+| Profile | Detected by | Behaviour |
 |---|---|---|
-| Kali Linux | x86_64 / arm64 | ✅ Supported |
-| Parrot OS | x86_64 | ✅ Supported |
-| Ubuntu 22.04 / 24.04 LTS | x86_64 / arm64 | ✅ Supported — fixed in v1.0.16 |
-| Raspberry Pi OS (Debian Bookworm) | arm64 / armhf | ✅ Supported — fixed in v1.0.16 |
-| Debian 11 / 12 | x86_64 / arm64 | ✅ Supported |
-| Fedora / RHEL / Rocky / Alma | x86_64 | ✅ Supported |
-| Arch / Manjaro | x86_64 | ✅ Supported |
-| Alpine Linux | x86_64 | ✅ Supported |
+| **Laptop** | `/sys/class/power_supply/BAT*` | CPU governor warnings suppressed — OS manages governor for battery/thermal |
+| **VM / VPS** | `systemd-detect-virt` | CPU governor and bare-metal NIC checks skipped — hypervisor manages these |
+| **LXC / Container** | `systemd-detect-virt`, cgroup | Kernel sysctl tuning checks skipped — host controls these values |
+| **Raspberry Pi** | `/proc/device-tree/model` | ARM-aware checks, Pi-specific false positives removed |
+| **High RAM (8+ GB)** | `psutil` | Missing swap downgraded from critical to warning |
+| **Bare-metal server** | None of the above | All checks active — full optimisation recommended |
 
-> **Ubuntu and Raspberry Pi OS users:** update to v1.0.16 or later. Earlier versions had a path bug in `setup.sh` that caused the installation to fail at Step 6. Run `sudo ./update.sh` on existing installs.
+The profile is detected once at startup and shown in the health panel. No configuration needed.
 
 ---
 
@@ -274,7 +274,6 @@ Select (1-3) [default: 1]:
 - Checks Python 3.8+ — exits with install instructions if missing or too old
 - Checks pip — installs it if missing
 - Lists optional tools already present: vnstat, ethtool, ufw, docker, node, npm
-- Installs Node.js 20 via NodeSource on apt-based systems (Ubuntu, Raspberry Pi OS, Debian) — plain `apt install nodejs` gives outdated versions on these distros
 - Warns if Node.js/npm not found (web dashboard won't work without it — CLI still works)
 
 ---

@@ -32,6 +32,109 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
+# SYSTEM PROFILE — context-aware health checks
+# =============================================================================
+# Detected once at import time and cached. Every health class reads this
+# profile and adjusts its thresholds and skip logic accordingly.
+# No external database needed — all info comes from the local system.
+
+_profile_cache = None
+
+def get_profile():
+    """Return cached system profile dict. Detected once, reused everywhere."""
+    global _profile_cache
+    if _profile_cache is not None:
+        return _profile_cache
+
+    profile = {
+        'is_vm':        False,
+        'is_container': False,
+        'is_laptop':    False,
+        'is_pi':        False,
+        'virt_type':    'none',   # kvm, vmware, xen, lxc, docker, openvz, none
+        'arch':         'x86_64',
+        'ram_gb':       4.0,
+        'cpu_count':    1,
+    }
+
+    # --- Architecture ---
+    try:
+        import platform
+        profile['arch'] = platform.machine()
+    except Exception:
+        pass
+
+    # --- CPU count ---
+    try:
+        profile['cpu_count'] = os.cpu_count() or 1
+    except Exception:
+        pass
+
+    # --- RAM ---
+    try:
+        profile['ram_gb'] = round(psutil.virtual_memory().total / (1024 ** 3), 1)
+    except Exception:
+        pass
+
+    # --- Virtualisation / container detection ---
+    # systemd-detect-virt is the most reliable source
+    try:
+        rc, out, _ = _run(['systemd-detect-virt', '--vm'], timeout=3)
+        if rc == 0 and out and out.strip() not in ('none', ''):
+            profile['is_vm'] = True
+            profile['virt_type'] = out.strip()
+    except Exception:
+        pass
+
+    try:
+        rc, out, _ = _run(['systemd-detect-virt', '--container'], timeout=3)
+        if rc == 0 and out and out.strip() not in ('none', ''):
+            profile['is_container'] = True
+            profile['virt_type'] = out.strip()
+    except Exception:
+        pass
+
+    # Fallback: cgroup / proc detection for containers
+    if not profile['is_container']:
+        try:
+            cgroup = Path('/proc/1/cgroup').read_text()
+            if 'docker' in cgroup or 'lxc' in cgroup or 'kubepods' in cgroup:
+                profile['is_container'] = True
+                profile['virt_type'] = 'container'
+        except Exception:
+            pass
+
+    # --- Laptop detection ---
+    # Presence of any BAT* power supply = laptop/UPS
+    try:
+        bat_paths = list(Path('/sys/class/power_supply').glob('BAT*'))
+        if bat_paths:
+            profile['is_laptop'] = True
+    except Exception:
+        pass
+
+    # --- Raspberry Pi detection ---
+    try:
+        model = Path('/proc/device-tree/model').read_text()
+        if 'Raspberry' in model or 'raspberry' in model:
+            profile['is_pi'] = True
+            profile['is_vm'] = False   # Pi is always bare metal
+    except Exception:
+        pass
+    # Also check /proc/cpuinfo Hardware field
+    if not profile['is_pi']:
+        try:
+            cpuinfo = Path('/proc/cpuinfo').read_text()
+            if 'Raspberry Pi' in cpuinfo or 'BCM2' in cpuinfo:
+                profile['is_pi'] = True
+        except Exception:
+            pass
+
+    _profile_cache = profile
+    return profile
+
+
+# =============================================================================
 # HELPERS
 # =============================================================================
 
@@ -721,12 +824,23 @@ class ServiceWatchdog:
             result['recommendations'].append('sudo systemctl start mysterium-node')
             return result
 
+        # Get system boot time to cross-check against process uptime.
+        # If the system itself just booted, a short process uptime is expected — not a warning.
+        try:
+            system_uptime = time.time() - psutil.boot_time()
+        except Exception:
+            system_uptime = 99999
+
         for proc in myst_procs:
             try:
                 uptime = time.time() - proc.info['create_time']
                 h, m = int(uptime // 3600), int((uptime % 3600) // 60)
 
-                if uptime < ServiceWatchdog.MIN_UPTIME_WARN:
+                # Suppress restart warning if system itself just booted (within 10 min)
+                # — the node simply hasn't had time to run longer yet.
+                system_just_booted = system_uptime < 600
+
+                if uptime < ServiceWatchdog.MIN_UPTIME_WARN and not system_just_booted:
                     result['checks'].append({
                         'name': 'Uptime',
                         'status': 'warning',
@@ -832,6 +946,19 @@ class KernelTuning:
             'checks': [],
             'recommendations': [],
         }
+
+        profile = get_profile()
+
+        # In LXC/OpenVZ containers sysctl namespacing means the host controls
+        # these values. Attempts to set them fail silently or are ignored.
+        # Report as informational only — not as a warning/critical.
+        if profile['is_container'] and profile['virt_type'] in ('lxc', 'openvz', 'container'):
+            result['checks'].append({
+                'name': 'Container',
+                'status': 'ok',
+                'detail': f'LXC/container detected — kernel params managed by host, skipping tuning checks',
+            })
+            return result
 
         # CRITICAL: IP forwarding
         ip_fwd = _sysctl_get('net.ipv4.ip_forward')
@@ -2034,14 +2161,23 @@ class SwapHealth:
             'recommendations': [],
         }
 
+        profile = get_profile()
         total_mb, used_mb, pct, has_file, has_part = SwapHealth._get_swap_info()
 
+        # On systems with 8+ GB RAM the OOM risk without swap is low.
+        # Downgrade from critical to warning so it does not dominate the health panel.
+        high_ram = profile['ram_gb'] >= 8.0
+
         if total_mb < 1:
-            result['status'] = 'critical'
+            sev = 'warning' if high_ram else 'critical'
+            result['status'] = sev
+            detail = 'None configured — OOM risk under VPN session spike'
+            if high_ram:
+                detail += f' (low risk — {profile["ram_gb"]:.0f} GB RAM)'
             result['checks'].append({
                 'name': 'Swap',
-                'status': 'critical',
-                'detail': 'None configured — OOM risk under VPN session spike',
+                'status': sev,
+                'detail': detail,
             })
             result['recommendations'].append(
                 'Fix will create a 4 GB swapfile and persist it')
@@ -2295,12 +2431,36 @@ class CpuGovernorHealth:
             'recommendations': [],
         }
 
+        profile = get_profile()
+
         governors = CpuGovernorHealth._get_governors()
         if not governors:
             result['checks'].append({
                 'name': 'Governor',
                 'status': 'ok',
                 'detail': 'cpufreq not available (hardware-managed)',
+            })
+            return result
+
+        # On laptops the OS manages the governor for battery/thermal reasons.
+        # Any governor is acceptable — do not warn or suggest changes.
+        if profile['is_laptop']:
+            current_govs = set(g for _, g in governors)
+            result['checks'].append({
+                'name': 'Governor',
+                'status': 'ok',
+                'detail': f'Laptop detected — OS-managed governor OK ({", ".join(current_govs)})',
+            })
+            return result
+
+        # On VMs the hypervisor controls CPU frequency — cpufreq is a passthrough.
+        # Changing governor has no real effect; skip all warnings.
+        if profile['is_vm'] or profile['is_container']:
+            current_govs = set(g for _, g in governors)
+            result['checks'].append({
+                'name': 'Governor',
+                'status': 'ok',
+                'detail': f'VM/container — CPU frequency managed by hypervisor ({", ".join(current_govs)})',
             })
             return result
 
@@ -2838,10 +2998,22 @@ def scan_all():
     statuses = [r['status'] for r in results]
     overall = 'critical' if 'critical' in statuses else 'warning' if 'warning' in statuses else 'ok'
 
+    profile = get_profile()
+
     return {
         'overall': overall,
         'subsystems': results,
         'scanned_at': datetime.now().isoformat(),
+        'system_profile': {
+            'is_vm':        profile['is_vm'],
+            'is_container': profile['is_container'],
+            'is_laptop':    profile['is_laptop'],
+            'is_pi':        profile['is_pi'],
+            'virt_type':    profile['virt_type'],
+            'arch':         profile['arch'],
+            'ram_gb':       profile['ram_gb'],
+            'cpu_count':    profile['cpu_count'],
+        },
     }
 
 

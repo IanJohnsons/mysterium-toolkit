@@ -391,7 +391,10 @@ const MysteriumDashboard = () => {
   const [toolkitVersion, setToolkitVersion] = useState('...');
   const [updateInfo, setUpdateInfo]         = useState(null);
   const [nodeUpdateInfo, setNodeUpdateInfo] = useState(null);
-  const [healthToast, setHealthToast] = useState(null);  // {msg, level} — degraded-state notification
+  const [healthToast, setHealthToast] = useState(null);
+  // Track which health level the user already dismissed — don't re-show
+  // until the level changes (e.g. warning → critical or back to ok).
+  const healthToastDismissedRef = useRef(null);  // {msg, level} — degraded-state notification
 
   // Fleet Node Manager state — must be at top level to survive fetchMetrics re-renders
   const [fleetModalOpen, setFleetModalOpen] = React.useState(false);
@@ -773,14 +776,22 @@ const MysteriumDashboard = () => {
           _node_toolkit_url: data._node_toolkit_url || null,
         }));
         setLastUpdate(new Date());
-        // Degraded-state toast: auto-show on warning/critical, auto-dismiss on ok
+        // Degraded-state toast: show once per level per session.
+        // If user dismissed a warning, don't re-show on every refresh.
+        // Only show again if the level changes (e.g. ok→warning, warning→critical).
         if (data.systemHealth && data.systemHealth.overall) {
-          if (data.systemHealth.overall !== 'ok') {
+          const level = data.systemHealth.overall;
+          if (level !== 'ok') {
             const issues = (data.systemHealth.subsystems || []).filter(s => s.status !== 'ok').length;
-            setHealthToast({ msg: `${issues} health issue${issues !== 1 ? 's' : ''} detected`, level: data.systemHealth.overall });
-            // Auto-dismiss after 30s
-            setTimeout(() => setHealthToast(null), 30000);
+            // Only show if this level hasn't been dismissed yet this session
+            if (healthToastDismissedRef.current !== level) {
+              setHealthToast({ msg: `${issues} health issue${issues !== 1 ? 's' : ''} detected`, level });
+              // Auto-dismiss after 45s — gives time to read without being too aggressive
+              setTimeout(() => setHealthToast(null), 45000);
+            }
           } else {
+            // Health is ok — reset dismissed state so future warnings show again
+            healthToastDismissedRef.current = null;
             setHealthToast(null);
           }
         }
@@ -1426,15 +1437,15 @@ const MysteriumDashboard = () => {
       <div data-theme={theme} className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 text-white font-['SF_Mono',monospace] overflow-x-hidden">
         {/* ── Degraded-state health toast ── */}
         {healthToast && (
-          <div className={`fixed top-3 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-3 px-4 py-2.5 rounded-lg border shadow-xl text-xs font-semibold backdrop-blur cursor-pointer transition-all
-            ${healthToast.level === 'critical' ? 'bg-red-950/90 border-red-500/50 text-red-200' : 'bg-amber-950/90 border-amber-500/50 text-amber-200'}`}
-            onClick={() => { setActivePanel('health'); setHealthToast(null); }}
+          <div className={`fixed bottom-4 right-4 z-[100] flex items-center gap-2 px-3 py-2 rounded-lg border shadow-lg text-xs backdrop-blur cursor-pointer transition-all opacity-90 hover:opacity-100
+            ${healthToast.level === 'critical' ? 'bg-red-950/80 border-red-500/40 text-red-300' : 'bg-slate-900/90 border-amber-500/30 text-amber-300'}`}
+            onClick={() => { setActivePanel('health'); healthToastDismissedRef.current = healthToast.level; setHealthToast(null); }}
           >
-            <span>{healthToast.level === 'critical' ? '✗' : '▲'}</span>
-            <span>{healthToast.msg}</span>
-            <span className="text-slate-400 ml-1">→ click to open</span>
-            <button onClick={(e) => { e.stopPropagation(); setHealthToast(null); }}
-              className="ml-2 text-slate-400 hover:text-white">✕</button>
+            <span className="text-[10px]">{healthToast.level === 'critical' ? '✗' : '▲'}</span>
+            <span className="font-medium">{healthToast.msg}</span>
+            <span className="text-slate-500 text-[10px] ml-1">→ view</span>
+            <button onClick={(e) => { e.stopPropagation(); healthToastDismissedRef.current = healthToast.level; setHealthToast(null); }}
+              className="ml-1 text-slate-500 hover:text-slate-300 text-[11px]">✕</button>
           </div>
         )}
         {theme !== 'emerald' && <style>{generateThemeCSS(theme)}</style>}
@@ -2022,7 +2033,7 @@ const MysteriumDashboard = () => {
                               </div>
                               <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-400">
                                 <span>{countryFlag(s.consumer_country) || '—'}</span>
-                                <span className="text-slate-300">{fmtType(s.service_type) || '—'}</span>
+                                <span className="text-slate-300">{s.service_type || '—'}</span>
                                 <span>{s.duration}</span>
                                 <span>↑{s.bytes_pending ? <span className="text-slate-600 italic">—</span> : formatDataSize(s.data_out)}</span>
                                 <span>↓{s.bytes_pending ? <span className="text-slate-600 italic">—</span> : formatDataSize(s.data_in)}</span>
@@ -2106,7 +2117,7 @@ const MysteriumDashboard = () => {
                             </div>
                             <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-400">
                               <span>{countryFlag(s.consumer_country) || '—'}</span>
-                              <span className="text-slate-300">{fmtType(s.service_type)}</span>
+                              <span className="text-slate-300">{s.service_type}</span>
                               <span className="font-mono">{s.duration}</span>
                               <span>{formatDataSize(s.data_total)}</span>
                               {s.started_fmt && <span className="text-slate-500">{s.started_fmt}</span>}
@@ -2222,7 +2233,7 @@ const MysteriumDashboard = () => {
                                   </div>
                                   <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-400">
                                     <span>{countryFlag(s.consumer_country) || '—'}</span>
-                                    <span className="text-slate-300">{fmtType(s.service_type)}</span>
+                                    <span className="text-slate-300">{s.service_type}</span>
                                     <span className="font-mono">{s.duration}</span>
                                     <span>{formatDataSize(s.data_total)}</span>
                                     {s.started_fmt && <span className="text-slate-500">{s.started_fmt}</span>}
@@ -2456,7 +2467,7 @@ const MysteriumDashboard = () => {
             <DetailCard
               title="Network Quality"
               value={`${safeNum(metrics.performance.latency)}ms`}
-              subtitle={`Loss: ${safeNum(metrics.performance.packet_loss)}%`}
+              subtitle={`Loss: ${safeNum(metrics.performance.packet_loss)}% · ${safeNum(metrics.clients?.connected || 0)} clients · Peak: ${safeNum(metrics.clients?.peak || 0)}`}
               icon={<Wifi className="w-4 h-4 text-emerald-400" />}
             />
           </div>
