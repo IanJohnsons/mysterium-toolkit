@@ -514,12 +514,33 @@ Prints your dashboard URL and opens `start.sh` automatically:
 ```
 ✓ Dashboard:  http://YOUR_IP:5000
 ✓ Config:     config/setup.json
-
-Key tips:
-  · Option 8 — enable autostart so toolkit survives reboots
-  · Option 4 — open the CLI dashboard (terminal UI)
-  · Option 7 — maintenance, uninstall, cleanup old versions
 ```
+
+**Type 1 / Type 2 (full / fleet master):**
+
+| Option | Action |
+|--------|--------|
+| 1 | Start Dashboard |
+| 2 | Stop Everything |
+| 3 | View Logs |
+| 4 | CLI Dashboard (Terminal UI) |
+| 5 | Rebuild Frontend |
+| 6 | System Diagnostics |
+| 7 | Maintenance — scan, cleanup, uninstall |
+| 8 | Autostart on Boot — enable/disable |
+| 0 | Exit |
+
+**Type 3 (lightweight backend):**
+
+| Option | Action |
+|--------|--------|
+| 1 | Start Backend |
+| 2 | Stop Backend |
+| 3 | View Logs |
+| 4 | System Diagnostics |
+| 5 | Maintenance — scan, cleanup, uninstall |
+| 6 | Autostart on Boot — enable/disable |
+| 0 | Exit |
 
 ---
 
