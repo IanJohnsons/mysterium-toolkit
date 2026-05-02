@@ -1351,6 +1351,7 @@ const MysteriumDashboard = () => {
                       setArchiveOffset(0);
                       setTimeout(fetchMetrics, 50);
                     }}
+                    className={`text-left p-4 rounded-xl border transition-all duration-200 hover:scale-[1.01] ${
                       isOn
                         ? 'bg-slate-800/50 border-slate-700 hover:border-violet-500/50 hover:bg-violet-500/5'
                         : 'bg-slate-900/50 border-red-500/20 hover:border-red-400/30 opacity-80'
