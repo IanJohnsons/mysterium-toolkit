@@ -2022,7 +2022,7 @@ const MysteriumDashboard = () => {
                               </div>
                               <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-400">
                                 <span>{countryFlag(s.consumer_country) || '—'}</span>
-                                <span className="text-slate-300">{s.service_type || '—'}</span>
+                                <span className="text-slate-300">{fmtType(s.service_type) || '—'}</span>
                                 <span>{s.duration}</span>
                                 <span>↑{s.bytes_pending ? <span className="text-slate-600 italic">—</span> : formatDataSize(s.data_out)}</span>
                                 <span>↓{s.bytes_pending ? <span className="text-slate-600 italic">—</span> : formatDataSize(s.data_in)}</span>
@@ -2106,7 +2106,7 @@ const MysteriumDashboard = () => {
                             </div>
                             <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-400">
                               <span>{countryFlag(s.consumer_country) || '—'}</span>
-                              <span className="text-slate-300">{s.service_type}</span>
+                              <span className="text-slate-300">{fmtType(s.service_type)}</span>
                               <span className="font-mono">{s.duration}</span>
                               <span>{formatDataSize(s.data_total)}</span>
                               {s.started_fmt && <span className="text-slate-500">{s.started_fmt}</span>}
@@ -2222,7 +2222,7 @@ const MysteriumDashboard = () => {
                                   </div>
                                   <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-400">
                                     <span>{countryFlag(s.consumer_country) || '—'}</span>
-                                    <span className="text-slate-300">{s.service_type}</span>
+                                    <span className="text-slate-300">{fmtType(s.service_type)}</span>
                                     <span className="font-mono">{s.duration}</span>
                                     <span>{formatDataSize(s.data_total)}</span>
                                     {s.started_fmt && <span className="text-slate-500">{s.started_fmt}</span>}
@@ -2456,7 +2456,7 @@ const MysteriumDashboard = () => {
             <DetailCard
               title="Network Quality"
               value={`${safeNum(metrics.performance.latency)}ms`}
-              subtitle={`Loss: ${safeNum(metrics.performance.packet_loss)}% · ${safeNum(metrics.clients?.connected || 0)} clients · Peak: ${safeNum(metrics.clients?.peak || 0)}`}
+              subtitle={`Loss: ${safeNum(metrics.performance.packet_loss)}%`}
               icon={<Wifi className="w-4 h-4 text-emerald-400" />}
             />
           </div>

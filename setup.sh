@@ -1,7 +1,7 @@
 #!/bin/bash
 # Intentionally NO set -e — each step handles its own errors
 
-TOOLKIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TOOLKIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$TOOLKIT_DIR"
 
 # Root check — LXC containers and Docker run as root without sudo installed.
@@ -500,7 +500,23 @@ echo -e "${GREEN}✓ Python: $PYTHON_VERSION${NC}"
 if ! command -v node &> /dev/null; then
     echo -e "${YELLOW}Installing Node.js...${NC}"
     case "$PKG_MGR" in
-        apt)    $SUDO apt-get update -qq >/dev/null 2>&1; $SUDO apt-get install -y -qq nodejs npm >/dev/null 2>&1 || true ;;
+        apt)
+            # Use NodeSource for Node.js 20 — plain apt gives outdated versions on
+            # Ubuntu, Raspberry Pi OS, and other Debian-based distros (arm64 included).
+            _NODE_INSTALLED=false
+            if command -v curl &>/dev/null; then
+                echo -e "  ${DIM}Fetching NodeSource setup script (Node.js 20)...${NC}"
+                if curl -fsSL https://deb.nodesource.com/setup_20.x | $SUDO bash - >/dev/null 2>&1; then
+                    $SUDO apt-get install -y -qq nodejs >/dev/null 2>&1 && _NODE_INSTALLED=true || true
+                fi
+            fi
+            # Fallback to plain apt if NodeSource failed
+            if [ "$_NODE_INSTALLED" = "false" ]; then
+                echo -e "  ${YELLOW}⚠ NodeSource failed — falling back to apt (may give older version)${NC}"
+                $SUDO apt-get update -qq >/dev/null 2>&1
+                $SUDO apt-get install -y -qq nodejs npm >/dev/null 2>&1 || true
+            fi
+            ;;
         dnf|yum) $SUDO dnf install -y nodejs npm >/dev/null 2>&1 || true ;;
         pacman) $SUDO pacman -S --noconfirm nodejs npm >/dev/null 2>&1 || true ;;
         apk)    apk add nodejs npm >/dev/null 2>&1 || true ;;
