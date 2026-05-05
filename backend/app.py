@@ -253,10 +253,16 @@ def _load_nodes_json():
                         n = {'url': n}
                     if 'url' not in n:
                         continue
+                    raw_url = _normalize_url(n['url'])
+                    # Auto-correct: port 4449 is the MystNodes UI, not TequilAPI (4050).
+                    # Silently remap so existing nodes.json files work without manual editing.
+                    if ':4449' in raw_url:
+                        raw_url = raw_url.replace(':4449', ':4050')
+                        logger.info(f"nodes.json: auto-corrected port 4449→4050 for node '{n.get('id', i)}'")
                     entry = {
                         'id': n.get('id', f'node{i}'),
                         'label': n.get('label', n.get('name', f'Node {i}')),
-                        'url': _normalize_url(n['url']),
+                        'url': raw_url,
                         'username': n.get('username', NODE_USERNAME),
                         'password': n.get('password', NODE_PASSWORD),
                     }
@@ -6649,6 +6655,44 @@ def delete_sessions():
         return jsonify({'error': str(e)}), 500
 
 
+def _update_node_active_services(node_url, headers, service_type, enable):
+    """Persist active-services config on the node after a start/stop toggle.
+
+    Fetches current config, adds or removes service_type (and quic_scraping when
+    toggling scraping), then writes back via POST /config.  Silent on error —
+    the runtime toggle already succeeded; this is best-effort persistence.
+    """
+    SCRAPING_PAIR = {'scraping', 'quic_scraping'}
+    try:
+        cr = requests.get(f'{node_url}/config', headers=headers, timeout=5)
+        if cr.status_code != 200:
+            return
+        cfg = cr.json()
+        # active-services lives under 'data' key in the response
+        active_raw = cfg.get('data', {}).get('active-services') or cfg.get('active-services', '')
+        active = [s.strip() for s in active_raw.split(',') if s.strip()] if active_raw else []
+
+        # When toggling scraping, always keep scraping + quic_scraping in sync
+        to_toggle = SCRAPING_PAIR if service_type in SCRAPING_PAIR else {service_type}
+
+        if enable:
+            for t in to_toggle:
+                if t not in active:
+                    active.append(t)
+        else:
+            active = [s for s in active if s not in to_toggle]
+
+        requests.post(
+            f'{node_url}/config',
+            headers={**headers, 'Content-Type': 'application/json'},
+            json={'data': {'active-services': ','.join(active)}},
+            timeout=5,
+        )
+        logger.debug(f"active-services updated: {','.join(active)} ({'enabled' if enable else 'disabled'} {service_type})")
+    except Exception as e:
+        logger.debug(f"active-services config update skipped: {e}")
+
+
 @app.route('/services/<service_id>/stop', methods=['POST'])
 @require_auth
 def stop_service(service_id):
@@ -6690,6 +6734,9 @@ def stop_service(service_id):
                         do_stop(linked_id)
 
                 if ok:
+                    # Persist: remove from active-services so service stays off after node restart
+                    if service_type:
+                        _update_node_active_services(node_url, headers, service_type, enable=False)
                     return jsonify({'success': True, 'message': f'Service stopped'}), 200
                 else:
                     return jsonify({'success': False, 'error': f'Stop failed for {target_id}'}), 200
@@ -6745,6 +6792,8 @@ def start_service():
                     do_start(LINKED[service_type])
 
                 if ok:
+                    # Persist: add to active-services so service survives node restart
+                    _update_node_active_services(node_url, headers, service_type, enable=True)
                     return jsonify({'success': True, 'message': f'Service {service_type} started'}), 200
                 else:
                     return jsonify({'success': False, 'error': f'Start failed for {service_type}'}), 200

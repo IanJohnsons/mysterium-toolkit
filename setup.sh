@@ -752,7 +752,7 @@ if [ "$SETUP_MODE" = "2" ]; then
         echo "  Each node entry needs:"
         echo -e "  ${DIM}  id          — unique name (no spaces), e.g. vps-de${NC}"
         echo -e "  ${DIM}  label       — display name, e.g. VPS Germany${NC}"
-        echo -e "  ${DIM}  url         — TequilAPI address, e.g. http://host:4449${NC}"
+        echo -e "  ${DIM}  url         — TequilAPI address, e.g. http://host:4050${NC}"
         echo -e "  ${DIM}  toolkit_url — toolkit backend, e.g. http://host:5000${NC}"
         echo -e "  ${DIM}  toolkit_api_key — dashboard_api_key from that node's setup.json${NC}"
         echo
@@ -769,14 +769,14 @@ if [ "$SETUP_MODE" = "2" ]; then
     {
       "id": "node1",
       "label": "My First Node",
-      "url": "http://REPLACE_WITH_NODE_IP:4449",
+      "url": "http://REPLACE_WITH_NODE_IP:4050",
       "toolkit_url": "http://REPLACE_WITH_NODE_IP:5000",
       "toolkit_api_key": "REPLACE_WITH_DASHBOARD_API_KEY"
     },
     {
       "id": "node2",
       "label": "My Second Node",
-      "url": "http://REPLACE_WITH_NODE_IP:4449",
+      "url": "http://REPLACE_WITH_NODE_IP:4050",
       "toolkit_url": "http://REPLACE_WITH_NODE_IP:5000",
       "toolkit_api_key": "REPLACE_WITH_DASHBOARD_API_KEY"
     }
