@@ -3233,7 +3233,7 @@ const svcColor = (t) => SERVICE_COLORS[t] || { hex: 'rgb(148,163,184)', cls: 'te
 
 const ServiceSplitChart = ({ backendUrl, authHeaders }) => {
   const [data, setData]   = React.useState([]);
-  const [days, setDays]   = React.useState(90);
+  const [days, setDays]   = React.useState(30);
   const [open, setOpen]   = React.useState(false);
   const [loading, setLoading] = React.useState(false);
 
@@ -3338,7 +3338,7 @@ const ServiceSplitChart = ({ backendUrl, authHeaders }) => {
 // ---- Earnings Efficiency Chart (Feature 5) ----
 const EarningsEfficiencyChart = ({ backendUrl, authHeaders }) => {
   const [data, setData]   = React.useState([]);
-  const [days, setDays]   = React.useState(90);
+  const [days, setDays]   = React.useState(30);
   const [open, setOpen]   = React.useState(false);
   const [loading, setLoading] = React.useState(false);
 
