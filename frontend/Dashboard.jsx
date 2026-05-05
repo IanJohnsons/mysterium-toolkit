@@ -3227,7 +3227,7 @@ const SERVICE_COLORS = {
   wireguard:     { hex: 'rgb(52,211,153)',  cls: 'text-emerald-400' },
   scraping:      { hex: 'rgb(56,189,248)',  cls: 'text-sky-400' },
   dvpn:          { hex: 'rgb(251,191,36)',  cls: 'text-amber-400' },
-  data_transfer: { hex: 'rgb(251,113,133)', cls: 'text-rose-400' },
+  data_transfer: { hex: 'rgb(99,102,241)',  cls: 'text-indigo-400' },
 };
 const svcColor = (t) => SERVICE_COLORS[t] || { hex: 'rgb(148,163,184)', cls: 'text-slate-400' };
 
