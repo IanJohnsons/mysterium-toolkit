@@ -2906,6 +2906,9 @@ class MetricsCollector:
                     if st == 'monitoring':
                         monitoring_sessions += 1
                     continue
+                # quic_scraping is the QUIC variant of scraping — merge into scraping
+                if st == 'quic_scraping':
+                    st = 'scraping'
                 total_sessions_all += 1
                 if st not in svc_map:
                     svc_map[st] = {'service_type': st, 'sessions': 0,
@@ -6853,7 +6856,7 @@ def get_service_split():
                 day = t.astimezone(TOOLKIT_TZ).strftime('%Y-%m-%d')
             except Exception:
                 day = str(r[0])[:10]
-            key = (day, r[1])
+            key = (day, 'scraping' if r[1] == 'quic_scraping' else r[1])
             day_type_map[key]['sessions']      += 1
             day_type_map[key]['earnings_myst'] += float(r[2]) / 1e18
             day_type_map[key]['data_mb']       += float(r[3]) / (1024 * 1024)

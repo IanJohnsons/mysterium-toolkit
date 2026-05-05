@@ -203,7 +203,7 @@ const SERVICE_LABELS = {
   public:        'Public',          // fallback if node ever uses this label
   data_transfer: 'B2B VPN and data transfer',
   scraping:      'B2B Data Scraping',
-  quic_scraping: 'QUIC Scraping',
+  quic_scraping: 'B2B Data Scraping',
   noop:          'Noop',
   monitoring:    'Monitoring',
 };
@@ -3067,7 +3067,7 @@ const MysteriumDashboard = () => {
                 <div>
                   <h4 className="text-emerald-400 font-semibold mb-1">Node Analytics</h4>
                   <p className="text-slate-400"><strong className="text-slate-300">API cache row</strong> (grey) — live session data. Earnings are low because Mysterium zeroes token values after settlement. <strong className="text-slate-300">Archive row</strong> (green) — from sessions_history.db. Token values are frozen at fetch time before zeroing, giving accurate historical earnings. Includes service type breakdown and consumer origin.</p>
-                  <p className="text-slate-400 mt-1"><strong className="text-slate-300">Service types</strong> — reported directly by the Mysterium TequilAPI. <strong className="text-slate-300">B2B VPN and data transfer</strong> = B2B streaming/data traffic (access policy: mysterium). <strong className="text-slate-300">B2B Data Scraping</strong> = B2B scraping traffic (access policy: mysterium). <strong className="text-slate-300">VPN</strong> = Mysterium VPN app users (access policy: mysterium). <strong className="text-slate-300">Public</strong> = open network, no access policy — includes Mysterium Dark and 3rd party consumers (service type: wireguard in TequilAPI). <strong className="text-slate-300">QUIC Scraping</strong> = QUIC protocol variant for scraping. <strong className="text-slate-300">Monitoring</strong> = Mysterium network probe sessions, excluded from analytics.</p>
+                  <p className="text-slate-400 mt-1"><strong className="text-slate-300">Service types</strong> — reported directly by the Mysterium TequilAPI. <strong className="text-slate-300">B2B VPN and data transfer</strong> = B2B streaming/data traffic (access policy: mysterium). <strong className="text-slate-300">B2B Data Scraping</strong> = B2B scraping traffic including QUIC variant (access policy: mysterium). <strong className="text-slate-300">VPN</strong> = Mysterium VPN app users (access policy: mysterium). <strong className="text-slate-300">Public</strong> = open network, no access policy — includes Mysterium Dark and 3rd party consumers (service type: wireguard in TequilAPI). <strong className="text-slate-300">Monitoring</strong> = Mysterium network probe sessions, excluded from analytics.</p>
                 </div>
 
                 <div>
@@ -3226,7 +3226,6 @@ const MysteriumDashboard = () => {
 const SERVICE_COLORS = {
   wireguard:     { hex: 'rgb(52,211,153)',  cls: 'text-emerald-400' },
   scraping:      { hex: 'rgb(56,189,248)',  cls: 'text-sky-400' },
-  quic_scraping: { hex: 'rgb(167,139,250)', cls: 'text-violet-400' },
   dvpn:          { hex: 'rgb(251,191,36)',  cls: 'text-amber-400' },
   data_transfer: { hex: 'rgb(251,113,133)', cls: 'text-rose-400' },
 };
@@ -5338,7 +5337,7 @@ const ServiceToggleRow = ({ svc, backendUrl, authHeaders }) => {
     public:         'Public',
     data_transfer:  'B2B VPN and data transfer',
     scraping:       'B2B Data Scraping',
-    quic_scraping:  'QUIC Scraping',
+    quic_scraping:  'B2B Data Scraping',
   };
   const typeLabel = svc.label || SERVICE_LABELS_TOGGLE[svc.type] || svc.type;
 
