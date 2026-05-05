@@ -1790,7 +1790,6 @@ const MysteriumDashboard = () => {
                   { type: 'wireguard',     label: 'Public' },
                   { type: 'scraping',      label: 'B2B Data Scraping' },
                   { type: 'data_transfer', label: 'B2B VPN and data transfer' },
-                  { type: 'quic_scraping', label: 'QUIC Scraping' },
                 ];
                 // Internal node-managed services — shown read-only below
                 const INTERNAL_TYPES = ['noop', 'monitoring'];
@@ -1809,11 +1808,15 @@ const MysteriumDashboard = () => {
                 // For each toggleable type, build a merged entry:
                 // - if API returned it: use that (has id, status, is_active)
                 // - if not: synthesise a stopped entry so it stays visible
+                // quic_scraping is node-managed alongside scraping — not a separate toggle
+                const quicLive = liveByType['quic_scraping'];
                 const toggleRows = TOGGLEABLE_TYPES.map(({ type, label }) => {
                   const live = liveByType[type];
-                  return live
+                  const base = live
                     ? { ...live, type, label }
                     : { id: null, type, label, status: 'stopped', is_active: false };
+                  if (type === 'scraping') base.quicActive = !!(quicLive?.is_active);
+                  return base;
                 });
 
                 // Internal services: only show those the API reported
@@ -1824,7 +1827,7 @@ const MysteriumDashboard = () => {
                     {/* User-controllable services — static list */}
                     {toggleRows.map((svc, i) => (
                       <ServiceToggleRow key={svc.id || svc.type} svc={svc}
-                        backendUrl={backendUrlRef.current} authHeaders={authHeaderRef.current} />
+                        backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
                     ))}
                     {/* Divider */}
                     {internalRows.length > 0 && (
@@ -5402,7 +5405,13 @@ const ServiceToggleRow = ({ svc, backendUrl, authHeaders }) => {
       </button>
       <div className="flex-1">
         <span className="font-semibold text-slate-200">{typeLabel}</span>
-        {svc.type === 'quic_scraping' && <span className="ml-2 text-xs text-slate-500">(QUIC variant of B2B Data Scraping)</span>}
+        {svc.type === 'scraping' && (
+          <span className={`ml-2 text-[10px] px-1.5 py-0.5 rounded border ${
+            svc.quicActive
+              ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10'
+              : 'text-slate-500 border-slate-600 bg-slate-800/40'
+          }`}>QUIC {svc.quicActive ? 'Running' : 'Stopped'}</span>
+        )}
         {busy && <span className="ml-2 text-xs text-slate-400">…</span>}
         {confirm && <span className="ml-2 text-xs text-red-400">Click again to stop</span>}
         {status && <span className={`ml-2 text-xs ${status.startsWith('✓') ? 'text-emerald-400' : 'text-red-400'}`}>{status}</span>}
