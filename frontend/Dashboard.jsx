@@ -1886,7 +1886,7 @@ const MysteriumDashboard = () => {
                         : 'bg-slate-800/60 text-slate-400 border border-slate-700 hover:text-slate-200'
                     }`}
                   >
-                    ◉ Active ({Math.max(safeNum(metrics.sessions?.items?.filter(s => s.is_active)?.length || 0), safeNum(metrics.sessions?.vpn_tunnel_count || 0))})
+                    ◉ Active ({safeNum(metrics.sessions?.items?.filter(s => s.is_active)?.length || 0)})
                   </button>
                   <button
                     onClick={() => setSessionTab('history')}

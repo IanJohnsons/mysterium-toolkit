@@ -2790,10 +2790,15 @@ class MetricsCollector:
             # Sessions are already sorted newest-first within active, so the first
             # occurrence of each (consumer_id, service_type) pair is the live tunnel;
             # any later occurrence is a ghost from an incomplete disconnect.
+            # Exception: scraping and data_transfer clients legitimately open multiple
+            # parallel connections from the same wallet — do not ghost-mark those.
+            PARALLEL_OK_TYPES = {'scraping', 'quic_scraping', 'data_transfer'}
             seen_active = set()
             for s in sessions:
                 if not s['is_active']:
                     continue
+                if s.get('service_type', '').lower() in PARALLEL_OK_TYPES:
+                    continue  # parallel connections are normal for B2B services
                 key = (s.get('consumer_id', ''), s.get('service_type', ''))
                 if key in seen_active:
                     s['is_active'] = False
