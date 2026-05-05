@@ -1388,7 +1388,7 @@ const MysteriumDashboard = () => {
                         )}
                         {(n.node_quality?.uptime_24h_local ?? n.node_quality?.uptime_24h_net) != null && (
                           <span className={`${(n.node_quality?.uptime_24h_local ?? n.node_quality?.uptime_24h_net) >= 90 ? 'text-emerald-400/70' : (n.node_quality?.uptime_24h_local ?? n.node_quality?.uptime_24h_net) >= 70 ? 'text-amber-400/70' : 'text-red-400/70'}`}>
-                            Up: {(n.node_quality?.uptime_24h_local ?? n.node_quality?.uptime_24h_net).toFixed(1)}%
+                            Up: {((n.node_quality?.uptime_24h_local ?? n.node_quality?.uptime_24h_net) ?? 0).toFixed(1)}%
                           </span>
                         )}
                         {n.earnings?.daily != null && (n.node_quality?.uptime_24h_local ?? n.node_quality?.uptime_24h_net) > 0 && (() => {
