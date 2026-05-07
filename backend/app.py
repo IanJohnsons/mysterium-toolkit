@@ -6786,8 +6786,22 @@ def start_service():
                 except Exception:
                     pass
 
+                # access_policies per service type:
+                # wireguard (Public) = open to all → empty list
+                # all others = restricted to Mysterium network → mysterium policy
+                ACCESS_POLICIES = {
+                    'wireguard':     [],
+                    'dvpn':          [{'id': 'mysterium'}],
+                    'scraping':      [{'id': 'mysterium'}],
+                    'quic_scraping': [{'id': 'mysterium'}],
+                    'data_transfer': [{'id': 'mysterium'}],
+                }
+
                 def do_start(stype):
-                    payload = {'type': stype}
+                    payload = {
+                        'type': stype,
+                        'access_policies': ACCESS_POLICIES.get(stype, [{'id': 'mysterium'}]),
+                    }
                     if provider_id:
                         payload['provider_id'] = provider_id
                     r = requests.post(f'{node_url}/services', headers=headers, json=payload, timeout=10)

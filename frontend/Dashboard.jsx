@@ -1827,7 +1827,8 @@ const MysteriumDashboard = () => {
                     {/* User-controllable services — static list */}
                     {toggleRows.map((svc, i) => (
                       <ServiceToggleRow key={svc.id || svc.type} svc={svc}
-                        backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
+                        backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current}
+                        onToggled={() => setTimeout(fetchMetrics, 1500)} />
                     ))}
                     {/* Divider */}
                     {internalRows.length > 0 && (
@@ -5318,7 +5319,7 @@ const SettlementHistoryCard = ({ backendUrl, authHeaders }) => {
   );
 };
 
-const ServiceToggleRow = ({ svc, backendUrl, authHeaders }) => {
+const ServiceToggleRow = ({ svc, backendUrl, authHeaders, onToggled }) => {
   const [status, setStatus]         = React.useState(null);
   const [busy, setBusy]             = React.useState(false);
   const [confirm, setConfirm]       = React.useState(false);
@@ -5372,6 +5373,7 @@ const ServiceToggleRow = ({ svc, backendUrl, authHeaders }) => {
         const newState = !isActive;
         setLocalActive(newState);
         setStatus('✓ done');
+        if (onToggled) onToggled();
         // Hold local override for 30s then release back to server state
         if (localOverrideRef.current) clearTimeout(localOverrideRef.current);
         localOverrideRef.current = setTimeout(() => setLocalActive(null), 30000);
