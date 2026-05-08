@@ -1392,10 +1392,11 @@ if [ -f "$_SERVICE_FILE" ]; then
     _REAL_HOME=$(getent passwd "$_REAL_USER" | cut -d: -f6)
     mkdir -p "$TOOLKIT_DIR/logs"
     chown -R "$_REAL_USER:$_REAL_USER" "$TOOLKIT_DIR/logs" 2>/dev/null || true
-    # Detect Mysterium node service name
+    # Detect Mysterium node service name — modern installs use 'myst'
     _MYST_SVC=""
-    for _svc in mysterium-node myst mysterium mysterium-node.service; do
-        if systemctl list-units --all --no-legend 2>/dev/null | grep -q "^.*${_svc}"; then
+    for _svc in myst mysterium myst.service; do
+        if systemctl is-enabled "$_svc" 2>/dev/null | grep -qE "enabled|static|disabled" || \
+           systemctl is-active "$_svc" 2>/dev/null | grep -qE "active|inactive"; then
             _MYST_SVC="$_svc"
             break
         fi
@@ -1406,6 +1407,7 @@ if [ -f "$_SERVICE_FILE" ]; then
 Description=Mysterium Node Monitoring Toolkit
 After=${_AFTER_DEPS}
 Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -1415,7 +1417,6 @@ ExecStartPre=/bin/bash -c 'mkdir -p $TOOLKIT_DIR/logs && touch $TOOLKIT_DIR/logs
 ExecStart=$_VENV_PYTHON backend/app.py
 Restart=on-failure
 RestartSec=10
-StartLimitIntervalSec=0
 StandardInput=null
 StandardOutput=append:$TOOLKIT_DIR/logs/backend.log
 StandardError=append:$TOOLKIT_DIR/logs/backend.log
