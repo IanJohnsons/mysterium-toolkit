@@ -3370,7 +3370,7 @@ const ServiceSplitChart = ({ backendUrl, authHeaders }) => {
           </div>
           <div className="flex gap-3 flex-wrap mb-2">
             {types.map(t => (
-              <span key={t} className={`text-[10px] flex items-center gap-1 ${svcColor(t).cls}`}>
+              <span key={t} className="text-[10px] flex items-center gap-1" style={{color: svcColor(t).hex}}>
                 <span style={{background: svcColor(t).hex}} className="inline-block w-2 h-2 rounded-sm" />
                 {fmtType(t)}
               </span>
@@ -3947,7 +3947,7 @@ const AnalyticsCard = ({ sessions, backendUrl, authHeaders }) => {
 
   const BarRow = ({ label, pct, value, hex }) => (
     <div className="flex items-center gap-2 py-0.5">
-      <span className="text-xs text-slate-400 w-32 flex-shrink-0 truncate" title={label}>{label}</span>
+      <span className="text-xs w-32 flex-shrink-0 truncate" style={{color: hex || 'rgb(148,163,184)'}} title={label}>{label}</span>
       <div className="flex-1 h-1.5 bg-slate-700/60 rounded-full overflow-hidden">
         <div className="h-full rounded-full transition-all" style={{ width: `${Math.min(100, pct || 0)}%`, background: hex || 'rgb(148,163,184)' }} />
       </div>
