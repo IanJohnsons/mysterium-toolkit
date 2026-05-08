@@ -1828,7 +1828,7 @@ const MysteriumDashboard = () => {
                     {toggleRows.map((svc, i) => (
                       <ServiceToggleRow key={svc.id || svc.type} svc={svc}
                         backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current}
-                        onToggled={() => setTimeout(fetchMetrics, 1500)} />
+                        onToggled={() => setTimeout(fetchMetrics, 3000)} />
                     ))}
                     {/* Divider */}
                     {internalRows.length > 0 && (
@@ -5412,6 +5412,9 @@ const ServiceToggleRow = ({ svc, backendUrl, authHeaders, onToggled }) => {
               ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10'
               : 'text-slate-500 border-slate-600 bg-slate-800/40'
           }`}>QUIC {svc.quicActive ? 'Running' : 'Stopped'}</span>
+        )}
+        {svc.type === 'wireguard' && !isActive && (
+          <span className="ml-2 text-[10px] text-slate-500">existing connections stay active until they disconnect</span>
         )}
         {busy && <span className="ml-2 text-xs text-slate-400">…</span>}
         {confirm && <span className="ml-2 text-xs text-red-400">Click again to stop</span>}

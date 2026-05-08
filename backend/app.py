@@ -6669,7 +6669,16 @@ def _update_node_active_services(node_url, headers, service_type, enable):
     Fetches current config, adds or removes service_type (and quic_scraping when
     toggling scraping), then writes back via POST /config.  Silent on error —
     the runtime toggle already succeeded; this is best-effort persistence.
+
+    NOTE: wireguard (Public) is NEVER in active-services — the node manages it
+    separately at startup via the `myst service` command. Do not touch it here.
+    monitoring and noop are internal node-managed types — never toggle via API.
     """
+    NEVER_IN_CONFIG = {'wireguard', 'monitoring', 'noop'}
+    if service_type in NEVER_IN_CONFIG:
+        logger.debug(f"active-services: skipping config update for {service_type} (node-managed)")
+        return
+
     SCRAPING_PAIR = {'scraping', 'quic_scraping'}
     try:
         cr = requests.get(f'{node_url}/config', headers=headers, timeout=5)
@@ -6682,6 +6691,8 @@ def _update_node_active_services(node_url, headers, service_type, enable):
 
         # When toggling scraping, always keep scraping + quic_scraping in sync
         to_toggle = SCRAPING_PAIR if service_type in SCRAPING_PAIR else {service_type}
+        # Never add wireguard or internal types to active-services
+        to_toggle = {t for t in to_toggle if t not in NEVER_IN_CONFIG}
 
         if enable:
             for t in to_toggle:
@@ -6709,9 +6720,12 @@ def stop_service(service_id):
     scraping <-> quic_scraping are always stopped together.
     """
     LINKED = {'scraping': 'quic_scraping', 'quic_scraping': 'scraping'}
+    INTERNAL_TYPES = {'monitoring', 'noop'}
     try:
         body = request.get_json() or {}
         service_type = body.get('service_type', '')
+        if service_type in INTERNAL_TYPES:
+            return jsonify({'success': False, 'error': f'{service_type} is node-managed and cannot be toggled'}), 200
         headers = MetricsCollector.get_tequilapi_headers()
         for node_url in NODE_API_URLS:
             try:
@@ -6730,9 +6744,18 @@ def stop_service(service_id):
 
                 def do_stop(sid):
                     r = requests.delete(f'{node_url}/services/{sid}', headers=headers, timeout=10)
-                    return r.status_code in (200, 202, 204)
+                    ok = r.status_code in (200, 202, 204)
+                    if not ok:
+                        try:
+                            err_body = r.json()
+                            err_msg = err_body.get('message') or err_body.get('error') or str(r.status_code)
+                        except Exception:
+                            err_msg = f'HTTP {r.status_code}'
+                        logger.warning(f"stop_service {sid}: TequilAPI returned {r.status_code}: {err_msg}")
+                        return ok, err_msg
+                    return ok, None
 
-                ok = do_stop(target_id)
+                ok, err_msg = do_stop(target_id)
 
                 # Stop linked service if applicable (scraping <-> quic_scraping)
                 if service_type in LINKED:
@@ -6747,6 +6770,7 @@ def stop_service(service_id):
                         _update_node_active_services(node_url, headers, service_type, enable=False)
                     return jsonify({'success': True, 'message': f'Service stopped'}), 200
                 else:
+                    return jsonify({'success': False, 'error': err_msg or f'Stop failed for {target_id}'}), 200
                     return jsonify({'success': False, 'error': f'Stop failed for {target_id}'}), 200
             except Exception as e:
                 return jsonify({'success': False, 'error': str(e)}), 200
@@ -6759,16 +6783,23 @@ def stop_service(service_id):
 @require_auth
 def start_service():
     """Start a service via TequilAPI POST /services.
-    Body: {service_type: 'wireguard'|'dvpn'|'data_transfer'|'scraping'|'noop'|'monitoring'}
+    Body: {service_type: 'wireguard'|'dvpn'|'data_transfer'|'scraping'}
     Automatically fetches provider identity from TequilAPI.
     scraping <-> quic_scraping are always started together.
+
+    NOTE: access_policies are NOT sent in the payload — the node reads them
+    from its own config (wireguard.access-policies, access-policy.list flags).
+    wireguard (Public) is started by the node at boot and managed separately.
     """
     LINKED = {'scraping': 'quic_scraping', 'quic_scraping': 'scraping'}
+    INTERNAL_TYPES = {'monitoring', 'noop'}
     try:
         body = request.get_json() or {}
         service_type = body.get('service_type', '')
         if not service_type:
             return jsonify({'success': False, 'error': 'service_type required'}), 200
+        if service_type in INTERNAL_TYPES:
+            return jsonify({'success': False, 'error': f'{service_type} is node-managed and cannot be toggled'}), 200
 
         headers = MetricsCollector.get_tequilapi_headers()
         headers['Content-Type'] = 'application/json'
@@ -6786,28 +6817,25 @@ def start_service():
                 except Exception:
                     pass
 
-                # access_policies per service type:
-                # wireguard (Public) = open to all → empty list
-                # all others = restricted to Mysterium network → mysterium policy
-                ACCESS_POLICIES = {
-                    'wireguard':     [],
-                    'dvpn':          [{'id': 'mysterium'}],
-                    'scraping':      [{'id': 'mysterium'}],
-                    'quic_scraping': [{'id': 'mysterium'}],
-                    'data_transfer': [{'id': 'mysterium'}],
-                }
-
                 def do_start(stype):
-                    payload = {
-                        'type': stype,
-                        'access_policies': ACCESS_POLICIES.get(stype, [{'id': 'mysterium'}]),
-                    }
+                    # Payload: only type + provider_id.
+                    # access_policies are node-config level, not per-request.
+                    payload = {'type': stype}
                     if provider_id:
                         payload['provider_id'] = provider_id
                     r = requests.post(f'{node_url}/services', headers=headers, json=payload, timeout=10)
-                    return r.status_code in (200, 201)
+                    ok = r.status_code in (200, 201)
+                    if not ok:
+                        try:
+                            err_body = r.json()
+                            err_msg = err_body.get('message') or err_body.get('error') or str(r.status_code)
+                        except Exception:
+                            err_msg = f'HTTP {r.status_code}'
+                        logger.warning(f"start_service {stype}: TequilAPI returned {r.status_code}: {err_msg}")
+                        return ok, err_msg
+                    return ok, None
 
-                ok = do_start(service_type)
+                ok, err_msg = do_start(service_type)
 
                 # Start linked service if applicable (scraping <-> quic_scraping)
                 if service_type in LINKED:
@@ -6818,7 +6846,7 @@ def start_service():
                     _update_node_active_services(node_url, headers, service_type, enable=True)
                     return jsonify({'success': True, 'message': f'Service {service_type} started'}), 200
                 else:
-                    return jsonify({'success': False, 'error': f'Start failed for {service_type}'}), 200
+                    return jsonify({'success': False, 'error': err_msg or f'Start failed for {service_type}'}), 200
             except Exception as e:
                 return jsonify({'success': False, 'error': str(e)}), 200
 
