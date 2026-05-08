@@ -391,6 +391,7 @@ const MysteriumDashboard = () => {
   const [toolkitVersion, setToolkitVersion] = useState('...');
   const [updateInfo, setUpdateInfo]         = useState(null);
   const [nodeUpdateInfo, setNodeUpdateInfo] = useState(null);
+  const [nodeUpdateStates, setNodeUpdateStates] = useState({}); // {nodeId: 'idle'|'updating'|'done'|'error'}
   const [healthToast, setHealthToast] = useState(null);
   // Track which health level the user already dismissed — don't re-show
   // until the level changes (e.g. warning → critical or back to ok).
@@ -1319,6 +1320,32 @@ const MysteriumDashboard = () => {
                     ? 'bg-emerald-500/20 text-emerald-300'
                     : 'bg-amber-500/20 text-amber-300'
                 }`}>{metrics.fleet.fleet_online}/{metrics.fleet.fleet_nodes} online</span>
+                {updateInfo?.update_available && (
+                  <button
+                    onClick={async () => {
+                      const ids = ['local', ...fleetNodes.map(n => n.id)];
+                      for (const id of ids) {
+                        setNodeUpdateStates(s => ({ ...s, [id]: 'updating' }));
+                      }
+                      // Update all nodes in parallel
+                      await Promise.all(ids.map(async id => {
+                        try {
+                          const url = id === 'local'
+                            ? `${backendUrlRef.current}/system/update`
+                            : `${backendUrlRef.current}/fleet/node/${encodeURIComponent(id)}/proxy/system/update`;
+                          const r = await fetch(url, { method: 'POST', headers: authHeaderRef.current || {} });
+                          const d = await r.json();
+                          setNodeUpdateStates(s => ({ ...s, [id]: d.success ? 'done' : 'error' }));
+                        } catch {
+                          setNodeUpdateStates(s => ({ ...s, [id]: 'error' }));
+                        }
+                      }));
+                    }}
+                    className="text-xs px-3 py-1.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 transition font-semibold"
+                  >
+                    ↑ Update All to v{updateInfo.latest}
+                  </button>
+                )}
                 <FleetNodeManager />
                 <button onClick={() => {
                     try { localStorage.removeItem('myst-auth'); localStorage.removeItem('myst-backend-url'); } catch {}
@@ -1375,6 +1402,33 @@ const MysteriumDashboard = () => {
                         {n.uptime && <span>up {formatUptime(n.uptime)}</span>}
                         {n.nat && <span>NAT: {n.nat}</span>}
                       </div>
+                      {/* Toolkit update button per node */}
+                      {updateInfo?.update_available && (
+                        <div className="mt-1" onClick={e => e.stopPropagation()}>
+                          {nodeUpdateStates[n.id] === 'updating' ? (
+                            <span className="text-[10px] text-amber-400 animate-pulse">⟳ Updating…</span>
+                          ) : nodeUpdateStates[n.id] === 'done' ? (
+                            <span className="text-[10px] text-emerald-400">✓ Update sent — restarting</span>
+                          ) : nodeUpdateStates[n.id] === 'error' ? (
+                            <span className="text-[10px] text-red-400">✗ Update failed</span>
+                          ) : (
+                            <button
+                              onClick={async () => {
+                                setNodeUpdateStates(s => ({ ...s, [n.id]: 'updating' }));
+                                try {
+                                  const url = `${backendUrlRef.current}/fleet/node/${encodeURIComponent(n.id)}/proxy/system/update`;
+                                  const r = await fetch(url, { method: 'POST', headers: authHeaderRef.current || {} });
+                                  const d = await r.json();
+                                  setNodeUpdateStates(s => ({ ...s, [n.id]: d.success ? 'done' : 'error' }));
+                                } catch {
+                                  setNodeUpdateStates(s => ({ ...s, [n.id]: 'error' }));
+                                }
+                              }}
+                              className="text-[10px] px-2 py-0.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 transition"
+                            >↑ Update to v{updateInfo.latest}</button>
+                          )}
+                        </div>
+                      )}
                       <div className="flex gap-3">
                         <span className="text-emerald-300 font-semibold">{(Number(n.earnings?.unsettled)||0).toFixed(4)} MYST</span>
                         {n.sessions?.active > 0 && <span className="text-slate-400">{n.sessions.active} sessions</span>}
@@ -1567,6 +1621,32 @@ const MysteriumDashboard = () => {
                           {nodeUpdateInfo?.update_available && n.version === nodeUpdateInfo.current && <div className="mt-0.5"><span className="text-amber-400 border border-amber-500/40 bg-amber-500/10 rounded px-1 text-[9px]" title={`Node v${nodeUpdateInfo.latest} available`}>↑ {nodeUpdateInfo.latest}</span></div>}
                           {n.uptime  && <span>{formatUptime(n.uptime)}</span>}
                         </div>
+                        {updateInfo?.update_available && (
+                          <div onClick={e => e.stopPropagation()}>
+                            {nodeUpdateStates[n.id] === 'updating' ? (
+                              <span className="text-[9px] text-amber-400 animate-pulse">⟳ updating…</span>
+                            ) : nodeUpdateStates[n.id] === 'done' ? (
+                              <span className="text-[9px] text-emerald-400">✓ restarting</span>
+                            ) : nodeUpdateStates[n.id] === 'error' ? (
+                              <span className="text-[9px] text-red-400">✗ failed</span>
+                            ) : (
+                              <button
+                                onClick={async () => {
+                                  setNodeUpdateStates(s => ({ ...s, [n.id]: 'updating' }));
+                                  try {
+                                    const url = `${backendUrlRef.current}/fleet/node/${encodeURIComponent(n.id)}/proxy/system/update`;
+                                    const r = await fetch(url, { method: 'POST', headers: authHeaderRef.current || {} });
+                                    const d = await r.json();
+                                    setNodeUpdateStates(s => ({ ...s, [n.id]: d.success ? 'done' : 'error' }));
+                                  } catch {
+                                    setNodeUpdateStates(s => ({ ...s, [n.id]: 'error' }));
+                                  }
+                                }}
+                                className="text-[9px] px-1.5 py-0.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 transition"
+                              >↑ v{updateInfo.latest}</button>
+                            )}
+                          </div>
+                        )}
                         <div className="flex gap-2 flex-wrap">
                           <span className="text-emerald-300/80 font-medium">{(Number(n.earnings?.unsettled) || 0).toFixed(4)} MYST</span>
                           {(n.sessions?.active > 0) && <span className="text-slate-400">{n.sessions.active}s</span>}
@@ -3865,11 +3945,11 @@ const AnalyticsCard = ({ sessions, backendUrl, authHeaders }) => {
       .then(r => r.json()).then(setDbStats).catch(() => {});
   }, [backendUrl]);
 
-  const BarRow = ({ label, pct, value, color }) => (
+  const BarRow = ({ label, pct, value, hex }) => (
     <div className="flex items-center gap-2 py-0.5">
       <span className="text-xs text-slate-400 w-32 flex-shrink-0 truncate" title={label}>{label}</span>
       <div className="flex-1 h-1.5 bg-slate-700/60 rounded-full overflow-hidden">
-        <div className={`h-full ${color} rounded-full transition-all`} style={{ width: `${Math.min(100, pct || 0)}%` }} />
+        <div className="h-full rounded-full transition-all" style={{ width: `${Math.min(100, pct || 0)}%`, background: hex || 'rgb(148,163,184)' }} />
       </div>
       <span className="text-xs text-slate-300 w-10 text-right font-medium">{(pct || 0).toFixed(1)}%</span>
       <span className="text-xs text-slate-500 w-28 text-right">{value}</span>
@@ -3897,7 +3977,7 @@ const AnalyticsCard = ({ sessions, backendUrl, authHeaders }) => {
                   label={fmtType(s.service_type)}
                   pct={s.pct_earnings}
                   value={`${s.sessions} · ${s.earnings_myst.toFixed(4)} MYST`}
-                  color={i === 0 ? 'bg-emerald-500' : i === 1 ? 'bg-cyan-500' : i === 2 ? 'bg-violet-500' : 'bg-slate-500'}
+                  hex={svcColor(s.service_type).hex}
                 />
               ))}
               <div className="mt-2 flex flex-wrap gap-x-4 gap-y-0.5 text-[10px] text-slate-600">
@@ -4296,6 +4376,11 @@ const NodeQualityCard = ({ nodeQuality: q, nodeStatus, backendUrl, authHeaders, 
   // How much data we actually have is shown in the footer "(Xd of 30)".
   const localLabel30d = '30d local';
 
+  const isDiscoveryOffline = !available && (
+    (error && (error.toLowerCase().includes('not found') || error.toLowerCase().includes('not registered') || error.toLowerCase().includes('no proposals')))
+    || (monFail === true && score == null && upNet == null)
+  );
+
   return (
     <div className="mb-6 p-4 bg-slate-800/30 border border-slate-700 rounded-lg backdrop-blur">
       <div className="flex items-center justify-between mb-3">
@@ -4318,6 +4403,16 @@ const NodeQualityCard = ({ nodeQuality: q, nodeStatus, backendUrl, authHeaders, 
           </button>
         </div>
       </div>
+
+      {isDiscoveryOffline && (
+        <div className="mb-3 px-3 py-2.5 rounded text-xs border bg-amber-500/10 border-amber-500/30 text-amber-300 flex items-start gap-2">
+          <span className="text-amber-400 mt-0.5">⚠</span>
+          <span>
+            <strong>Discovery monitoring unavailable</strong> — the node is not registered in the Mysterium discovery network.
+            This typically happens when the <strong>VPN (dvpn)</strong> service is stopped. Start VPN to restore quality tracking and discovery visibility.
+          </span>
+        </div>
+      )}
 
       {/* Discovery Check result popup */}
       {testResult && (

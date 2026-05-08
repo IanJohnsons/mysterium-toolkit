@@ -5385,6 +5385,32 @@ def check_node_update():
     check_node_update._cache      = result
     check_node_update._cache_time = now
     return jsonify(result), 200
+
+
+@app.route('/system/update', methods=['POST'])
+@require_auth
+def system_update():
+    """Trigger a toolkit self-update: git pull + ./update.sh.
+    Runs detached so the service can restart without killing the response.
+    The toolkit will be unavailable for ~15-30 seconds while update.sh runs.
+    """
+    import subprocess
+    try:
+        toolkit_dir = str(Path(__file__).parent.parent)
+        update_script = str(Path(toolkit_dir) / 'update.sh')
+        # Sleep 1s so the HTTP response can complete before the service restarts
+        cmd = f'sleep 1 && cd {toolkit_dir} && sudo bash {update_script}'
+        subprocess.Popen(
+            ['bash', '-c', cmd],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        logger.info("system/update: update triggered, service will restart shortly")
+        return jsonify({'success': True, 'message': 'Update started — toolkit will restart in ~15 seconds'}), 200
+    except Exception as e:
+        logger.error(f"system/update error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 200
 def health():
     """Health check - no auth required"""
     with metrics_lock:
@@ -5976,6 +6002,7 @@ def fleet_node_proxy(node_id, endpoint):
         'data/stats', 'data/delete', 'data/retention',
         'data/quality/history', 'data/system/history',
         'analytics/service-split', 'analytics/earnings-efficiency',
+        'system/update', 'api/update-check',
     }
     endpoint_base = endpoint.split('?')[0]
     if (endpoint_base not in ALLOWED
