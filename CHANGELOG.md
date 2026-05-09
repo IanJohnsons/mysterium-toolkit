@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.21] - 2026-05-10
+### Fixed
+- `update.sh`: chown commands are now conditional — only run if files are root-owned. Fixes fleet update button hanging waiting for sudo password on non-root installs.
+
+---
+
 ## [1.1.20] - 2026-05-10
 ### Added
 - **CLI**: Net Earned row (Lifetime × 0.80) in earnings page

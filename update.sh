@@ -53,7 +53,7 @@ fi
 # ── Fix .git ownership if root-owned (caused by previous sudo git pull) ──
 if [ -d ".git" ] && [ "$(stat -c '%U' .git/objects 2>/dev/null)" = "root" ] && [ -n "$_REAL_USER" ] && [ "$_REAL_USER" != "root" ]; then
     echo -e "  ${YELLOW}⚠ .git/objects owned by root — fixing ownership...${NC}"
-    $SUDO chown -R "$_REAL_USER:$_REAL_USER" ".git" 2>/dev/null || true
+    [ "$(stat -c '%U' ".git/objects" 2>/dev/null)" = "root" ] && $SUDO chown -R "$_REAL_USER:$_REAL_USER" ".git" 2>/dev/null || true
     echo -e "  ${GREEN}✓ .git ownership restored to $_REAL_USER${NC}"
 fi
 
@@ -81,7 +81,7 @@ fi
 # ── Fix ownership on config/ — git pull runs as root and can make DB files root-owned ──
 _REAL_USER="${SUDO_USER:-$USER}"
 if [ "$_REAL_USER" != "root" ]; then
-$SUDO chown -R "$_REAL_USER:$_REAL_USER" "$TOOLKIT_DIR/config/" 2>/dev/null || true
+[ "$(stat -c '%U' "$TOOLKIT_DIR/config" 2>/dev/null)" = "root" ] && $SUDO chown -R "$_REAL_USER:$_REAL_USER" "$TOOLKIT_DIR/config/" 2>/dev/null || true
     echo -e "  ${GREEN}✓ config/ ownership corrected → $_REAL_USER${NC}"
 fi
 
@@ -172,7 +172,7 @@ if [ -f "$_SERVICE_FILE" ]; then
     _REAL_HOME=$(getent passwd "$_REAL_USER" | cut -d: -f6)
     _VENV_PYTHON="$TOOLKIT_DIR/venv/bin/python"
     mkdir -p "$TOOLKIT_DIR/logs"
-$SUDO chown -R "$_REAL_USER:$_REAL_USER" "$TOOLKIT_DIR/logs" 2>/dev/null || true
+[ "$(stat -c '%U' "$TOOLKIT_DIR/logs" 2>/dev/null)" = "root" ] && $SUDO chown -R "$_REAL_USER:$_REAL_USER" "$TOOLKIT_DIR/logs" 2>/dev/null || true
 
     _MYST_SVC=""
     for _svc in mysterium-node myst mysterium; do
