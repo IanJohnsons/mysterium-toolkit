@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.22] - 2026-05-10
+### Fixed
+- JSX syntax error in help section — CLI paragraph was outside a div, causing frontend build failure on all systems
+
+---
+
 ## [1.1.21] - 2026-05-10
 ### Fixed
 - `update.sh`: chown commands are now conditional — only run if files are root-owned. Fixes fleet update button hanging waiting for sudo password on non-root installs.
