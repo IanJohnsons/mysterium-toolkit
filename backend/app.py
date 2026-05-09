@@ -5372,9 +5372,23 @@ def system_update():
             lf.write(f'[toolkit] Update triggered at {time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())}\n')
 
         is_root = os.getuid() == 0
-        if is_root:
+        in_docker = Path('/.dockerenv').exists() or (
+            Path('/proc/1/cgroup').exists() and
+            'docker' in Path('/proc/1/cgroup').read_text(errors='ignore')
+        )
+
+        if in_docker:
+            # Docker: git pull then exit — Docker --restart=always restarts with new code
+            cmd = (
+                f'sleep 1 && cd {toolkit_dir} && git pull >> {log_file} 2>&1'
+                f' && echo "[toolkit] Docker: exiting for container restart" >> {log_file}'
+                f' && kill {os.getpid()}'
+            )
+        elif is_root:
+            # Root install (VPS): run full update.sh
             cmd = f'sleep 1 && cd {toolkit_dir} && bash {update_script} >> {log_file} 2>&1'
         else:
+            # Non-root with systemd: git pull + stop + start (both NOPASSWD)
             cmd = (
                 f'sleep 1 && cd {toolkit_dir} && git pull >> {log_file} 2>&1'
                 f' && sudo -n systemctl stop mysterium-toolkit >> {log_file} 2>&1'

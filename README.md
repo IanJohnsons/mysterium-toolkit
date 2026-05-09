@@ -1,6 +1,6 @@
 # Mysterium Node Toolkit
 
-![Version](https://img.shields.io/badge/version-1.1.12-brightgreen) ![License](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Version](https://img.shields.io/badge/version-1.1.13-brightgreen) ![License](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 
 A professional monitoring and management dashboard for [Mysterium Network](https://mysterium.network) VPN node operators. Runs fully local on your node machine — no cloud account, no third-party service, no data leaving your server.
 
@@ -808,6 +808,37 @@ Each node runs its own toolkit backend. The fleet master reads data from each no
 ```
 
 Hot-reload: edit `nodes.json` while running — changes apply within 30 seconds.
+
+### Fleet Update Manager
+
+The fleet dashboard shows a version badge per node and an **↑ Update** button when a newer version is available on GitHub. Clicking it triggers a remote update on that node. An **↑ Update All** button updates all nodes in parallel.
+
+How the update works per install type:
+
+| Install type | Detection | Update method |
+|---|---|---|
+| Root (VPS, bare metal) | `getuid() == 0` | Full `update.sh` — pip deps, npm build, service restart |
+| Non-root systemd (desktop, Pi) | systemd present | `git pull` + `systemctl stop` + `systemctl start` |
+| Docker | `/.dockerenv` present | `git pull` + process exit → container restarts automatically |
+
+**Docker requirement:** the container must be started with `--restart=always` or `--restart=unless-stopped` so it restarts automatically after the process exits during update.
+
+**Note:** Frontend (`dist/`) is only rebuilt on root installs running the full `update.sh`. On non-root and Docker installs, only the Python backend is updated via git pull + restart. If a new version includes frontend changes, run `sudo ./update.sh` once manually to rebuild the frontend.
+
+### Mysterium Node in Docker — Reading Stats
+
+If your **Mysterium node** runs in Docker (not the toolkit), the toolkit can still read all stats as long as the container exposes the correct ports:
+
+```bash
+docker run --cap-add NET_ADMIN -d --name myst --restart=unless-stopped \
+    -p 4449:4449 \
+    -p 4050:4050 \
+    -v myst-data:/var/lib/mysterium-node \
+    mysteriumnetwork/myst:latest \
+    service --agreed-terms-and-conditions
+```
+
+The toolkit then connects to `localhost:4449` (MystNodes UI) and `localhost:4050` (TequilAPI) as normal. No special configuration needed — the setup wizard auto-detects Docker containers named `myst` and reads the port automatically.
 
 ---
 
