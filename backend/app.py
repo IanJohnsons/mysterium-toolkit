@@ -7237,9 +7237,9 @@ def get_service_split():
 @app.route('/analytics/earnings-efficiency', methods=['GET'])
 @require_auth
 def get_earnings_efficiency():
-    """Return per-day MYST/GB timeseries (Feature 5).
-    Query param: days (default 90)
-    Returns: [{date, earnings_myst, data_mb, myst_per_gb}, ...]
+    """Return per-day MYST/GB timeseries, both combined and per service type.
+    Returns: {data: [{date, earnings_myst, data_mb, myst_per_gb}],
+              by_type: {service_type: [{date, myst_per_gb, earnings_myst, data_mb}]}}
     """
     try:
         days = request.args.get('days', 90, type=int)
@@ -7248,7 +7248,9 @@ def get_earnings_efficiency():
 
         SessionDB.init()
         conn = SessionDB._conn()
-        q = """
+
+        # Combined query (all service types)
+        q_combined = """
             SELECT
                 started_at,
                 COALESCE(tokens, 0) AS tokens,
@@ -7261,15 +7263,40 @@ def get_earnings_efficiency():
         """
         params = [cutoff]
         if node_id:
-            q += " AND provider_id = ?"
+            q_combined += " AND provider_id = ?"
             params.append(node_id)
-        rows = conn.execute(q, params).fetchall()
+
+        # Per-service-type query
+        q_typed = """
+            SELECT
+                started_at,
+                COALESCE(tokens, 0) AS tokens,
+                COALESCE(bytes_sent, 0) + COALESCE(bytes_received, 0) AS total_bytes,
+                COALESCE(service_type, 'unknown') AS service_type
+            FROM sessions
+            WHERE started_at >= ?
+              AND service_type NOT IN ('monitoring', 'noop', '')
+              AND tokens > 0
+              AND (bytes_sent > 0 OR bytes_received > 0)
+        """
+        params_typed = [cutoff]
+        if node_id:
+            q_typed += " AND provider_id = ?"
+            params_typed.append(node_id)
+
+        rows_combined = conn.execute(q_combined, params).fetchall()
+        rows_typed = conn.execute(q_typed, params_typed).fetchall()
         conn.close()
 
-        # Bucket by local date (TOOLKIT_TZ)
+        # Merge quic_scraping into scraping
+        def norm_svc(s):
+            return 'scraping' if s == 'quic_scraping' else s
+
         from collections import defaultdict
+
+        # Combined daily buckets
         day_map = defaultdict(lambda: {'earnings_myst': 0.0, 'data_mb': 0.0})
-        for r in rows:
+        for r in rows_combined:
             try:
                 t = datetime.fromisoformat(str(r[0]).replace('Z', '+00:00'))
                 if t.tzinfo is None:
@@ -7280,6 +7307,21 @@ def get_earnings_efficiency():
             day_map[day]['earnings_myst'] += float(r[1]) / 1e18
             day_map[day]['data_mb']       += float(r[2]) / (1024 * 1024)
 
+        # Per-service-type daily buckets
+        type_day_map = defaultdict(lambda: defaultdict(lambda: {'earnings_myst': 0.0, 'data_mb': 0.0}))
+        for r in rows_typed:
+            try:
+                t = datetime.fromisoformat(str(r[0]).replace('Z', '+00:00'))
+                if t.tzinfo is None:
+                    t = t.replace(tzinfo=timezone.utc)
+                day = t.astimezone(TOOLKIT_TZ).strftime('%Y-%m-%d')
+            except Exception:
+                day = str(r[0])[:10]
+            svc = norm_svc(r[3])
+            type_day_map[svc][day]['earnings_myst'] += float(r[1]) / 1e18
+            type_day_map[svc][day]['data_mb']       += float(r[2]) / (1024 * 1024)
+
+        # Build combined result
         result = []
         for day in sorted(day_map.keys()):
             v = day_map[day]
@@ -7287,7 +7329,24 @@ def get_earnings_efficiency():
             myst_per_gb = round(v['earnings_myst'] / data_gb, 6) if data_gb > 0 else None
             result.append({'date': day, 'earnings_myst': round(v['earnings_myst'], 6),
                            'data_mb': round(v['data_mb'], 2), 'myst_per_gb': myst_per_gb})
-        return jsonify({'data': result, 'days': days}), 200
+
+        # Build per-service-type result
+        all_days = sorted(day_map.keys())
+        by_type = {}
+        for svc, day_data in type_day_map.items():
+            svc_result = []
+            for day in all_days:
+                v = day_data.get(day, {'earnings_myst': 0.0, 'data_mb': 0.0})
+                data_gb = v['data_mb'] / 1024 if v['data_mb'] else 0
+                myst_per_gb = round(v['earnings_myst'] / data_gb, 6) if data_gb > 0 else None
+                if myst_per_gb is not None:
+                    svc_result.append({'date': day, 'myst_per_gb': myst_per_gb,
+                                       'earnings_myst': round(v['earnings_myst'], 6),
+                                       'data_mb': round(v['data_mb'], 2)})
+            if svc_result:
+                by_type[svc] = svc_result
+
+        return jsonify({'data': result, 'by_type': by_type, 'days': days}), 200
     except Exception as e:
         logger.error(f'earnings-efficiency error: {e}')
         return jsonify({'error': str(e)}), 500

@@ -3465,43 +3465,96 @@ const ServiceSplitChart = ({ backendUrl, authHeaders }) => {
 
 // ---- Earnings Efficiency Chart (Feature 5) ----
 const EarningsEfficiencyChart = ({ backendUrl, authHeaders }) => {
-  const [data, setData]   = React.useState([]);
-  const [days, setDays]   = React.useState(30);
-  const [open, setOpen]   = React.useState(false);
+  const [data, setData]     = React.useState([]);
+  const [byType, setByType] = React.useState({});
+  const [days, setDays]     = React.useState(30);
+  const [open, setOpen]     = React.useState(false);
   const [loading, setLoading] = React.useState(false);
+  const [nodePrices, setNodePrices] = React.useState({});
 
   const DAY_OPTIONS = [7, 30, 90, 365];
+
+  // Service type display config — matches SERVICE_COLORS
+  const SVC_DISPLAY = {
+    wireguard:     { label: 'Public',        hex: 'rgb(52,211,153)'  },
+    dvpn:          { label: 'VPN',           hex: 'rgb(251,191,36)'  },
+    scraping:      { label: 'B2B Scraping',  hex: 'rgb(56,189,248)'  },
+    data_transfer: { label: 'B2B Data',      hex: 'rgb(99,102,241)'  },
+  };
 
   const load = React.useCallback(() => {
     if (!open) return;
     setLoading(true);
     fetch(`${backendUrl}/analytics/earnings-efficiency?days=${days === 0 ? 3650 : days}`, { headers: authHeaders || {} })
       .then(r => r.json())
-      .then(d => { setData(d.data || []); setLoading(false); })
+      .then(d => {
+        setData(d.data || []);
+        setByType(d.by_type || {});
+        setLoading(false);
+      })
       .catch(() => setLoading(false));
+
+    // Fetch configured node prices from /services
+    fetch(`${backendUrl}/services`, { headers: authHeaders || {} })
+      .then(r => r.ok ? r.json() : [])
+      .then(svcs => {
+        const prices = {};
+        (Array.isArray(svcs) ? svcs : svcs.services || []).forEach(s => {
+          const svc = s.type === 'quic_scraping' ? 'scraping' : s.type;
+          const pergib = s.proposal?.price?.per_gib_tokens?.ether;
+          if (pergib && !prices[svc]) prices[svc] = parseFloat(pergib);
+        });
+        setNodePrices(prices);
+      })
+      .catch(() => {});
   }, [open, days, backendUrl, authHeaders]);
 
   React.useEffect(() => { load(); }, [load]);
 
-  const vals = data.map(d => d.myst_per_gb).filter(v => v != null);
-  const mn = vals.length ? Math.min(...vals) * 0.9 : 0;
-  const mx = vals.length ? Math.max(...vals) * 1.1 : 1;
-  const W = 600; const H = 60;
-  const pts = data.map((d, i) => {
-    if (d.myst_per_gb == null) return null;
-    const x = (i / Math.max(data.length - 1, 1)) * W;
-    const y = H - ((d.myst_per_gb - mn) / (mx - mn || 1)) * H;
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
-  }).filter(Boolean).join(' ');
-  const avg = vals.length ? (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(4) : null;
-  const last = vals.length ? vals[vals.length - 1].toFixed(4) : null;
+  const W = 600; const H = 80;
+
+  const buildPolyline = (points, allDates) => {
+    if (!points || points.length < 2) return '';
+    const dateMap = {};
+    points.forEach(p => { dateMap[p.date] = p.myst_per_gb; });
+    const vals = allDates.map(d => dateMap[d]).filter(v => v != null);
+    if (!vals.length) return '';
+    const mn = Math.min(...vals) * 0.9;
+    const mx = Math.max(...vals) * 1.1 || 1;
+    return points.map((p, i) => {
+      const x = (allDates.indexOf(p.date) / Math.max(allDates.length - 1, 1)) * W;
+      const y = H - ((p.myst_per_gb - mn) / (mx - mn || 1)) * H;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+  };
+
+  const allDates = data.map(d => d.date);
+  const combinedVals = data.map(d => d.myst_per_gb).filter(v => v != null);
+  const avg = combinedVals.length ? (combinedVals.reduce((a,b) => a+b, 0) / combinedVals.length).toFixed(4) : null;
+  const last = combinedVals.length ? combinedVals[combinedVals.length - 1].toFixed(4) : null;
+
+  // Build per-type polylines with shared y-scale across all types
+  const allVals = Object.values(byType).flatMap(pts => pts.map(p => p.myst_per_gb)).filter(Boolean);
+  const globalMn = allVals.length ? Math.min(...allVals) * 0.9 : 0;
+  const globalMx = allVals.length ? Math.max(...allVals) * 1.1 : 1;
+
+  const buildTypeLine = (pts) => {
+    if (!pts || pts.length < 2) return '';
+    return pts.map(p => {
+      const x = (allDates.indexOf(p.date) / Math.max(allDates.length - 1, 1)) * W;
+      const y = H - ((p.myst_per_gb - globalMn) / (globalMx - globalMn || 1)) * H;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+  };
+
+  const hasTypeData = Object.keys(byType).length > 0;
 
   return (
     <div className="mb-6 p-4 bg-slate-800/30 border border-slate-700 rounded-lg backdrop-blur">
       <button onClick={() => setOpen(o => !o)} className="w-full flex items-center justify-between">
         <div>
           <h3 className="text-sm font-semibold text-slate-300 tracking-wide text-left">Earnings Efficiency</h3>
-          <p className="text-[10px] text-slate-600 mt-0.5 text-left">Total earnings per GB transferred — includes time-based component</p>
+          <p className="text-[10px] text-slate-600 mt-0.5 text-left">MYST earned per GB transferred — split by service type</p>
         </div>
         <span className="text-xs text-slate-500">{open ? '▲ collapse' : '▼ expand'}</span>
       </button>
@@ -3522,10 +3575,31 @@ const EarningsEfficiencyChart = ({ backendUrl, authHeaders }) => {
             {loading && <span className="text-xs text-slate-600 ml-2">loading…</span>}
           </div>
 
+          {/* Per-service-type legend with configured price */}
+          {hasTypeData && (
+            <div className="flex flex-wrap gap-x-4 gap-y-1 mb-2">
+              {Object.entries(byType).map(([svc, pts]) => {
+                const cfg = SVC_DISPLAY[svc] || { label: svc, hex: 'rgb(148,163,184)' };
+                const svcVals = pts.map(p => p.myst_per_gb).filter(Boolean);
+                const svcAvg = svcVals.length ? (svcVals.reduce((a,b)=>a+b,0)/svcVals.length).toFixed(4) : null;
+                const cfgPrice = nodePrices[svc];
+                return (
+                  <span key={svc} className="text-[10px] flex items-center gap-1" style={{color: cfg.hex}}>
+                    <span style={{background: cfg.hex}} className="inline-block w-2 h-2 rounded-sm flex-shrink-0" />
+                    {cfg.label}
+                    {svcAvg && <span className="font-semibold">{svcAvg}/GB</span>}
+                    {cfgPrice && <span className="opacity-50 ml-0.5" title="Configured node price">(cfg: {cfgPrice.toFixed(3)})</span>}
+                  </span>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Combined summary */}
           {avg && (
             <div className="flex gap-4 text-xs mb-2">
-              <span className="text-slate-500">Avg: <span className="text-cyan-400 font-semibold">{avg} MYST/GB</span></span>
-              <span className="text-slate-500">Latest: <span className="text-emerald-400 font-semibold">{last} MYST/GB</span></span>
+              <span className="text-slate-600">Combined avg: <span className="text-slate-400 font-semibold">{avg} MYST/GB</span></span>
+              <span className="text-slate-600">Latest: <span className="text-slate-400 font-semibold">{last} MYST/GB</span></span>
             </div>
           )}
 
@@ -3533,15 +3607,37 @@ const EarningsEfficiencyChart = ({ backendUrl, authHeaders }) => {
             <div className="text-xs text-slate-500 py-4 text-center">No data for this period</div>
           )}
 
-          {data.length > 1 && (
+          {/* Per-type chart */}
+          {allDates.length > 1 && hasTypeData && (
             <>
-              <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{height: '60px'}} preserveAspectRatio="none">
-                <polyline points={pts} fill="none" stroke="rgb(52,211,153)" strokeWidth="1.5" />
+              <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{height: '80px'}} preserveAspectRatio="none">
+                {Object.entries(byType).map(([svc, pts]) => {
+                  const cfg = SVC_DISPLAY[svc] || { hex: 'rgb(148,163,184)' };
+                  const line = buildTypeLine(pts);
+                  return line ? (
+                    <polyline key={svc} points={line} fill="none"
+                      stroke={cfg.hex} strokeWidth="1.5" strokeOpacity="0.85" />
+                  ) : null;
+                })}
               </svg>
               <div className="flex justify-between text-[9px] text-slate-600 mt-1">
-                <span>{data[0]?.date}</span>
-                {data.length > 2 && <span>{data[Math.floor(data.length / 2)]?.date}</span>}
-                <span>{data[data.length - 1]?.date}</span>
+                <span>{allDates[0]}</span>
+                {allDates.length > 2 && <span>{allDates[Math.floor(allDates.length / 2)]}</span>}
+                <span>{allDates[allDates.length - 1]}</span>
+              </div>
+            </>
+          )}
+
+          {/* Fallback: combined line if no type breakdown */}
+          {allDates.length > 1 && !hasTypeData && (
+            <>
+              <svg viewBox={`0 0 ${W} 60`} className="w-full" style={{height: '60px'}} preserveAspectRatio="none">
+                <polyline points={buildPolyline(data.filter(d=>d.myst_per_gb!=null), allDates)}
+                  fill="none" stroke="rgb(52,211,153)" strokeWidth="1.5" />
+              </svg>
+              <div className="flex justify-between text-[9px] text-slate-600 mt-1">
+                <span>{allDates[0]}</span>
+                <span>{allDates[allDates.length - 1]}</span>
               </div>
             </>
           )}
