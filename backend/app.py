@@ -5340,17 +5340,17 @@ def check_node_update():
 @app.route('/system/update', methods=['POST'])
 @require_auth
 def system_update():
-    """Trigger a toolkit self-update: git pull + ./update.sh.
-    Root installs (VPS): runs update.sh directly without outer sudo.
-    Non-root installs: requires NOPASSWD sudo entry for update.sh.
+    """Trigger a toolkit self-update.
+    Root installs (VPS): runs full update.sh (pip, npm build, restart).
+    Non-root installs: git pull + sudo systemctl restart mysterium-toolkit.
+    systemctl restart is already NOPASSWD from initial setup — no extra sudoers needed.
     """
-    import subprocess, shutil
+    import subprocess
     try:
         toolkit_dir = str(Path(__file__).parent.parent)
         update_script = str(Path(toolkit_dir) / 'update.sh')
         log_file = '/tmp/mysterium-toolkit-update.log'
 
-        # Build correct environment for the subprocess
         env = os.environ.copy()
         real_home = env.get('HOME', '')
         if not real_home or real_home == '/':
@@ -5361,58 +5361,35 @@ def system_update():
                 real_home = '/root' if os.getuid() == 0 else f'/home/{os.environ.get("USER", "root")}'
         env['HOME'] = real_home
 
-        # Find SSH key for github
-        ssh_key = None
-        for candidate in [
-            f'{real_home}/.ssh/github_key',
-            f'{real_home}/.ssh/id_ed25519',
-            f'{real_home}/.ssh/id_rsa',
-        ]:
+        for candidate in [f'{real_home}/.ssh/github_key', f'{real_home}/.ssh/id_ed25519', f'{real_home}/.ssh/id_rsa']:
             if Path(candidate).exists():
-                ssh_key = candidate
+                env['GIT_SSH_COMMAND'] = f'ssh -i {candidate} -o StrictHostKeyChecking=no -o BatchMode=yes'
                 break
-
-        if ssh_key:
-            env['GIT_SSH_COMMAND'] = f'ssh -i {ssh_key} -o StrictHostKeyChecking=no -o BatchMode=yes'
-        else:
-            logger.warning("system/update: no SSH key found — git pull may fail")
 
         env['PATH'] = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:' + env.get('PATH', '')
 
         with open(log_file, 'w') as lf:
             lf.write(f'[toolkit] Update triggered at {time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())}\n')
 
-        # Root: run update.sh directly — no outer sudo needed
-        # Non-root: check if sudo is available without password for update.sh
-        if os.getuid() == 0:
+        is_root = os.getuid() == 0
+        if is_root:
             cmd = f'sleep 1 && cd {toolkit_dir} && bash {update_script} >> {log_file} 2>&1'
         else:
-            # Check if NOPASSWD sudo is configured for update.sh
-            check = subprocess.run(
-                ['sudo', '-n', 'bash', update_script, '--help'],
-                capture_output=True, timeout=5, env=env
+            cmd = (
+                f'sleep 1 && cd {toolkit_dir} && git pull >> {log_file} 2>&1'
+                f' && sudo -n systemctl restart mysterium-toolkit >> {log_file} 2>&1'
+                f' && echo "[toolkit] Restarted successfully" >> {log_file}'
+                f' || echo "[toolkit] Restart failed" >> {log_file}'
             )
-            if check.returncode != 0 and b'password' in (check.stderr or b'').lower():
-                return jsonify({
-                    'success': False,
-                    'error': 'Automatic update not available: run `sudo ./update.sh` once manually to configure NOPASSWD, then the button will work.'
-                }), 200
-            cmd = f'sleep 1 && cd {toolkit_dir} && sudo bash {update_script} >> {log_file} 2>&1'
 
-        subprocess.Popen(
-            ['bash', '-c', cmd],
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-        logger.info(f"system/update: launched ({'root' if os.getuid() == 0 else 'user'})")
-        return jsonify({'success': True, 'message': 'Update started — check /system/update/status for progress'}), 200
+        subprocess.Popen(['bash', '-c', cmd], env=env,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+        logger.info(f"system/update: launched ({'root' if is_root else 'non-root git pull+restart'})")
+        return jsonify({'success': True, 'message': 'Update started — toolkit will restart shortly'}), 200
     except Exception as e:
         logger.error(f"system/update error: {e}")
         return jsonify({'success': False, 'error': str(e)}), 200
-
-
 @app.route('/system/update/status', methods=['GET'])
 @require_auth
 def system_update_status():
