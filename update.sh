@@ -230,7 +230,9 @@ fi
 echo
 echo -e "  Restarting backend..."
 if systemctl is-active --quiet mysterium-toolkit 2>/dev/null; then
-    $SUDO systemctl restart mysterium-toolkit
+    $SUDO systemctl stop mysterium-toolkit 2>/dev/null || true
+    sleep 1
+    $SUDO systemctl start mysterium-toolkit
     sleep 3
     if systemctl is-active --quiet mysterium-toolkit 2>/dev/null; then
         echo -e "  ${GREEN}✓ Backend restarted via systemd${NC}"

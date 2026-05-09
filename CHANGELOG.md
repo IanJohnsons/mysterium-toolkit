@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.25] - 2026-05-10
+### Fixed
+- `update.sh`: replaced `systemctl restart` with `systemctl stop` + `systemctl start` — `restart` was not in NOPASSWD sudoers, causing sudo password prompt during fleet update
+
+---
+
 ## [1.1.24] - 2026-05-10
 ### Fixed
 - `update.sh`: sudoers update skipped when content unchanged — no more sudo password prompt on regular updates. Only asks when sudoers actually needs changing (first run after install or config change).
