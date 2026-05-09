@@ -4982,82 +4982,44 @@ def background_collector():
 
 
 def _setup_mysterium_forward_chain():
-    """Consolidate Mysterium's duplicate FORWARD rules into a dedicated chain.
+    """Deduplicate Mysterium's FORWARD rules in-place (no custom chain).
 
-    Problem: Mysterium adds FORWARD rules via 'iptables -A' without checking
-    if they already exist. After restarts, identical rules accumulate. This is
-    a known Mysterium bug — it opens rules but never closes them.
+    Mysterium adds FORWARD rules per consumer session but doesn't always clean
+    them up on disconnect. This removes duplicates in-place, keeping the first
+    occurrence of each unique rule.
 
-    Solution (iptables only — nftables/ufw manages this correctly):
-    1. Create a MYSTERIUM-FORWARD chain if it doesn't exist.
-    2. Move all 10.182.x.x/24 FORWARD rules into that chain (deduplicated).
-    3. Add a single jump rule: FORWARD → MYSTERIUM-FORWARD.
-    4. On next call (restart): flush MYSTERIUM-FORWARD and re-populate.
-
-    This way there are never duplicates regardless of how many times
-    Mysterium restarts.
-
-    Skipped on: nftables, ufw, non-iptables systems.
-    Safe: only touches Mysterium's own 10.182.x.x subnet rules.
+    Does NOT create a custom chain — the Mysterium node manages its own chains.
+    Skipped on nftables/ufw systems (they manage rules correctly).
+    Safe: only touches 10.182.x.x FORWARD rule duplicates.
     """
     try:
-        # Detect firewall type — only run on iptables systems
         ipt_bin = None
         for candidate in ['iptables-legacy', 'iptables']:
             try:
-                r = subprocess.run(['which', candidate],
-                                   capture_output=True, timeout=3, text=True)
+                r = subprocess.run(['which', candidate], capture_output=True, timeout=3, text=True)
                 if r.returncode == 0:
-                    # Verify it's not a nftables wrapper
-                    ver = subprocess.run([candidate.strip(), '--version'],
-                                         capture_output=True, timeout=3, text=True)
-                    if ver.returncode == 0:
-                        ipt_bin = candidate.strip()
-                        break
+                    ipt_bin = candidate.strip()
+                    break
             except Exception:
                 pass
-
         if not ipt_bin:
-            return  # No iptables — skip
+            return
 
-        # Check if nftables is the primary firewall.
-        # On Ubuntu/Debian, iptables may be a wrapper around nftables (iptables-nft).
-        # Signals that nftables is primary:
-        #   1. 'nft list ruleset' returns actual tables with rules
-        #   2. iptables --version contains 'nf_tables'
-        # If either is true, Mysterium manages its rules correctly — skip.
+        # Skip on nftables systems
         try:
-            nft = subprocess.run(['nft', 'list', 'ruleset'],
-                                  capture_output=True, timeout=3, text=True)
+            nft = subprocess.run(['nft', 'list', 'ruleset'], capture_output=True, timeout=3, text=True)
             if nft.returncode == 0 and 'table' in nft.stdout and len(nft.stdout) > 50:
-                logger.debug("_setup_mysterium_forward_chain: nftables active with rules, skipping")
                 return
         except Exception:
             pass
-
-        # Also check if iptables itself is a nft wrapper
         try:
-            if ipt_bin:
-                ver = subprocess.run([ipt_bin, '--version'],
-                                     capture_output=True, timeout=3, text=True)
-                if ver.returncode == 0 and 'nf_tables' in ver.stdout:
-                    logger.debug("_setup_mysterium_forward_chain: iptables is nft wrapper, skipping")
-                    return
-        except Exception:
-            pass
-
-        # Check ufw active — ufw manages its own rules, skip
-        try:
-            ufw = subprocess.run(['ufw', 'status'],
-                                  capture_output=True, timeout=3, text=True)
-            if ufw.returncode == 0 and 'active' in ufw.stdout.lower():
-                logger.debug("_setup_mysterium_forward_chain: ufw active, skipping")
+            ver = subprocess.run([ipt_bin, '--version'], capture_output=True, timeout=3, text=True)
+            if ver.returncode == 0 and 'nf_tables' in ver.stdout:
                 return
         except Exception:
             pass
 
         def _ipt(*args):
-            """Run iptables command, try with sudo -n first."""
             for prefix in [['sudo', '-n'], []]:
                 try:
                     r = subprocess.run(prefix + [ipt_bin] + list(args),
@@ -5068,92 +5030,39 @@ def _setup_mysterium_forward_chain():
                     pass
             return False, ''
 
-        # Step 1: Create MYSTERIUM-FORWARD chain if not exists
-        ok, _ = _ipt('-L', 'MYSTERIUM-FORWARD', '-n')
-        if not ok:
-            _ipt('-N', 'MYSTERIUM-FORWARD')
-
-        # Step 2: Flush the chain (remove old rules — will re-add deduplicated)
-        _ipt('-F', 'MYSTERIUM-FORWARD')
-
-        # Step 3: Read current FORWARD rules, find Mysterium's 10.182.x.x rules
+        # Read current FORWARD rules
         ok, output = _ipt('-L', 'FORWARD', '-n', '--line-numbers')
         if not ok:
             return
 
-        mysterium_rules = []  # list of (line_num, src, dst) tuples
+        # Find duplicate 10.182.x.x rules — keep first, delete rest
         seen_sigs = set()
-
+        to_delete = []  # line numbers to delete (collect all first)
         for line in output.split('\n'):
             parts = line.split()
             if not parts or not parts[0].isdigit():
                 continue
             line_num = int(parts[0])
             rule_str = ' '.join(parts[1:])
-
-            # Only touch 10.182.x.x/24 rules (Mysterium's WireGuard subnets)
             if '10.182.' not in rule_str:
                 continue
+            if rule_str in seen_sigs:
+                to_delete.append(line_num)
+            else:
+                seen_sigs.add(rule_str)
 
-            sig = rule_str
-            if sig not in seen_sigs:
-                seen_sigs.add(sig)
-                mysterium_rules.append((line_num, rule_str))
-
-        if not mysterium_rules:
-            # No Mysterium FORWARD rules yet — add jump rule for later
-            _ipt('-C', 'FORWARD', '-j', 'MYSTERIUM-FORWARD') or \
-                _ipt('-I', 'FORWARD', '1', '-j', 'MYSTERIUM-FORWARD')
+        if not to_delete:
             return
 
-        # Step 4: Remove all 10.182.x.x FORWARD rules (incl. duplicates)
-        # Re-read with line numbers after each delete (indices shift)
+        # Delete in reverse order to avoid line number shifting
         removed = 0
-        for _ in range(50):  # max 50 iterations safety cap
-            ok, output = _ipt('-L', 'FORWARD', '-n', '--line-numbers')
-            if not ok:
-                break
-            deleted_any = False
-            for line in output.split('\n'):
-                parts = line.split()
-                if not parts or not parts[0].isdigit():
-                    continue
-                if '10.182.' in ' '.join(parts[1:]):
-                    line_num = parts[0]
-                    ok2, _ = _ipt('-D', 'FORWARD', line_num)
-                    if ok2:
-                        removed += 1
-                        deleted_any = True
-                        break  # Re-read after each delete
-            if not deleted_any:
-                break
+        for line_num in sorted(to_delete, reverse=True):
+            ok2, _ = _ipt('-D', 'FORWARD', str(line_num))
+            if ok2:
+                removed += 1
 
-        # Step 5: Add deduplicated rules to MYSTERIUM-FORWARD chain
-        added = 0
-        for _, rule_str in mysterium_rules:
-            # Parse src/dst to reconstruct the rule
-            parts = rule_str.split()
-            # Rule format: ACCEPT all -- src dst [extra]
-            # We re-add as: -A MYSTERIUM-FORWARD -s src -j ACCEPT (or -d dst)
-            if len(parts) >= 4:
-                src = parts[2] if parts[2] != '--' else None
-                dst = parts[3] if len(parts) > 3 else None
-                if src and src != '0.0.0.0/0' and '10.182.' in src:
-                    ok2, _ = _ipt('-A', 'MYSTERIUM-FORWARD', '-s', src, '-j', 'ACCEPT')
-                    if ok2:
-                        added += 1
-                elif dst and dst != '0.0.0.0/0' and '10.182.' in dst:
-                    ok2, _ = _ipt('-A', 'MYSTERIUM-FORWARD', '-d', dst, '-j', 'ACCEPT')
-                    if ok2:
-                        added += 1
-
-        # Step 6: Ensure jump rule exists in FORWARD chain
-        ok, _ = _ipt('-C', 'FORWARD', '-j', 'MYSTERIUM-FORWARD')
-        if not ok:
-            _ipt('-I', 'FORWARD', '1', '-j', 'MYSTERIUM-FORWARD')
-
-        logger.info(f"Firewall: consolidated {removed} Mysterium FORWARD rules → "
-                    f"{added} deduplicated in MYSTERIUM-FORWARD chain (iptables)")
+        if removed:
+            logger.info(f"Firewall: removed {removed} duplicate Mysterium FORWARD rules (in-place dedup)")
 
     except Exception as e:
         logger.debug(f"_setup_mysterium_forward_chain failed (non-fatal): {e}")
@@ -5561,18 +5470,16 @@ def get_firewall():
 @app.route('/firewall/cleanup', methods=['POST'])
 @require_auth
 def firewall_cleanup():
-    """Remove duplicate FORWARD rules left behind by Mysterium node.
+    """Clean up Mysterium FORWARD rule duplicates.
 
-    Mysterium adds FORWARD rules for WireGuard tunnel subnets (10.182.x.x/24)
-    when tunnels are created but does not remove them on disconnect. After
-    weeks of operation these accumulate as duplicates. This endpoint removes
-    all but the first occurrence of each duplicate FORWARD rule.
+    1. If a MYSTERIUM-FORWARD chain exists (created by older toolkit versions):
+       migrate its rules back to FORWARD, remove the jump rule, delete the chain.
+    2. Deduplicate 10.182.x.x FORWARD rules in-place — keep first, remove rest.
 
-    Works on: iptables, iptables-legacy, iptables-nft.
-    Safe: only touches FORWARD chain duplicates, never INPUT or user rules.
+    This restores correct Mysterium-managed state and removes accumulated duplicates.
+    Safe: only touches 10.182.x.x FORWARD rules and the MYSTERIUM-FORWARD chain.
     """
     try:
-        # Detect iptables binary
         ipt_bin = None
         for candidate in ['iptables-legacy', 'iptables']:
             try:
@@ -5586,80 +5493,91 @@ def firewall_cleanup():
         if not ipt_bin:
             return jsonify({'ok': False, 'error': 'iptables not found'}), 200
 
-        # Read current FORWARD rules with line numbers
-        result = None
-        for cmd in [
-            ['sudo', '-n', ipt_bin, '-L', 'FORWARD', '-n', '--line-numbers'],
-            [ipt_bin, '-L', 'FORWARD', '-n', '--line-numbers'],
-        ]:
-            try:
-                r = subprocess.run(cmd, capture_output=True, timeout=5, text=True)
-                if r.returncode == 0:
-                    result = r.stdout
-                    break
-            except Exception:
-                pass
+        def _ipt(*args):
+            for prefix in [['sudo', '-n'], []]:
+                try:
+                    r = subprocess.run(prefix + [ipt_bin] + list(args),
+                                       capture_output=True, timeout=5, text=True)
+                    if r.returncode == 0:
+                        return True, r.stdout
+                except Exception:
+                    pass
+            return False, ''
 
-        if not result:
-            return jsonify({'ok': False, 'error': 'Cannot read FORWARD rules — sudo may be required'}), 200
+        actions = []
 
-        # Parse rules: build signature → list of line numbers
-        from collections import OrderedDict
-        seen = OrderedDict()  # signature → first_line_num
-        duplicates = []       # line numbers to delete (descending order)
+        # Step 1: Migrate MYSTERIUM-FORWARD chain back if it exists (old toolkit versions created this)
+        chain_exists, _ = _ipt('-L', 'MYSTERIUM-FORWARD', '-n')
+        if chain_exists:
+            # Read rules from MYSTERIUM-FORWARD chain
+            ok, mf_output = _ipt('-L', 'MYSTERIUM-FORWARD', '-n')
+            migrated = 0
+            if ok:
+                for line in mf_output.split('\n'):
+                    parts = line.split()
+                    if not parts or parts[0] in ('Chain', 'target', ''):
+                        continue
+                    # Re-add rules to FORWARD chain
+                    if len(parts) >= 4:
+                        src = parts[2] if parts[2] != '0.0.0.0/0' else None
+                        dst = parts[3] if len(parts) > 3 and parts[3] != '0.0.0.0/0' else None
+                        if src and '10.182.' in src:
+                            ok2, _ = _ipt('-A', 'FORWARD', '-s', src, '-j', 'ACCEPT')
+                            if ok2: migrated += 1
+                        elif dst and '10.182.' in dst:
+                            ok2, _ = _ipt('-A', 'FORWARD', '-d', dst, '-j', 'ACCEPT')
+                            if ok2: migrated += 1
 
-        for line in result.split('\n'):
+            # Remove jump rule from FORWARD → MYSTERIUM-FORWARD
+            _ipt('-D', 'FORWARD', '-j', 'MYSTERIUM-FORWARD')
+            # Flush and delete the chain
+            _ipt('-F', 'MYSTERIUM-FORWARD')
+            _ipt('-X', 'MYSTERIUM-FORWARD')
+            actions.append(f'Removed MYSTERIUM-FORWARD chain (migrated {migrated} rules back to FORWARD)')
+            logger.info(f"firewall/cleanup: removed MYSTERIUM-FORWARD chain, migrated {migrated} rules back")
+
+        # Step 2: Read current FORWARD rules and deduplicate 10.182.x.x entries in-place
+        ok, output = _ipt('-L', 'FORWARD', '-n', '--line-numbers')
+        if not ok:
+            return jsonify({'ok': False, 'error': 'Cannot read FORWARD rules — check sudo permissions'}), 200
+
+        seen_sigs = set()
+        to_delete = []
+        for line in output.split('\n'):
             parts = line.split()
             if not parts or not parts[0].isdigit():
                 continue
             line_num = int(parts[0])
-            # Signature = everything except the line number
-            signature = ' '.join(parts[1:])
-            if signature in seen:
-                duplicates.append(line_num)
+            rule_str = ' '.join(parts[1:])
+            if '10.182.' not in rule_str:
+                continue
+            if rule_str in seen_sigs:
+                to_delete.append(line_num)
             else:
-                seen[signature] = line_num
+                seen_sigs.add(rule_str)
 
-        if not duplicates:
-            # Also try flushing MYSTERIUM-FORWARD chain if it exists
-            for cmd in [['sudo', '-n', ipt_bin, '-F', 'MYSTERIUM-FORWARD'],
-                        [ipt_bin, '-F', 'MYSTERIUM-FORWARD']]:
-                try:
-                    subprocess.run(cmd, capture_output=True, timeout=5, text=True)
-                    break
-                except Exception:
-                    pass
-            return jsonify({'ok': True, 'removed': 0, 'message': 'No duplicates found'}), 200
-
-        # Delete in reverse order (highest line number first) to avoid index shifting
         removed = 0
-        errors = []
-        for line_num in sorted(duplicates, reverse=True):
-            for cmd in [
-                ['sudo', '-n', ipt_bin, '-D', 'FORWARD', str(line_num)],
-                [ipt_bin, '-D', 'FORWARD', str(line_num)],
-            ]:
-                try:
-                    r = subprocess.run(cmd, capture_output=True, timeout=5, text=True)
-                    if r.returncode == 0:
-                        removed += 1
-                        break
-                except Exception as e:
-                    errors.append(str(e))
+        for line_num in sorted(to_delete, reverse=True):
+            ok2, _ = _ipt('-D', 'FORWARD', str(line_num))
+            if ok2:
+                removed += 1
 
-        # Invalidate firewall cache so next /metrics fetch shows clean rules
-        with metrics_lock:
-            if 'firewall' in metrics_cache:
-                metrics_cache['firewall'] = MetricsCollector.get_firewall()
+        if removed:
+            actions.append(f'Removed {removed} duplicate FORWARD rules (in-place dedup)')
+            logger.info(f"firewall/cleanup: removed {removed} duplicate FORWARD rules")
 
-        msg = f"Removed {removed} duplicate FORWARD rule(s)"
-        if errors:
-            msg += f" ({len(errors)} errors)"
-        logger.info(f"Firewall cleanup: {msg}")
-        return jsonify({'ok': True, 'removed': removed, 'message': msg}), 200
+        if not actions:
+            return jsonify({'ok': True, 'removed': 0, 'message': 'No issues found — firewall is clean'}), 200
+
+        return jsonify({
+            'ok': True,
+            'removed': removed,
+            'actions': actions,
+            'message': f"Cleanup complete: {'; '.join(actions)}",
+        }), 200
 
     except Exception as e:
-        logger.warning(f"Firewall cleanup error: {e}")
+        logger.error(f"firewall/cleanup error: {e}")
         return jsonify({'ok': False, 'error': str(e)}), 200
 
 

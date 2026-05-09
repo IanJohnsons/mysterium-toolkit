@@ -1959,7 +1959,9 @@ const MysteriumDashboard = () => {
                         : 'bg-slate-800/60 text-slate-400 border border-slate-700 hover:text-slate-200'
                     }`}
                   >
-                    ● Tunnels ({safeNum(metrics.live_connections?.active || 0)})
+                    <span
+                      title="Counts all active WireGuard kernel interfaces. May include stale interfaces from consumers who disconnected without proper teardown — cleaned up automatically by the Mysterium node."
+                    >● Tunnels ({safeNum(metrics.live_connections?.active || 0)})</span>
                   </button>
                   <button
                     onClick={() => setSessionTab('active_sessions')}
@@ -2882,7 +2884,7 @@ const MysteriumDashboard = () => {
                     {dupCount > 0 && (
                       <div className="flex items-center justify-between mb-2 px-1">
                         <div className="text-[10px] text-amber-400">
-                          {dupCount} duplicate rule(s) hidden — likely leftover Mysterium WireGuard FORWARD rules
+                          {dupCount} duplicate FORWARD rule(s) hidden — leftover Mysterium WireGuard tunnel rules. Use Firewall Cleanup to remove them.
                         </div>
                         <button
                           onClick={() => {
@@ -3114,7 +3116,7 @@ const MysteriumDashboard = () => {
 
                 <div>
                   <h4 className="text-emerald-400 font-semibold mb-1">Sessions &amp; Consumers</h4>
-                  <p className="text-slate-400"><strong className="text-slate-300">Tunnels</strong> — Live WireGuard interfaces with real-time speed. <strong className="text-slate-300">Active</strong> — matched to live tunnels (psutil ground truth). <strong className="text-slate-300">History</strong> — all pages loaded at startup. <strong className="text-slate-300">Consumers</strong> — grouped by wallet, sortable. Multiple sessions per consumer is normal — Mysterium reconnects frequently. All tabs are sortable.</p>
+                  <p className="text-slate-400"><strong className="text-slate-300">Tunnels</strong> — Live WireGuard kernel interfaces (myst0, myst1…). Each consumer session creates one. Count may include <strong className="text-slate-300">zombie interfaces</strong> from consumers who disconnected without proper teardown — WireGuard has no session concept so kernel interfaces persist until the Mysterium node daemon cleans them up automatically. This is expected behavior per the Mysterium node core. <strong className="text-slate-300">Active</strong> — sessions matched to live tunnels with actual traffic. <strong className="text-slate-300">History</strong> — all pages loaded at startup. <strong className="text-slate-300">Consumers</strong> — grouped by wallet, sortable. Multiple sessions per consumer is normal — Mysterium reconnects frequently. All tabs are sortable.</p>
                 </div>
 
                 <div>
@@ -3224,8 +3226,9 @@ const MysteriumDashboard = () => {
                   <h4 className="text-emerald-400 font-semibold mb-1">Health &amp; System (13 subsystems)</h4>
                   <p className="text-slate-400"><strong className="text-slate-300">⚡ Fix &amp; Lock</strong> = apply + persist (survives reboot). <strong className="text-slate-300">Fix only</strong> = live fix, resets on reboot. <strong className="text-slate-300">NIC Checksum</strong> — smart: if fix already applied (rx off), historical error counter is silently ignored — no false alarm after fixing. <strong className="text-slate-300">BBR</strong> — TCP congestion control for better VPN throughput. Temps: green &lt;60°C, amber &lt;80°C, red ≥80°C.</p>
                   <p className="text-slate-400 mt-1"><strong className="text-slate-300">CPU Governor (adaptive)</strong> — adjusts automatically every 10 minutes based on active session count: 0 sessions → powersave · 1–5 → schedutil (kernel-managed) · 6+ → performance. No manual action needed. Keeps CPU cool at idle, fast under load.</p>
+                  <p className="text-slate-400 mt-1"><strong className="text-slate-300">Firewall Rules</strong> — the Mysterium node manages its own iptables rules. It creates a <code className="bg-slate-800 px-1 rounded">MYST</code> chain in the NAT table (blackholes private networks 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8 → 240.0.0.1 so consumers can't reach your LAN), and adds <code className="bg-slate-800 px-1 rounded">FORWARD --source 10.182.x.x/24 ACCEPT</code> rules per consumer session. The toolkit never modifies these rules. <strong className="text-slate-300">Firewall Cleanup</strong> removes duplicate FORWARD rules that accumulate when consumers disconnect without proper teardown. It also migrates any <code className="bg-slate-800 px-1 rounded">MYSTERIUM-FORWARD</code> chain (created by older toolkit versions) back to the correct structure. Run cleanup monthly or when duplicate rules are shown.</p>
                   <p className="text-slate-400 mt-1"><strong className="text-slate-300">Connection Tracking (adaptive)</strong> — conntrack table auto-scales with VPN tunnel count: 0–4 tunnels → 128K · 5–19 → 256K · 20+ → 512K. Applied automatically every 10 minutes alongside the governor.</p>
-                  <p className="text-slate-400 mt-1"><strong className="text-slate-300">Sudoers</strong> — setup.sh writes <code className="bg-slate-800 px-1 rounded">/etc/sudoers.d/mysterium-toolkit</code> with narrow passwordless rules for specific commands only (sysctl, ethtool, modprobe, systemctl restart mysterium-node, cpupower, etc.). These rules never expire — health fixes work permanently without a timeout.</p>
+                  <p className="text-slate-400 mt-1"><strong className="text-slate-300">Sudoers</strong> — setup.sh writes <code className="bg-slate-800 px-1 rounded">/etc/sudoers.d/mysterium-toolkit</code> with narrow passwordless rules for specific commands only (sysctl, ethtool, modprobe, systemctl restart mysterium-node, cpupower, update.sh, etc.). These rules never expire — health fixes work permanently without a timeout.</p>
                 </div>
 
                 <div>
