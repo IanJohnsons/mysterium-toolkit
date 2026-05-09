@@ -1211,7 +1211,18 @@ const MysteriumDashboard = () => {
                       <label className="block text-xs text-slate-400 mb-1">Toolkit URL <span className="text-red-400">*</span></label>
                       <input
                         value={fleetForm.toolkit_url}
-                        onChange={e => { setFleetForm(f => ({ ...f, toolkit_url: e.target.value })); setFleetProbeResult(null); }}
+                        onChange={e => {
+                          let v = e.target.value.trim();
+                          setFleetForm(f => ({ ...f, toolkit_url: v }));
+                          setFleetProbeResult(null);
+                        }}
+                        onBlur={e => {
+                          let v = e.target.value.trim();
+                          // Auto-fix bare IP or hostname: add http:// and :5000
+                          if (v && !v.startsWith('http')) v = 'http://' + v;
+                          if (v && /^http:\/\/[\d.a-zA-Z-]+$/.test(v)) v = v + ':5000';
+                          setFleetForm(f => ({ ...f, toolkit_url: v }));
+                        }}
                         placeholder="http://NODE_IP:5000"
                         className="w-full bg-slate-800 border border-slate-600 focus:border-violet-400 rounded px-3 py-2 text-xs text-slate-200 outline-none transition font-mono"
                       />
@@ -3204,7 +3215,7 @@ const MysteriumDashboard = () => {
                     <strong className="text-slate-300">Step 1</strong> — Install toolkit on each node (Type 1 or Type 3)<br/>
                     <strong className="text-slate-300">Step 2</strong> — Find each node's API key: <code className="bg-slate-800 px-1 rounded">config/setup.json</code> → <code className="bg-slate-800 px-1 rounded">dashboard_api_key</code><br/>
                     <strong className="text-slate-300">Step 3</strong> — Ensure port 5000 is reachable (router port forwarding if behind NAT)<br/>
-                    <strong className="text-slate-300">Step 4</strong> — Create <code className="bg-slate-800 px-1 rounded">config/nodes.json</code> on the central machine (template: <code className="bg-slate-800 px-1 rounded">config/nodes.json.example</code>)<br/>
+                    <strong className="text-slate-300">Step 4</strong> — Use the <strong className="text-violet-300">⊕ Add Node</strong> button in the fleet header to add nodes via IP — no manual nodes.json editing needed. Enter <code className="bg-slate-800 px-1 rounded">http://NODE_IP:5000</code> (just the IP works too — port and protocol are auto-filled). Click <strong className="text-slate-300">⚡ Test Connection</strong> to auto-discover identity, version and NAT. Find the API key in the remote node's <code className="bg-slate-800 px-1 rounded">config/setup.json</code> → <code className="bg-slate-800 px-1 rounded">dashboard_api_key</code>.<br/>
                     <strong className="text-slate-300">Step 5</strong> — Restart toolkit. Fleet overview appears automatically.<br/><br/>
                   </p>
                   <pre className="bg-slate-900/60 rounded p-2 text-[10px] text-cyan-300 overflow-x-auto mt-1 mb-2">{`{
@@ -3256,8 +3267,10 @@ const MysteriumDashboard = () => {
                 </div>
 
                 <div>
-                  <h4 className="text-slate-400 font-semibold mb-1">CLI, Mobile &amp; Phone Access</h4>
-                  <p className="text-slate-400">CLI has 2 pages: <strong className="text-slate-300">1 Status</strong> (node info, resources, quality, uptime) and <strong className="text-slate-300">2 Earnings</strong> (balance, daily/weekly/monthly, history chart). Auto-adapts to screen size: full mode (≥90×27), compact mode (&lt;90 cols or &lt;27 rows). Keys: <strong className="text-slate-300">?</strong>=help, <strong className="text-slate-300">w</strong>=restart, <strong className="text-slate-300">$</strong>=settle, <strong className="text-slate-300">T</strong>=test node, <strong className="text-slate-300">t</strong>=theme, <strong className="text-slate-300">r</strong>=refresh, <strong className="text-slate-300">+/-</strong>=interval, <strong className="text-slate-300">Tab</strong>=next page. <strong className="text-slate-300">Phone/LAN:</strong> open <code className="bg-slate-800 px-1 rounded">http://&lt;your-ip&gt;:5000</code>. Ensure ufw allows port 5000.</p>
+                  <h4 className="text-emerald-400 font-semibold mb-1">Updating the Toolkit</h4>
+                  <p className="text-slate-400"><strong className="text-slate-300">Fleet update button</strong> — in the fleet dashboard, each node card shows an <strong className="text-slate-300">↑ Update</strong> button when a newer version is available. Clicking it triggers a remote update on that node: git pull → pip deps → frontend rebuild → service restart. An <strong className="text-slate-300">↑ Update All</strong> button updates all nodes in parallel. <strong className="text-slate-300">Manual update</strong> — run <code className="bg-slate-800 px-1 rounded">./update.sh</code> (no sudo needed) from the toolkit directory. The script handles privileges internally. <code className="bg-slate-800 px-1 rounded">config/setup.json</code> and <code className="bg-slate-800 px-1 rounded">config/nodes.json</code> are backed up before pull and restored automatically.</p>
+                </div>
+                  <p className="text-slate-400">CLI has 2 pages: <strong className="text-slate-300">1 Status</strong> (node info, resources, quality, uptime) and <strong className="text-slate-300">2 Earnings</strong> (balance, net earned after 20% Hermes fee, live fiat price, daily/weekly/monthly, history chart). Auto-adapts to screen size: full mode (≥90×27), compact mode (&lt;90 cols or &lt;27 rows). Keys: <strong className="text-slate-300">?</strong>=help, <strong className="text-slate-300">w</strong>=restart, <strong className="text-slate-300">$</strong>=settle, <strong className="text-slate-300">T</strong>=test node, <strong className="text-slate-300">t</strong>=theme, <strong className="text-slate-300">r</strong>=refresh, <strong className="text-slate-300">+/-</strong>=interval, <strong className="text-slate-300">Tab</strong>=next page. <strong className="text-slate-300">Phone/LAN:</strong> open <code className="bg-slate-800 px-1 rounded">http://&lt;your-ip&gt;:5000</code>. Ensure ufw allows port 5000.</p>
                 </div>
 
                 <div>

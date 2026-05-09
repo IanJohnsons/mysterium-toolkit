@@ -1,6 +1,6 @@
 # Mysterium Node Toolkit
 
-![Version](https://img.shields.io/badge/version-1.1.19-brightgreen) ![License](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Version](https://img.shields.io/badge/version-1.1.20-brightgreen) ![License](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 
 A professional monitoring and management dashboard for [Mysterium Network](https://mysterium.network) VPN node operators. Runs fully local on your node machine — no cloud account, no third-party service, no data leaving your server.
 
@@ -561,7 +561,7 @@ Prints your dashboard URL and opens `start.sh` automatically:
 ./start.sh
 
 # Stop the toolkit
-sudo ./stop.sh
+./stop.sh
 ```
 
 Open the dashboard: `http://localhost:5000`  
@@ -576,7 +576,24 @@ cd mysterium-toolkit
 ./update.sh
 ```
 
-Pulls the latest code, rebuilds the frontend, updates packages and sudoers, restarts the backend. `config/setup.json` and `config/nodes.json` are backed up before the pull and restored automatically. Your dashboard password, API key, node password, and all settings survive the update — no re-configuration needed.
+No `sudo` needed — the script handles privileges internally via `$SUDO`. Pulls the latest code, rebuilds the frontend, updates packages and sudoers, restarts the backend. `config/setup.json` and `config/nodes.json` are backed up before the pull and restored automatically. Your dashboard password, API key, node password, and all settings survive the update — no re-configuration needed.
+
+**Fleet update button** — in the fleet dashboard each node card shows an ↑ Update button when a new version is available. Updates all nodes in parallel without SSH access needed.
+
+---
+
+## CLI (Terminal Dashboard)
+
+```bash
+python cli/dashboard.py
+python cli/dashboard.py --url http://remote-node:5000 --interval 10
+```
+
+Lightweight terminal UI using curses — no browser needed.
+
+**Pages:** `1` Status (node info, resources, quality) · `2` Earnings (unsettled, net earned, fiat value, history chart)
+
+**Keys:** `Tab`/`1-2` page · `r` refresh · `t` theme · `T` test node · `h` health · `c` config · `w` restart node · `$` settle · `?` help · `q` quit · `+/-` adjust interval
 
 ---
 

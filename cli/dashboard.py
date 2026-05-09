@@ -294,6 +294,20 @@ def format_size(mb):
     return "0 MB"
 
 
+def fmt_svc(svc_type):
+    """Format service type for display — matches web dashboard labels."""
+    _map = {
+        'wireguard':     'Public',
+        'dvpn':          'VPN',
+        'scraping':      'B2B Scraping',
+        'quic_scraping': 'B2B Scraping',
+        'data_transfer': 'B2B Data',
+        'monitoring':    'Monitoring',
+        'noop':          'Internal',
+    }
+    return _map.get(svc_type, svc_type or '—')
+
+
 def format_speed(mbps):
     """Format speed in bytes/s with auto-scale"""
     if mbps <= 0:
@@ -394,6 +408,8 @@ class CLIDashboard:
         self.health_last_result = None   # full API result for results view
         self.health_result_scroll = 0    # scroll in results view
         self.page = 1                    # 1=Status 2=Earnings
+        self.myst_price = {}             # {usd, eur} from /myst-price
+        self.myst_price_fetched = 0      # timestamp of last price fetch
         # Sessions page sort: key + dir for each section
         self.sess_sort = {
             'tunnels':  {'key': 'total_mb',       'dir': 'desc'},
@@ -454,6 +470,20 @@ class CLIDashboard:
             self.last_error = 'Request timed out'
         except Exception as e:
             self.last_error = str(e)[:60]
+
+        # Fetch MYST price every 5 minutes
+        now = time.time()
+        if now - self.myst_price_fetched > 300:
+            try:
+                pr = requests.get(f'{self.base_url}/myst-price',
+                                  headers=self._auth_headers(), timeout=5)
+                if pr.status_code == 200:
+                    d = pr.json()
+                    if d.get('usd'):
+                        self.myst_price = d
+                        self.myst_price_fetched = now
+            except Exception:
+                pass
 
     def prompt_api_key(self, stdscr):
         h, w = stdscr.getmaxyx()
@@ -1674,6 +1704,26 @@ class CLIDashboard:
             self._safe_addstr(stdscr, y, 4,  'Lifetime:', DIM)
             self._safe_addstr(stdscr, y, 14, f'{_fe(lifetime)} MYST', ACCENT)
             self._safe_addstr(stdscr, y, 30, '← gross, pre-fee', DIM)
+            y += 1
+
+        if y < ymax and lifetime and float(lifetime) > 0:
+            net = float(lifetime) * 0.80
+            self._safe_addstr(stdscr, y, 4,  'Net earned:', DIM)
+            self._safe_addstr(stdscr, y, 16, f'{net:.4f} MYST', GREEN | BOLD)
+            self._safe_addstr(stdscr, y, 32, '← after 20% Hermes', DIM)
+            y += 1
+
+        # MYST fiat price
+        mp = self.myst_price
+        if mp.get('eur') and y < ymax:
+            disp_myst = float(raw_uns) if raw_uns > 0 else float(ses_total)
+            eur_val = disp_myst * mp['eur']
+            usd_val = disp_myst * mp['usd']
+            stale = ' (stale)' if mp.get('stale') else ''
+            self._safe_addstr(stdscr, y, 4,  '≈ Fiat:', DIM)
+            self._safe_addstr(stdscr, y, 12, f'€{eur_val:.2f}  ${usd_val:.2f}', ACCENT | BOLD)
+            self._safe_addstr(stdscr, y, 12 + 16,
+                              f'1 MYST=€{mp["eur"]:.4f}{stale}', DIM)
             y += 1
 
         if wallet and y < ymax:

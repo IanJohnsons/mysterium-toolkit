@@ -5,7 +5,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.1.19] - 2026-05-10
+## [1.1.20] - 2026-05-10
+### Added
+- **CLI**: Net Earned row (Lifetime × 0.80) in earnings page
+- **CLI**: Live MYST fiat price (EUR/USD) in earnings page — fetched from backend `/myst-price`, refreshed every 5 minutes
+- **CLI**: `fmt_svc()` helper maps service types to display labels (quic_scraping → B2B Scraping, wireguard → Public, etc.)
+- **Fleet Add Node**: URL auto-complete — bare IP auto-gets `http://` prefix and `:5000` port on blur
+- **Help section**: Updating the Toolkit section explaining fleet update button and `./update.sh`
+- **Help section**: Fleet Add Node button documented (no manual nodes.json editing needed)
+- **Help section**: CLI page 2 description updated with net earned and fiat price
+- **README**: CLI section with usage, pages and key bindings
+- **README**: Update section clarifies no sudo needed, fleet update button documented
+
+### Fixed
+- README: `sudo ./stop.sh` → `./stop.sh`
+
+---
+
+
 ### Fixed
 - `update.sh` auto-detects root-owned `.git/objects` and fixes ownership before `git pull` — protects users who previously ran `sudo ./update.sh`
 ### Added
