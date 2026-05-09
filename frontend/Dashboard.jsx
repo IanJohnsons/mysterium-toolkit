@@ -2589,7 +2589,165 @@ const MysteriumDashboard = () => {
             />
           </div>
 
-          {/* System Metrics History Card */}
+          {/* Firewall Details — inline expand, same pattern as System Health */}
+          {activePanel === 'firewall' && (
+            <div className="border border-t-0 border-emerald-500/30 rounded-b-lg bg-slate-800/30 backdrop-blur overflow-hidden mb-6 -mt-6 pt-2">
+              <div className="px-5 py-3 flex items-center justify-between border-b border-slate-700/50">
+                <div className="flex items-center gap-2">
+                  <Shield className="w-4 h-4 text-emerald-400" />
+                  <h3 className="text-sm font-semibold tracking-wide">Firewall Details</h3>
+                  <span className={`text-xs px-2 py-0.5 rounded font-medium ${
+                    metrics.firewall.status === 'active' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-700 text-slate-400'
+                  }`}>{metrics.firewall.status}</span>
+                  {metrics.firewall.fw_type && metrics.firewall.fw_type !== 'unknown' && (
+                    <span className="text-xs text-slate-500">{metrics.firewall.fw_type}</span>
+                  )}
+                </div>
+                <button onClick={() => setActivePanel(null)} className="text-slate-500 hover:text-slate-300 text-xs">▲ collapse</button>
+              </div>
+
+              {/* Legacy ports warning */}
+              {metrics.firewall.legacy_ports?.length > 0 && (
+                <div className="mb-3 px-3 py-2.5 rounded border bg-red-500/10 border-red-500/30 flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-xs font-semibold text-red-400 mb-0.5">Legacy ports detected</div>
+                    <div className="text-[10px] text-slate-400">
+                      {metrics.firewall.legacy_ports.map(p => `${p.port}/${p.proto}`).join(', ')} — opened by older toolkit setup. Not needed: Mysterium dropped OpenVPN, WireGuard uses UDP 10000-60000 via NAT hole punching only.
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      fetch(`${getNodeAwareUrl()}/firewall/remove-legacy-ports`, {
+                        method: 'POST', headers: authHeaderRef.current || {}
+                      })
+                      .then(r => r.json())
+                      .then(d => alert(d.message || (d.error ? `Error: ${d.error}` : 'Done')))
+                      .catch(() => alert('Request failed'));
+                    }}
+                    className="text-[10px] px-2 py-1 rounded bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20 transition flex-shrink-0"
+                  >Remove</button>
+                </div>
+              )}
+              {/* iptables rules */}
+              {metrics.firewall.rule_details && metrics.firewall.rule_details.length > 0 ? (() => {
+                // Deduplicate rules for display — same chain+action+proto+source+dest+extra = one row
+                const seen = new Map();
+                const deduped = [];
+                metrics.firewall.rule_details.forEach(rule => {
+                  const key = `${rule.chain}|${rule.action}|${rule.protocol}|${rule.source}|${rule.destination}|${rule.extra}`;
+                  if (seen.has(key)) {
+                    seen.get(key).count++;
+                  } else {
+                    const r = { ...rule, count: 1 };
+                    seen.set(key, r);
+                    deduped.push(r);
+                  }
+                });
+                const dupCount = metrics.firewall.rule_details.length - deduped.length;
+                return (
+                  <div className="mb-4">
+                    {dupCount > 0 && (
+                      <div className="flex items-center justify-between mb-2 px-1">
+                        <div className="text-[10px] text-amber-400">
+                          {dupCount} duplicate FORWARD rule(s) hidden — leftover Mysterium WireGuard tunnel rules. Use Firewall Cleanup to remove them.
+                        </div>
+                        <button
+                          onClick={() => {
+                            fetch(`${getNodeAwareUrl()}/firewall/cleanup`, {
+                              method: 'POST',
+                              headers: authHeaderRef.current || {}
+                            })
+                            .then(r => r.json())
+                            .then(d => alert(d.message || (d.error ? `Error: ${d.error}` : 'Done')))
+                            .catch(() => alert('Cleanup request failed'));
+                          }}
+                          className="text-[10px] px-2 py-1 rounded bg-amber-500/10 border border-amber-500/30 text-amber-400 hover:bg-amber-500/20 transition"
+                        >
+                          Clean up
+                        </button>
+                      </div>
+                    )}
+                    <div className="space-y-1 max-h-72 overflow-y-auto overflow-x-auto">
+                      <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest px-3 py-1 flex gap-3">
+                        <span className="w-16">Chain</span>
+                        <span className="w-16">Action</span>
+                        <span className="w-12">Proto</span>
+                        <span className="w-28">Source</span>
+                        <span className="w-28">Dest</span>
+                        <span className="flex-1">Details</span>
+                      </div>
+                      {deduped.map((rule, i) => (
+                        <div
+                          key={i}
+                          className={`text-xs font-mono px-3 py-1.5 rounded flex gap-3 ${
+                            rule.blocked
+                              ? 'bg-red-500/5 border border-red-500/20 text-red-300'
+                              : 'bg-slate-900/30 border border-slate-700/30 text-slate-400'
+                          }`}
+                        >
+                          <span className="w-16 text-slate-500">{rule.chain}</span>
+                          <span className={`w-16 font-semibold ${
+                            rule.action === 'ACCEPT' ? 'text-emerald-400' :
+                            rule.action === 'DROP' ? 'text-red-400' :
+                            rule.action === 'REJECT' ? 'text-amber-400' : 'text-slate-300'
+                          }`}>{rule.action}</span>
+                          <span className="w-12">{rule.protocol}</span>
+                          <span className="w-28">{rule.source}</span>
+                          <span className="w-28">{rule.destination}</span>
+                          <span className="flex-1 text-slate-500 truncate">
+                            {rule.extra}
+                            {rule.count > 1 && <span className="ml-2 text-amber-400/70">×{rule.count}</span>}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })() : (
+                <div className="text-xs text-slate-500 py-4 text-center mb-4 space-y-1">
+                  {metrics.firewall.status === 'active' ? (
+                    <>
+                      <div className="text-amber-400">No firewall rules visible</div>
+                      <div className="text-slate-500">The backend needs passwordless sudo to read firewall rules.</div>
+                      {(() => {
+                        const ft = metrics.firewall.fw_type || 'iptables';
+                        const cmds = {
+                          'ufw': 'NOPASSWD: /usr/sbin/ufw',
+                          'firewalld': 'NOPASSWD: /usr/bin/firewall-cmd',
+                          'nftables': 'NOPASSWD: /usr/sbin/nft',
+                        };
+                        const cmd = cmds[ft] || 'NOPASSWD: /sbin/iptables, /usr/sbin/iptables-legacy';
+                        return (
+                          <div className="font-mono bg-slate-900/60 px-3 py-1.5 rounded inline-block mt-1 text-left">
+                            <div className="text-slate-500 mb-0.5">sudo visudo → add:</div>
+                            <div className="text-cyan-400">{'{user}'} ALL=(ALL) {cmd}</div>
+                          </div>
+                        );
+                      })()}
+                    </>
+                  ) : (
+                    <div>Firewall not detected or inactive</div>
+                  )}
+                </div>
+              )}
+
+              {/* UFW rules if present */}
+              {metrics.firewall.ufw_rules && metrics.firewall.ufw_rules.length > 0 && (
+                <div>
+                  <h4 className="text-xs font-semibold text-slate-400 mb-2">UFW Rules</h4>
+                  <div className="space-y-1 max-h-48 overflow-y-auto">
+                    {metrics.firewall.ufw_rules.map((rule, i) => (
+                      <div key={i} className="text-xs font-mono px-3 py-1.5 bg-slate-900/30 border border-slate-700/30 rounded text-slate-400">
+                        {rule}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+            </div>}
+
+          {/* System Metrics History Card */
           <SystemMetricsHistoryCard backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
 
           {/* System Health Card — full width, inline expand */}
@@ -2840,170 +2998,7 @@ const MysteriumDashboard = () => {
           </div>
 
           {/* Expandable Firewall Panel */}
-          {activePanel === 'firewall' && (
-            <>
-            <div className="fixed inset-0 z-40 bg-black/60 sm:hidden" onClick={() => setActivePanel(null)} />
-            <div style={{ backgroundColor: panelBg }} className="fixed inset-0 z-50 overflow-y-auto p-4 pt-6
-                            sm:static sm:bg-slate-800/30 sm:p-5 sm:mb-6 sm:rounded-lg sm:border sm:border-amber-500/30 sm:backdrop-blur sm:max-h-[80vh] sm:overflow-y-auto">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2">
-                  <Shield className="w-4 h-4 text-emerald-400" />
-                  <h3 className="text-sm font-semibold tracking-wide">Firewall Details</h3>
-                  <span className={`text-xs ml-2 px-2 py-0.5 rounded ${
-                    metrics.firewall.status === 'active'
-                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                      : 'bg-red-500/20 text-red-300 border border-red-500/30'
-                  }`}>{metrics.firewall.status}</span>
-                  {metrics.firewall.fw_type && metrics.firewall.fw_type !== 'unknown' && (
-                    <span className="text-xs px-2 py-0.5 rounded bg-slate-700/50 text-slate-400 border border-slate-600/30">
-                      {metrics.firewall.fw_type}
-                    </span>
-                  )}
-                </div>
-                <button onClick={() => setActivePanel(null)} className="p-2 bg-slate-800 hover:bg-slate-700 rounded transition text-slate-300 text-sm font-semibold">✕ Close</button>
-              </div>
-
-              {/* Legacy ports warning */}
-              {metrics.firewall.legacy_ports?.length > 0 && (
-                <div className="mb-3 px-3 py-2.5 rounded border bg-red-500/10 border-red-500/30 flex items-start justify-between gap-3">
-                  <div>
-                    <div className="text-xs font-semibold text-red-400 mb-0.5">Legacy ports detected</div>
-                    <div className="text-[10px] text-slate-400">
-                      {metrics.firewall.legacy_ports.map(p => `${p.port}/${p.proto}`).join(', ')} — opened by older toolkit setup. Not needed: Mysterium dropped OpenVPN, WireGuard uses UDP 10000-60000 via NAT hole punching only.
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => {
-                      fetch(`${getNodeAwareUrl()}/firewall/remove-legacy-ports`, {
-                        method: 'POST', headers: authHeaderRef.current || {}
-                      })
-                      .then(r => r.json())
-                      .then(d => alert(d.message || (d.error ? `Error: ${d.error}` : 'Done')))
-                      .catch(() => alert('Request failed'));
-                    }}
-                    className="text-[10px] px-2 py-1 rounded bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20 transition flex-shrink-0"
-                  >Remove</button>
-                </div>
-              )}
-              {/* iptables rules */}
-              {metrics.firewall.rule_details && metrics.firewall.rule_details.length > 0 ? (() => {
-                // Deduplicate rules for display — same chain+action+proto+source+dest+extra = one row
-                const seen = new Map();
-                const deduped = [];
-                metrics.firewall.rule_details.forEach(rule => {
-                  const key = `${rule.chain}|${rule.action}|${rule.protocol}|${rule.source}|${rule.destination}|${rule.extra}`;
-                  if (seen.has(key)) {
-                    seen.get(key).count++;
-                  } else {
-                    const r = { ...rule, count: 1 };
-                    seen.set(key, r);
-                    deduped.push(r);
-                  }
-                });
-                const dupCount = metrics.firewall.rule_details.length - deduped.length;
-                return (
-                  <div className="mb-4">
-                    {dupCount > 0 && (
-                      <div className="flex items-center justify-between mb-2 px-1">
-                        <div className="text-[10px] text-amber-400">
-                          {dupCount} duplicate FORWARD rule(s) hidden — leftover Mysterium WireGuard tunnel rules. Use Firewall Cleanup to remove them.
-                        </div>
-                        <button
-                          onClick={() => {
-                            fetch(`${getNodeAwareUrl()}/firewall/cleanup`, {
-                              method: 'POST',
-                              headers: authHeaderRef.current || {}
-                            })
-                            .then(r => r.json())
-                            .then(d => alert(d.message || (d.error ? `Error: ${d.error}` : 'Done')))
-                            .catch(() => alert('Cleanup request failed'));
-                          }}
-                          className="text-[10px] px-2 py-1 rounded bg-amber-500/10 border border-amber-500/30 text-amber-400 hover:bg-amber-500/20 transition"
-                        >
-                          Clean up
-                        </button>
-                      </div>
-                    )}
-                    <div className="space-y-1 max-h-72 overflow-y-auto overflow-x-auto">
-                      <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest px-3 py-1 flex gap-3">
-                        <span className="w-16">Chain</span>
-                        <span className="w-16">Action</span>
-                        <span className="w-12">Proto</span>
-                        <span className="w-28">Source</span>
-                        <span className="w-28">Dest</span>
-                        <span className="flex-1">Details</span>
-                      </div>
-                      {deduped.map((rule, i) => (
-                        <div
-                          key={i}
-                          className={`text-xs font-mono px-3 py-1.5 rounded flex gap-3 ${
-                            rule.blocked
-                              ? 'bg-red-500/5 border border-red-500/20 text-red-300'
-                              : 'bg-slate-900/30 border border-slate-700/30 text-slate-400'
-                          }`}
-                        >
-                          <span className="w-16 text-slate-500">{rule.chain}</span>
-                          <span className={`w-16 font-semibold ${
-                            rule.action === 'ACCEPT' ? 'text-emerald-400' :
-                            rule.action === 'DROP' ? 'text-red-400' :
-                            rule.action === 'REJECT' ? 'text-amber-400' : 'text-slate-300'
-                          }`}>{rule.action}</span>
-                          <span className="w-12">{rule.protocol}</span>
-                          <span className="w-28">{rule.source}</span>
-                          <span className="w-28">{rule.destination}</span>
-                          <span className="flex-1 text-slate-500 truncate">
-                            {rule.extra}
-                            {rule.count > 1 && <span className="ml-2 text-amber-400/70">×{rule.count}</span>}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })() : (
-                <div className="text-xs text-slate-500 py-4 text-center mb-4 space-y-1">
-                  {metrics.firewall.status === 'active' ? (
-                    <>
-                      <div className="text-amber-400">No firewall rules visible</div>
-                      <div className="text-slate-500">The backend needs passwordless sudo to read firewall rules.</div>
-                      {(() => {
-                        const ft = metrics.firewall.fw_type || 'iptables';
-                        const cmds = {
-                          'ufw': 'NOPASSWD: /usr/sbin/ufw',
-                          'firewalld': 'NOPASSWD: /usr/bin/firewall-cmd',
-                          'nftables': 'NOPASSWD: /usr/sbin/nft',
-                        };
-                        const cmd = cmds[ft] || 'NOPASSWD: /sbin/iptables, /usr/sbin/iptables-legacy';
-                        return (
-                          <div className="font-mono bg-slate-900/60 px-3 py-1.5 rounded inline-block mt-1 text-left">
-                            <div className="text-slate-500 mb-0.5">sudo visudo → add:</div>
-                            <div className="text-cyan-400">{'{user}'} ALL=(ALL) {cmd}</div>
-                          </div>
-                        );
-                      })()}
-                    </>
-                  ) : (
-                    <div>Firewall not detected or inactive</div>
-                  )}
-                </div>
-              )}
-
-              {/* UFW rules if present */}
-              {metrics.firewall.ufw_rules && metrics.firewall.ufw_rules.length > 0 && (
-                <div>
-                  <h4 className="text-xs font-semibold text-slate-400 mb-2">UFW Rules</h4>
-                  <div className="space-y-1 max-h-48 overflow-y-auto">
-                    {metrics.firewall.ufw_rules.map((rule, i) => (
-                      <div key={i} className="text-xs font-mono px-3 py-1.5 bg-slate-900/30 border border-slate-700/30 rounded text-slate-400">
-                        {rule}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-            </>
-          )}
+        )}
 
           {/* Expandable Data Management Panel */}
           {activePanel === 'data' && (
