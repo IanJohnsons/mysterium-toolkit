@@ -50,6 +50,13 @@ if [ -f "config/nodes.json" ]; then
     echo -e "  ${DIM}Fleet nodes.json backed up in memory before pull${NC}"
 fi
 
+# ── Fix .git ownership if root-owned (caused by previous sudo git pull) ──
+if [ -d ".git" ] && [ "$(stat -c '%U' .git/objects 2>/dev/null)" = "root" ] && [ -n "$_REAL_USER" ] && [ "$_REAL_USER" != "root" ]; then
+    echo -e "  ${YELLOW}⚠ .git/objects owned by root — fixing ownership...${NC}"
+    $SUDO chown -R "$_REAL_USER:$_REAL_USER" ".git" 2>/dev/null || true
+    echo -e "  ${GREEN}✓ .git ownership restored to $_REAL_USER${NC}"
+fi
+
 # ── Pull latest code ──────────────────────────────────────────────────────
 echo -e "  Pulling latest code..."
 if ! git pull; then

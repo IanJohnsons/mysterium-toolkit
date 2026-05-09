@@ -1,12 +1,22 @@
 # Mysterium Node Toolkit
 
-![Version](https://img.shields.io/badge/version-1.1.18-brightgreen) ![License](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Version](https://img.shields.io/badge/version-1.1.19-brightgreen) ![License](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 
 A professional monitoring and management dashboard for [Mysterium Network](https://mysterium.network) VPN node operators. Runs fully local on your node machine — no cloud account, no third-party service, no data leaving your server.
 
 **Author:** Ian Johnsons — [github.com/IanJohnsons](https://github.com/IanJohnsons)  
 **License:** CC BY-NC-SA 4.0 — free for personal and community use, not for commercial use, credit the author if redistributed  
 **Community:** Mysterium Network Telegram
+
+---
+
+> **⚠ One-time fix required if you previously ran `sudo ./update.sh`**  
+> Running update with outer sudo causes `.git/objects` to become root-owned, breaking future `git pull` calls.  
+> Run this once to fix it:
+> ```bash
+> sudo chown -R $USER:$USER ~/mysterium-toolkit
+> ```
+> After v1.1.18, `./update.sh` (without sudo) handles all privileges internally. The fleet update button works automatically going forward.
 
 ---
 

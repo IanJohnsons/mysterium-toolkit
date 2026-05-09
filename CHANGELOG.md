@@ -5,7 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.1.18] - 2026-05-10
+## [1.1.19] - 2026-05-10
+### Fixed
+- `update.sh` auto-detects root-owned `.git/objects` and fixes ownership before `git pull` — protects users who previously ran `sudo ./update.sh`
+### Added
+- README urgent notice: one-time fix command for users who previously ran `sudo ./update.sh`
+
+---
+
+
 ### Fixed
 - `update.sh` no longer requires outer sudo — runs as current user, uses `$SUDO` internally for privileged commands. `git pull` now runs as the real user with their SSH key (fixes SSH permission denied on laptop/desktop installs)
 - Fleet update button now calls `./update.sh` for all install types — includes frontend rebuild, pip deps, and service restart (was: git pull + systemctl stop/start only, no frontend rebuild)
