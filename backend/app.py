@@ -5276,7 +5276,7 @@ def check_for_update():
     _cache_time = getattr(check_for_update, '_cache_time', 0)
 
     now = time.time()
-    if _cache is not None and now - _cache_time < 3600:
+    if _cache is not None and now - _cache_time < 300:  # 5 minutes
         return jsonify(_cache), 200
 
     try:
