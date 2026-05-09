@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.18] - 2026-05-10
+### Fixed
+- `update.sh` no longer requires outer sudo — runs as current user, uses `$SUDO` internally for privileged commands. `git pull` now runs as the real user with their SSH key (fixes SSH permission denied on laptop/desktop installs)
+- Fleet update button now calls `./update.sh` for all install types — includes frontend rebuild, pip deps, and service restart (was: git pull + systemctl stop/start only, no frontend rebuild)
+- `update.sh` copies `.build/index.html` correctly instead of hardcoded heredoc
+- `update.sh` no longer deletes `node_modules` before build — preserves existing install, only removes `dist/`. Full reinstall only when needed
+
+---
+
 ## [1.1.15] - 2026-05-09
 ### Added
 - **StatusCard**: Net Earned row (Lifetime × 0.80) alongside Lifetime Gross — users can verify the 20% Hermes fee is exact

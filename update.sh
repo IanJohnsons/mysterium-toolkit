@@ -1,7 +1,9 @@
 #!/bin/bash
 # Mysterium Node Toolkit — Update Script
 # Pulls latest code, rebuilds frontend, restarts backend.
-# Run from the toolkit directory: sudo ./update.sh
+# Run from the toolkit directory: ./update.sh  (no sudo needed)
+# On root installs (VPS) run as root: ./update.sh
+# The script handles privileged commands internally via $SUDO.
 
 set -e
 
@@ -21,12 +23,12 @@ echo -e "${BOLD}║   Mysterium Toolkit — Update               ║${NC}"
 echo -e "${BOLD}╚════════════════════════════════════════════╝${NC}"
 echo
 
-# ── Must run as root (sudo) ───────────────────────────────────────────────
-if [ "$EUID" -ne 0 ]; then
-    echo -e "${RED}✗ This script must be run with sudo.${NC}"
-    echo -e "  Run: ${BOLD}sudo ./update.sh${NC}"
-    exit 1
-fi
+# ── Determine sudo usage ──────────────────────────────────────────────────
+# Run without outer sudo — script handles privileges internally via $SUDO.
+# On root installs (VPS) SUDO is empty. On non-root installs SUDO=sudo.
+[ "$(id -u)" -eq 0 ] && SUDO="" || SUDO="sudo"
+_REAL_USER="${SUDO_USER:-$USER}"
+_REAL_HOME=$(getent passwd "$_REAL_USER" | cut -d: -f6 2>/dev/null || echo "$HOME")
 
 # ── Must run from a git repo ──────────────────────────────────────────────
 if [ ! -d ".git" ]; then
@@ -72,7 +74,7 @@ fi
 # ── Fix ownership on config/ — git pull runs as root and can make DB files root-owned ──
 _REAL_USER="${SUDO_USER:-$USER}"
 if [ "$_REAL_USER" != "root" ]; then
-    chown -R "$_REAL_USER:$_REAL_USER" "$TOOLKIT_DIR/config/" 2>/dev/null || true
+$SUDO chown -R "$_REAL_USER:$_REAL_USER" "$TOOLKIT_DIR/config/" 2>/dev/null || true
     echo -e "  ${GREEN}✓ config/ ownership corrected → $_REAL_USER${NC}"
 fi
 
@@ -136,17 +138,9 @@ if [ "$SETUP_MODE" = "3" ]; then
     echo -e "  ${DIM}Lightweight mode — skipping frontend build${NC}"
 elif command -v npm &>/dev/null && [ -d ".build" ]; then
     echo -e "  Rebuilding frontend..."
-    cp .build/package.json .build/vite.config.js .build/postcss.config.js .build/tailwind.config.js . 2>/dev/null || true
-    cat > index.html << 'HTMLEOF'
-<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>Mysterium Dashboard</title></head>
-<body><div id="root"></div><script type="module" src="/frontend/main.jsx"></script></body>
-</html>
-HTMLEOF
-    # Remove stale dist/ and node_modules before building fresh
-    rm -rf dist/ node_modules 2>/dev/null || true
+    cp .build/package.json .build/vite.config.js .build/postcss.config.js .build/tailwind.config.js .build/index.html . 2>/dev/null || true
+    # Remove stale dist/ only — keep node_modules to avoid full reinstall every update
+    rm -rf dist/ 2>/dev/null || true
     # Disable set -e for npm — warnings produce non-zero exit but build can still succeed
     set +e
     npm install --legacy-peer-deps > /dev/null 2>&1
@@ -171,7 +165,7 @@ if [ -f "$_SERVICE_FILE" ]; then
     _REAL_HOME=$(getent passwd "$_REAL_USER" | cut -d: -f6)
     _VENV_PYTHON="$TOOLKIT_DIR/venv/bin/python"
     mkdir -p "$TOOLKIT_DIR/logs"
-    chown -R "$_REAL_USER:$_REAL_USER" "$TOOLKIT_DIR/logs" 2>/dev/null || true
+$SUDO chown -R "$_REAL_USER:$_REAL_USER" "$TOOLKIT_DIR/logs" 2>/dev/null || true
 
     _MYST_SVC=""
     for _svc in mysterium-node myst mysterium; do
@@ -205,7 +199,7 @@ Environment=HOME=$_REAL_HOME
 [Install]
 WantedBy=multi-user.target
 UNIT_EOF
-    sudo systemctl daemon-reload
+    $SUDO systemctl daemon-reload
     echo -e "  ${GREEN}✓ Systemd service updated${NC}"
 
     # Update sudoers
@@ -214,7 +208,7 @@ UNIT_EOF
 # Mysterium Toolkit — passwordless sudo for specific commands only
 $_REAL_USER ALL=(ALL) NOPASSWD: $TOOLKIT_DIR/update.sh, /sbin/sysctl, /usr/sbin/sysctl, /usr/sbin/ethtool, /usr/sbin/conntrack, /usr/local/bin/mysterium-rps-watcher.sh, /usr/local/bin/mysterium-rps-setup.sh, /usr/bin/tee /etc/sysctl.d/*, /usr/bin/tee /etc/modules-load.d/*, /usr/bin/tee /sys/module/nf_conntrack/parameters/hashsize, /usr/bin/tee /usr/local/bin/*, /usr/bin/tee /etc/systemd/system/mysterium-*.service, /usr/bin/tee /etc/systemd/system/mysterium-*.timer, /usr/bin/chmod +x /usr/local/bin/mysterium-*, /bin/systemctl start mysterium-*, /bin/systemctl stop mysterium-*, /bin/systemctl enable mysterium-*, /bin/systemctl disable mysterium-*, /bin/systemctl daemon-reload, /usr/sbin/iptables, /sbin/iptables, /usr/sbin/iptables-legacy, /sbin/iptables-legacy, /usr/sbin/ip6tables, /sbin/ip6tables, /usr/sbin/nft, /sbin/nft
 SUDOERS_EOF
-    sudo chmod 440 "$_SUDOERS_FILE"
+    $SUDO chmod 440 "$_SUDOERS_FILE"
     echo -e "  ${GREEN}✓ Sudoers updated${NC}"
 fi
 
@@ -222,7 +216,7 @@ fi
 echo
 echo -e "  Restarting backend..."
 if systemctl is-active --quiet mysterium-toolkit 2>/dev/null; then
-    sudo systemctl restart mysterium-toolkit
+    $SUDO systemctl restart mysterium-toolkit
     sleep 3
     if systemctl is-active --quiet mysterium-toolkit 2>/dev/null; then
         echo -e "  ${GREEN}✓ Backend restarted via systemd${NC}"

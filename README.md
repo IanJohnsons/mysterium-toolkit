@@ -1,6 +1,6 @@
 # Mysterium Node Toolkit
 
-![Version](https://img.shields.io/badge/version-1.1.17-brightgreen) ![License](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Version](https://img.shields.io/badge/version-1.1.18-brightgreen) ![License](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 
 A professional monitoring and management dashboard for [Mysterium Network](https://mysterium.network) VPN node operators. Runs fully local on your node machine — no cloud account, no third-party service, no data leaving your server.
 
@@ -563,7 +563,7 @@ From your phone or any device on your network or the internet: `http://YOUR_MACH
 
 ```bash
 cd mysterium-toolkit
-sudo ./update.sh
+./update.sh
 ```
 
 Pulls the latest code, rebuilds the frontend, updates packages and sudoers, restarts the backend. `config/setup.json` and `config/nodes.json` are backed up before the pull and restored automatically. Your dashboard password, API key, node password, and all settings survive the update — no re-configuration needed.
@@ -823,7 +823,7 @@ How the update works per install type:
 
 **Docker requirement:** the container must be started with `--restart=always` or `--restart=unless-stopped` so it restarts automatically after the process exits during update.
 
-**Note:** Frontend (`dist/`) is only rebuilt on root installs running the full `update.sh`. On non-root and Docker installs, only the Python backend is updated via git pull + restart. If a new version includes frontend changes, run `sudo ./update.sh` once manually to rebuild the frontend.
+**Note:** `./update.sh` handles everything — git pull, pip deps, frontend build, service restart. No outer sudo needed. The script uses `$SUDO` internally for privileged commands. On root installs (VPS) simply run `./update.sh` as root.
 
 ### Advanced: Mass Update via Ansible
 
@@ -908,7 +908,7 @@ The backend always runs as your normal user, never as root. During setup, `setup
 | `systemctl daemon-reload` | Reload systemd after unit changes |
 | `iptables` / `ip6tables` / `nft` | Read and manage firewall rules |
 
-To regenerate after an update: `sudo ./update.sh`
+To regenerate after an update: `./update.sh`
 
 ---
 

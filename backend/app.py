@@ -5385,17 +5385,13 @@ def system_update():
                 f' && kill {os.getpid()}'
             )
         elif is_root:
-            # Root install (VPS): run full update.sh
+            # Root install (VPS): run full update.sh — handles git pull, pip, npm build, restart
             cmd = f'sleep 1 && cd {toolkit_dir} && bash {update_script} >> {log_file} 2>&1'
         else:
-            # Non-root with systemd: git pull + stop + start (both NOPASSWD)
-            cmd = (
-                f'sleep 1 && cd {toolkit_dir} && git pull >> {log_file} 2>&1'
-                f' && sudo -n systemctl stop mysterium-toolkit >> {log_file} 2>&1'
-                f' && sudo -n systemctl start mysterium-toolkit >> {log_file} 2>&1'
-                f' && echo "[toolkit] Restarted successfully" >> {log_file}'
-                f' || echo "[toolkit] Restart failed" >> {log_file}'
-            )
+            # Non-root: run update.sh without outer sudo
+            # The script uses $SUDO internally for privileged commands.
+            # git pull runs as the real user with their SSH key.
+            cmd = f'sleep 1 && cd {toolkit_dir} && bash {update_script} >> {log_file} 2>&1'
 
         subprocess.Popen(['bash', '-c', cmd], env=env,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
