@@ -4069,6 +4069,45 @@ class MetricsCollector:
             except Exception:
                 pass
 
+        # Detect legacy ports opened by older toolkit versions (1194/OpenVPN, 51820/WireGuard)
+        # These are no longer needed — Mysterium uses WireGuard over UDP 10000-60000 only.
+        legacy_ports_found = []
+        LEGACY_PORTS = [('1194', 'udp'), ('1194', 'tcp'), ('51820', 'udp')]
+        try:
+            # Check ufw first
+            ufw_status_r = subprocess.run(['sudo', '-n', 'ufw', 'status'],
+                                          capture_output=True, timeout=3, text=True)
+            if ufw_status_r.returncode != 0:
+                ufw_status_r = subprocess.run(['ufw', 'status'],
+                                              capture_output=True, timeout=3, text=True)
+            if ufw_status_r.returncode == 0 and 'active' in ufw_status_r.stdout.lower():
+                for port, proto in LEGACY_PORTS:
+                    if f'{port}/{proto}' in ufw_status_r.stdout or f'{port} ' in ufw_status_r.stdout:
+                        legacy_ports_found.append({'port': port, 'proto': proto, 'fw': 'ufw'})
+        except Exception:
+            pass
+        try:
+            # Check iptables-legacy INPUT rules for explicit legacy port allows
+            for ipt in ['iptables-legacy', 'iptables']:
+                for pfx in [['sudo', '-n'], []]:
+                    try:
+                        r = subprocess.run(pfx + [ipt, '-L', 'INPUT', '-n'],
+                                           capture_output=True, timeout=5, text=True)
+                        if r.returncode == 0:
+                            for port, proto in LEGACY_PORTS:
+                                if f'dpt:{port}' in r.stdout and proto in r.stdout:
+                                    entry = {'port': port, 'proto': proto, 'fw': ipt}
+                                    if entry not in legacy_ports_found:
+                                        legacy_ports_found.append(entry)
+                            break
+                    except Exception:
+                        continue
+                else:
+                    continue
+                break
+        except Exception:
+            pass
+
         return {
             'status': fw_status,
             'fw_type': fw_type,
@@ -4076,6 +4115,7 @@ class MetricsCollector:
             'blocked': blocked_count,
             'rule_details': rules_list[:100],
             'ufw_rules': ufw_rules[:50],
+            'legacy_ports': legacy_ports_found,
         }
 
     @staticmethod
@@ -5467,6 +5507,89 @@ def get_firewall():
     return jsonify(data.get('firewall', {})), 200
 
 
+@app.route('/firewall/remove-legacy-ports', methods=['POST'])
+@require_auth
+def remove_legacy_ports():
+    """Remove ports 1194 (OpenVPN) and 51820 (WireGuard standard) from firewall.
+    These were opened by older toolkit setup versions but are not needed by Mysterium node.
+    Mysterium uses WireGuard over UDP 10000-60000 via NAT hole punching only.
+    """
+    try:
+        removed = []
+        errors = []
+        LEGACY = [('1194', 'udp'), ('1194', 'tcp'), ('51820', 'udp')]
+
+        def _run(*args):
+            for pfx in [['sudo', '-n'], []]:
+                try:
+                    r = subprocess.run(pfx + list(args), capture_output=True, timeout=5, text=True)
+                    if r.returncode == 0:
+                        return True
+                except Exception:
+                    pass
+            return False
+
+        # Try ufw first
+        ufw_active = False
+        try:
+            r = subprocess.run(['sudo', '-n', 'ufw', 'status'], capture_output=True, timeout=3, text=True)
+            if r.returncode != 0:
+                r = subprocess.run(['ufw', 'status'], capture_output=True, timeout=3, text=True)
+            ufw_active = r.returncode == 0 and 'active' in r.stdout.lower()
+        except Exception:
+            pass
+
+        if ufw_active:
+            for port, proto in LEGACY:
+                if _run('ufw', 'delete', 'allow', f'{port}/{proto}'):
+                    removed.append(f'{port}/{proto} (ufw)')
+                if _run('ufw', 'delete', 'allow', f'{port}'):
+                    removed.append(f'{port} (ufw)')
+
+        # Try iptables-legacy
+        for ipt in ['iptables-legacy', 'iptables']:
+            try:
+                r = subprocess.run(['which', ipt], capture_output=True, timeout=3, text=True)
+                if r.returncode != 0:
+                    continue
+                for port, proto in LEGACY:
+                    # Check and delete all matching INPUT rules
+                    for _ in range(10):
+                        ok, output = (True, subprocess.run(
+                            ['sudo', '-n', ipt, '-L', 'INPUT', '-n', '--line-numbers'],
+                            capture_output=True, timeout=5, text=True).stdout), None
+                        found = False
+                        for line in ok[1].split('\n'):
+                            parts = line.split()
+                            if not parts or not parts[0].isdigit():
+                                continue
+                            if f'dpt:{port}' in line and proto in line:
+                                _run(ipt, '-D', 'INPUT', parts[0])
+                                removed.append(f'{port}/{proto} ({ipt})')
+                                found = True
+                                break
+                        if not found:
+                            break
+            except Exception as e:
+                errors.append(str(e))
+
+        # Invalidate firewall cache
+        with metrics_lock:
+            if 'firewall' in metrics_cache:
+                del metrics_cache['firewall']
+
+        if not removed:
+            return jsonify({'ok': True, 'removed': [], 'message': 'No legacy ports found — firewall is already clean'}), 200
+
+        return jsonify({
+            'ok': True,
+            'removed': removed,
+            'message': f"Removed legacy ports: {', '.join(removed)}",
+        }), 200
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 200
+
+
 @app.route('/firewall/cleanup', methods=['POST'])
 @require_auth
 def firewall_cleanup():
@@ -6049,6 +6172,7 @@ def fleet_node_proxy(node_id, endpoint):
         'system/update', 'system/update/status', 'api/update-check',
         'services/wireguard-mode',
         'sessions/live',
+        'firewall/remove-legacy-ports',
     }
     endpoint_base = endpoint.split('?')[0]
     if (endpoint_base not in ALLOWED
@@ -7027,27 +7151,32 @@ def set_wireguard_mode():
                     return jsonify({'success': True, 'mode': 'off',
                                     'message': 'Public service stopped. Existing tunnels persist until natural disconnect.'}), 200
 
-                # open / verified: set config first, then ensure service is running
+                # open / verified: set config, cycle service (stop+start) so
+                # wireguard.access-policies is picked up by the new proposal.
+                # Existing WireGuard kernel tunnels persist — only new connections affected.
                 policy_value = 'mysterium' if mode == 'verified' else ''
                 requests.post(f'{node_url}/config', headers=headers,
                               json={'data': {'wireguard.access-policies': policy_value}}, timeout=5)
 
-                if not wg_running:
-                    payload = {'type': 'wireguard'}
-                    if provider_id:
-                        payload['provider_id'] = provider_id
-                    pr = requests.post(f'{node_url}/services', headers=headers, json=payload, timeout=10)
-                    if pr.status_code not in (200, 201):
-                        try:
-                            err = pr.json().get('message') or pr.json().get('error') or f'HTTP {pr.status_code}'
-                        except Exception:
-                            err = f'HTTP {pr.status_code}'
-                        if 'already' not in err.lower():
-                            return jsonify({'success': False, 'error': f'Start failed: {err}'}), 200
+                if wg_running and wg_id:
+                    requests.delete(f'{node_url}/services/{wg_id}', headers=headers, timeout=10)
+                    import time as _time; _time.sleep(1)
+
+                payload = {'type': 'wireguard'}
+                if provider_id:
+                    payload['provider_id'] = provider_id
+                pr = requests.post(f'{node_url}/services', headers=headers, json=payload, timeout=10)
+                if pr.status_code not in (200, 201):
+                    try:
+                        err = pr.json().get('message') or pr.json().get('error') or f'HTTP {pr.status_code}'
+                    except Exception:
+                        err = f'HTTP {pr.status_code}'
+                    if 'already' not in err.lower():
+                        return jsonify({'success': False, 'error': f'Restart failed: {err}'}), 200
 
                 label = 'verified consumers only (Mysterium network)' if mode == 'verified' else 'open to everyone'
                 return jsonify({'success': True, 'mode': mode,
-                                'message': f'Public service set to {mode} — {label}.'}), 200
+                                'message': f'Public service set to {mode} — {label}. Service restarted to apply new access policy.'}), 200
             except Exception as e:
                 return jsonify({'success': False, 'error': str(e)}), 200
         return jsonify({'success': False, 'error': 'No node available'}), 200

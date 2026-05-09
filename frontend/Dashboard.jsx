@@ -2863,6 +2863,28 @@ const MysteriumDashboard = () => {
                 <button onClick={() => setActivePanel(null)} className="p-2 bg-slate-800 hover:bg-slate-700 rounded transition text-slate-300 text-sm font-semibold">✕ Close</button>
               </div>
 
+              {/* Legacy ports warning */}
+              {metrics.firewall.legacy_ports?.length > 0 && (
+                <div className="mb-3 px-3 py-2.5 rounded border bg-red-500/10 border-red-500/30 flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-xs font-semibold text-red-400 mb-0.5">Legacy ports detected</div>
+                    <div className="text-[10px] text-slate-400">
+                      {metrics.firewall.legacy_ports.map(p => `${p.port}/${p.proto}`).join(', ')} — opened by older toolkit setup. Not needed: Mysterium dropped OpenVPN, WireGuard uses UDP 10000-60000 via NAT hole punching only.
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      fetch(`${getNodeAwareUrl()}/firewall/remove-legacy-ports`, {
+                        method: 'POST', headers: authHeaderRef.current || {}
+                      })
+                      .then(r => r.json())
+                      .then(d => alert(d.message || (d.error ? `Error: ${d.error}` : 'Done')))
+                      .catch(() => alert('Request failed'));
+                    }}
+                    className="text-[10px] px-2 py-1 rounded bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20 transition flex-shrink-0"
+                  >Remove</button>
+                </div>
+              )}
               {/* iptables rules */}
               {metrics.firewall.rule_details && metrics.firewall.rule_details.length > 0 ? (() => {
                 // Deduplicate rules for display — same chain+action+proto+source+dest+extra = one row
@@ -5484,8 +5506,8 @@ const WireguardModeSelector = ({ backendUrl, authHeaders, isRunning, onChanged }
 
   return (
     <div className="flex flex-col gap-1.5 px-4 py-3 rounded border bg-slate-800/30 border-slate-700/50">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 flex-1">
+      <div className="flex items-start justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap">
           <span className="font-semibold text-slate-200 text-sm">Public</span>
           <span className="text-[10px] text-slate-500">(wireguard)</span>
           {mode && <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
@@ -5493,14 +5515,14 @@ const WireguardModeSelector = ({ backendUrl, authHeaders, isRunning, onChanged }
             : mode === 'verified' ? 'text-amber-400 border-amber-500/30 bg-amber-500/10'
             : 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10'
           }`}>{mode === 'off' ? 'Stopped' : 'Running'}</span>}
-          {status && <span className={`text-xs ml-1 ${status.startsWith('✓') ? 'text-emerald-400' : 'text-red-400'}`}>{status}</span>}
+          {status && <span className={`text-xs ${status.startsWith('✓') ? 'text-emerald-400' : 'text-red-400'}`}>{status}</span>}
         </div>
-        <div className="flex items-center gap-1">
-          {busy && <span className="text-xs text-slate-400 mr-1">…</span>}
+        <div className="flex items-center gap-1 flex-wrap">
+          {busy && <span className="text-xs text-slate-400">…</span>}
           {(['open','verified','off']).map(m => (
             <button key={m} onClick={() => applyMode(m)} disabled={busy}
               className={btnCls(m)} title={confirm === m ? 'Click again to confirm' : modeConfig[m].desc}>
-              {confirm === m ? `Confirm ${modeConfig[m].label}` : modeConfig[m].label}
+              {confirm === m ? `✓ ${modeConfig[m].label}` : modeConfig[m].label}
             </button>
           ))}
         </div>

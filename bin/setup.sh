@@ -947,12 +947,11 @@ else:
 " 2>/dev/null || echo "local")
 
 if [ "$TOOLKIT_MODE" = "local" ]; then
-    _open_port 4449 tcp  "TequilAPI / Node UI"
-    _open_port 1194 udp  "OpenVPN UDP"
-    _open_port 1194 tcp  "OpenVPN TCP"
-    _open_port 51820 udp "WireGuard"
-    _open_range 10000 65000 udp  # P2P / NAT hole punching
-    echo -e "  ${GREEN}✓ Mysterium node ports configured (4449, 1194, 51820, 10000-65000/udp)${NC}"
+    _open_port 4449 tcp  "MystNodes UI (Node web interface)"
+    _open_range 10000 60000 udp  # P2P / NAT hole punching (myst --udp.ports default)
+    echo -e "  ${GREEN}✓ Mysterium node ports configured (4449/tcp, 10000-60000/udp)${NC}"
+    echo -e "  ${DIM}  Note: OpenVPN (1194) and WireGuard (51820) are NOT needed —${NC}"
+    echo -e "  ${DIM}  Mysterium uses WireGuard over the UDP range above via NAT hole punching.${NC}"
 fi
 
 # Persist iptables rules if that's what we used
