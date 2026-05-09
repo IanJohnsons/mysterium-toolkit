@@ -5430,8 +5430,8 @@ def check_node_update():
 @require_auth
 def system_update():
     """Trigger a toolkit self-update: git pull + ./update.sh.
-    Runs detached with correct HOME and SSH environment so git pull works.
-    Logs output to /tmp/mysterium-toolkit-update.log — readable via GET /system/update/status.
+    Root installs (VPS): runs update.sh directly without outer sudo.
+    Non-root installs: requires NOPASSWD sudo entry for update.sh.
     """
     import subprocess, shutil
     try:
@@ -5441,8 +5441,6 @@ def system_update():
 
         # Build correct environment for the subprocess
         env = os.environ.copy()
-
-        # Determine real HOME — needed for SSH keys and git config
         real_home = env.get('HOME', '')
         if not real_home or real_home == '/':
             try:
@@ -5452,7 +5450,7 @@ def system_update():
                 real_home = '/root' if os.getuid() == 0 else f'/home/{os.environ.get("USER", "root")}'
         env['HOME'] = real_home
 
-        # Find SSH key for github — check common locations
+        # Find SSH key for github
         ssh_key = None
         for candidate in [
             f'{real_home}/.ssh/github_key',
@@ -5465,16 +5463,30 @@ def system_update():
 
         if ssh_key:
             env['GIT_SSH_COMMAND'] = f'ssh -i {ssh_key} -o StrictHostKeyChecking=no -o BatchMode=yes'
-            logger.info(f"system/update: using SSH key {ssh_key}")
         else:
-            logger.warning("system/update: no SSH key found — git pull may fail if remote is SSH")
+            logger.warning("system/update: no SSH key found — git pull may fail")
 
-        # Ensure PATH includes common binary locations
         env['PATH'] = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:' + env.get('PATH', '')
 
-        cmd = f'sleep 1 && cd {toolkit_dir} && sudo bash {update_script} >> {log_file} 2>&1'
         with open(log_file, 'w') as lf:
             lf.write(f'[toolkit] Update triggered at {time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())}\n')
+
+        # Root: run update.sh directly — no outer sudo needed
+        # Non-root: check if sudo is available without password for update.sh
+        if os.getuid() == 0:
+            cmd = f'sleep 1 && cd {toolkit_dir} && bash {update_script} >> {log_file} 2>&1'
+        else:
+            # Check if NOPASSWD sudo is configured for update.sh
+            check = subprocess.run(
+                ['sudo', '-n', 'bash', update_script, '--help'],
+                capture_output=True, timeout=5, env=env
+            )
+            if check.returncode != 0 and b'password' in (check.stderr or b'').lower():
+                return jsonify({
+                    'success': False,
+                    'error': 'Automatic update not available: run `sudo ./update.sh` once manually to configure NOPASSWD, then the button will work.'
+                }), 200
+            cmd = f'sleep 1 && cd {toolkit_dir} && sudo bash {update_script} >> {log_file} 2>&1'
 
         subprocess.Popen(
             ['bash', '-c', cmd],
@@ -5483,7 +5495,7 @@ def system_update():
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
-        logger.info("system/update: update process launched")
+        logger.info(f"system/update: launched ({'root' if os.getuid() == 0 else 'user'})")
         return jsonify({'success': True, 'message': 'Update started — check /system/update/status for progress'}), 200
     except Exception as e:
         logger.error(f"system/update error: {e}")
