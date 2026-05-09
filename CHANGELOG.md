@@ -5,6 +5,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.24] - 2026-05-10
+### Fixed
+- `update.sh`: sudoers update skipped when content unchanged — no more sudo password prompt on regular updates. Only asks when sudoers actually needs changing (first run after install or config change).
+
+---
+
+## [1.1.23] - 2026-05-10
+### Added
+- Earnings Efficiency chart split by service type — separate MYST/GB line per service (Public/VPN/B2B Scraping/B2B Data) with matching colors
+- Configured node price shown in legend per service type (cfg: X.XXX MYST/GB) from /services endpoint — shows actual demand/supply price set by Mysterium algorithm
+- quic_scraping merged into scraping in efficiency data
+### Changed
+- Combined average moved to secondary position — per-service breakdown is now primary view
+
+---
+
 ## [1.1.22] - 2026-05-10
 ### Fixed
 - JSX syntax error in help section — CLI paragraph was outside a div, causing frontend build failure on all systems
