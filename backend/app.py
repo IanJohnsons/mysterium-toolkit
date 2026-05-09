@@ -5377,7 +5377,8 @@ def system_update():
         else:
             cmd = (
                 f'sleep 1 && cd {toolkit_dir} && git pull >> {log_file} 2>&1'
-                f' && sudo -n systemctl restart mysterium-toolkit >> {log_file} 2>&1'
+                f' && sudo -n systemctl stop mysterium-toolkit >> {log_file} 2>&1'
+                f' && sudo -n systemctl start mysterium-toolkit >> {log_file} 2>&1'
                 f' && echo "[toolkit] Restarted successfully" >> {log_file}'
                 f' || echo "[toolkit] Restart failed" >> {log_file}'
             )
