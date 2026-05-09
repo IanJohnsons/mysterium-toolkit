@@ -2577,24 +2577,46 @@ class MetricsCollector:
 
     @staticmethod
     def get_sessions():
-        """Get actual client sessions from ALL configured nodes (via TequilaCache).
-        Filters out monitoring probes and service registration entries.
-
-        CRITICAL: TequilAPI marks sessions as "Completed" even while tunnels are still active.
-        We use VPN interface count (psutil) as ground truth for active session count.
+        """Get actual client sessions from ALL configured nodes.
+        Live sessions (status=New) are fetched directly from TequilAPI every call
+        so the Active tab always shows the current realtime state without the
+        120s medium-cycle delay. Historical sessions come from SessionStore.
+        vpn_tunnel_count = number of unique live TequilAPI sessions (realtime).
         """
         try:
             now = datetime.now(timezone.utc)
             sessions = []
-            total_svc_connections = 0
 
-            # Get connection count from cached services
-            for svc in TequilaCache.get_all_services():
-                cc = int(svc.get('connection_count', svc.get('connections_count', 0)))
-                total_svc_connections += cc
+            # ── Fetch live sessions directly from TequilAPI (status=New, realtime) ──
+            live_session_ids = set()
+            live_tequila_sessions = []
+            _headers = MetricsCollector.get_tequilapi_headers()
+            for _node_url in NODE_API_URLS:
+                try:
+                    _resp = requests.get(
+                        f'{_node_url}/sessions',
+                        params={'page': 1, 'page_size': 100, 'status': 'New'},
+                        headers=_headers, timeout=5,
+                    )
+                    if _resp.status_code == 200:
+                        _items = _resp.json().get('items', [])
+                        for _s in _items:
+                            _sid = _s.get('id')
+                            if _sid and _sid not in live_session_ids:
+                                live_session_ids.add(_sid)
+                                live_tequila_sessions.append(_s)
+                        if _items:
+                            try:
+                                SessionDB.upsert_sessions(_items)
+                            except Exception:
+                                pass
+                except Exception as _le:
+                    logger.debug(f"get_sessions live fetch: {_le}")
 
-            # Ground truth: count active VPN tunnel interfaces
-            vpn_tunnel_count = MetricsCollector._count_vpn_tunnels()
+            # vpn_tunnel_count = live TequilAPI sessions (ground truth, realtime)
+            vpn_tunnel_count = len(live_session_ids)
+            if vpn_tunnel_count == 0:
+                vpn_tunnel_count = MetricsCollector._count_vpn_tunnels()
 
             # Collect live VPN interface bytes (psutil, cumulative since boot)
             # These are the REAL bytes flowing through WireGuard/myst* interfaces.
@@ -2611,8 +2633,16 @@ class MetricsCollector:
             except Exception:
                 pass
 
-            # Process all cached sessions
-            for session in TequilaCache.get_all_sessions():
+            # Merge live TequilAPI sessions with SessionStore history
+            # Live sessions override their cached counterpart (fresher data)
+            all_session_map = {s['id']: s for s in TequilaCache.get_all_sessions() if s.get('id')}
+            for ls in live_tequila_sessions:
+                if ls.get('id'):
+                    all_session_map[ls['id']] = ls  # live data wins
+            all_sessions_merged = list(all_session_map.values())
+
+            # Process all sessions (historical + live merged)
+            for session in all_sessions_merged:
                 tokens = int(session.get('tokens', 0))
                 b_in = int(session.get('bytes_received', 0))
                 b_out = int(session.get('bytes_sent', 0))
@@ -3013,7 +3043,16 @@ class MetricsCollector:
             }
 
             active_items = [s for s in sessions if s.get('is_active')]
-            active_unique_consumers = len({s['consumer_id'] for s in sessions if s.get('is_active') and s.get('consumer_id')})
+            # B3: unique consumers = unique consumer_id from live TequilAPI sessions (ground truth)
+            # Fall back to computed active_items if live sessions unavailable
+            if live_session_ids:
+                active_unique_consumers = len({
+                    s.get('consumer_id') for s in live_tequila_sessions
+                    if s.get('consumer_id')
+                    and s.get('service_type', '').lower() not in MetricsCollector.INTERNAL_SERVICE_TYPES
+                })
+            else:
+                active_unique_consumers = len({s['consumer_id'] for s in sessions if s.get('is_active') and s.get('consumer_id')})
 
             return {
                 'items': sessions,
