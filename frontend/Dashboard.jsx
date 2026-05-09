@@ -2997,7 +2997,6 @@ const MysteriumDashboard = () => {
               </div>
             </button>
           </div>
-          )}
 
           {/* Expandable Data Management Panel */}
           {activePanel === 'data' && (
