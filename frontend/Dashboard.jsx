@@ -1360,6 +1360,8 @@ const MysteriumDashboard = () => {
               <span>Unsettled: <span className="text-emerald-400 font-semibold">{(Number(metrics.fleet.fleet_earnings?.unsettled)||0).toFixed(4)} MYST</span></span>
               <span>In-system: <span className="text-cyan-400/80 font-semibold">{((Number(metrics.fleet.fleet_earnings?.unsettled)||0) + (Number(metrics.fleet.fleet_earnings?.balance)||0)).toFixed(4)} MYST</span></span>
               <span>Net lifetime: <span className="text-slate-300">{((Number(metrics.fleet.fleet_earnings?.lifetime)||0) * 0.80).toFixed(4)} MYST</span></span>
+              <span className="text-slate-700">|</span>
+              <span>Gross: <span className="text-slate-500">{(Number(metrics.fleet.fleet_earnings?.lifetime)||0).toFixed(4)} MYST</span> <span className="text-slate-700 text-[10px]">(pre 20% fee)</span></span>
               {mystPrice?.usd && <span>≈ <span className="text-slate-300 font-semibold">${((Number(metrics.fleet.fleet_earnings?.unsettled)||0) * mystPrice.usd).toFixed(2)}</span> / <span className="text-slate-300 font-semibold">€{((Number(metrics.fleet.fleet_earnings?.unsettled)||0) * mystPrice.eur).toFixed(2)}</span></span>}
               <span>Active sessions: <span className="text-slate-300">{Number(metrics.fleet.fleet_sessions?.active)||0}</span></span>
               <span>Nodes: <span className="text-slate-300">{metrics.fleet.fleet_nodes}</span></span>
@@ -3138,7 +3140,7 @@ const MysteriumDashboard = () => {
 
                 <div>
                   <h4 className="text-emerald-400 font-semibold mb-1">Earnings &amp; Settle</h4>
-                  <p className="text-slate-400"><strong className="text-slate-300">Unsettled</strong> = earned but not yet settled on-chain. Auto-settles at 5 MYST. <strong className="text-slate-300">Lifetime Gross (pre-fee)</strong> = all-time cumulative earnings before 20% Hermes fee — never decreases. <strong className="text-slate-300">Hermes Channel</strong> = MYST sitting in the Hermes payment channel ready to withdraw to your wallet. Shows 0.0000 (withdrawn to wallet) when you have already moved funds to an external wallet — this is correct. <strong className="text-slate-300">Daily/Weekly/Monthly</strong> = delta between snapshots stored in earnings_history.db (SQLite), recorded every 10 minutes. Daily needs 24h of history, weekly 7d, monthly 30d. <strong className="text-slate-300">RATE LIMITED</strong> = identity API blocked — history paused, no snapshot saved. Settle auto-fetches hermes_id from the node.</p>
+                  <p className="text-slate-400"><strong className="text-slate-300">Unsettled</strong> = earned but not yet settled on-chain. Auto-settles at 5 MYST. <strong className="text-slate-300">Lifetime Gross (pre-fee)</strong> = all-time earnings before 20% Hermes fee — never decreases. <strong className="text-slate-300">Net Earned (after 20% Hermes)</strong> = Lifetime × 0.80 — what you effectively received. The 20% Hermes fee is deducted by the Hermes smart contract at settlement — compare Gross vs Net to verify it never exceeds 20%. <strong className="text-slate-300">Hermes Channel</strong> = settled MYST in the internal channel, not yet in your Polygon wallet. Shows 0.0000 when funds already moved to external wallet — correct. <strong className="text-slate-300">Daily/Weekly/Monthly</strong> = delta between snapshots in earnings_history.db, recorded every 10 minutes. <strong className="text-slate-300">Fleet bar</strong>: Unsettled = total pending, In-system = unsettled + Hermes buffer, Net lifetime = gross × 0.80, Gross shown for full transparency. Fiat value = unsettled × live MYST price.</p>
                 </div>
 
                 <div>
@@ -5211,7 +5213,11 @@ const EarningsCard = ({ earnings, backendUrl, authHeaders }) => {
           <div className="text-emerald-300 font-semibold">{safeEarnings.lifetime > 0 ? safeEarnings.lifetime.toFixed(4) + ' MYST' : '—'}</div>
         </div>
         <div>
-          <div className="text-slate-400">Hermes Channel <span className="text-slate-600 text-[10px]">(unsettled buffer)</span></div>
+          <div className="text-slate-400">Net Earned <span className="text-slate-600 text-[10px]">(after 20% Hermes)</span></div>
+          <div className="text-emerald-300 font-semibold">{safeEarnings.lifetime > 0 ? (safeEarnings.lifetime * 0.80).toFixed(4) + ' MYST' : '—'}</div>
+        </div>
+        <div>
+          <div className="text-slate-400">Hermes Channel <span className="text-slate-600 text-[10px]">(settled buffer)</span></div>
           <div className="text-emerald-300 font-semibold">
             {safeEarnings.balance > 0
               ? safeEarnings.balance.toFixed(4) + ' MYST'

@@ -1,6 +1,6 @@
 # Mysterium Node Toolkit
 
-![Version](https://img.shields.io/badge/version-1.1.14-brightgreen) ![License](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Version](https://img.shields.io/badge/version-1.1.15-brightgreen) ![License](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 
 A professional monitoring and management dashboard for [Mysterium Network](https://mysterium.network) VPN node operators. Runs fully local on your node machine — no cloud account, no third-party service, no data leaving your server.
 
@@ -824,6 +824,52 @@ How the update works per install type:
 **Docker requirement:** the container must be started with `--restart=always` or `--restart=unless-stopped` so it restarts automatically after the process exits during update.
 
 **Note:** Frontend (`dist/`) is only rebuilt on root installs running the full `update.sh`. On non-root and Docker installs, only the Python backend is updated via git pull + restart. If a new version includes frontend changes, run `sudo ./update.sh` once manually to rebuild the frontend.
+
+### Advanced: Mass Update via Ansible
+
+For operators running 10+ nodes, [Ansible](https://www.ansible.com) provides a powerful alternative to the fleet update button — works even when the toolkit is down, scales to 100+ nodes, gives per-node terminal logs.
+
+> Credit: this approach was suggested by a Mysterium community member. Thanks for sharing operational knowledge.
+
+**Install Ansible:**
+```bash
+pip install ansible
+# or: sudo apt install ansible
+```
+
+**`ansible.cfg`** (in your working directory):
+```ini
+[defaults]
+remote_user = root
+inventory = nodes.txt
+host_key_checking = False
+```
+
+**`nodes.txt`** — one IP per line:
+```
+203.0.113.10
+203.0.113.20
+192.168.1.50
+```
+
+**Update all nodes:**
+```bash
+# SSH key (recommended)
+ansible all --private-key ~/.ssh/id_rsa -m shell -a "bash ~/mysterium-toolkit/update.sh"
+
+# SSH + sudo password prompt
+ansible all -k -K -m shell -a "bash ~/mysterium-toolkit/update.sh"
+```
+
+**Mixed installs** (different users/paths per node) — use host variables in `nodes.txt`:
+```ini
+[vps]
+203.0.113.10 ansible_user=root toolkit_path=/root/mysterium-toolkit
+
+[desktop]
+203.0.113.20 ansible_user=user toolkit_path=/home/user/mysterium-toolkit
+```
+Then: `ansible all -m shell -a "bash {{ toolkit_path }}/update.sh"`
 
 ### Mysterium Node in Docker — Reading Stats
 
