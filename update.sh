@@ -155,12 +155,9 @@ HTMLEOF
     if [ -f "dist/index.html" ]; then
         echo -e "  ${GREEN}✓ Frontend rebuilt${NC}"
     else
-        echo -e "  ${RED}✗ Frontend build failed${NC}"
+        echo -e "  ${RED}✗ Frontend build failed — keeping existing dist/, backend will still restart${NC}"
         echo "$BUILD_OUT" | tail -10
-        rm -f vite.config.js postcss.config.js tailwind.config.js package.json package-lock.json index.html
-        exit 1
     fi
-    rm -rf node_modules
     rm -f vite.config.js postcss.config.js tailwind.config.js package.json package-lock.json index.html
 else
     echo -e "  ${YELLOW}⚠ npm not found — frontend not rebuilt${NC}"
