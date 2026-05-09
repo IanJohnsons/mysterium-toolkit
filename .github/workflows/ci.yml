@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  # ── Python syntax check ──────────────────────────────────────────────────────
+  python-syntax:
+    name: Python syntax check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check backend syntax
+        run: python3 -m py_compile backend/app.py && echo "✓ backend/app.py OK"
+
+      - name: Check scripts syntax
+        run: |
+          for f in scripts/*.py; do
+            python3 -m py_compile "$f" && echo "✓ $f OK"
+          done
+
+  # ── Frontend build ───────────────────────────────────────────────────────────
+  frontend-build:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Copy build config from .build/
+        run: |
+          cp .build/package.json .
+          cp .build/package-lock.json .
+          cp .build/vite.config.js .
+          cp .build/postcss.config.js .
+          cp .build/tailwind.config.js .
+          cp .build/index.html .
+
+      - name: Install npm dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Verify dist output
+        run: |
+          test -f dist/index.html && echo "✓ dist/index.html OK"
+          test -d dist/assets && echo "✓ dist/assets OK"
+
+      - name: Clean up build config
+        run: rm -f package.json package-lock.json vite.config.js postcss.config.js tailwind.config.js index.html
