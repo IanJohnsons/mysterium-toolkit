@@ -6003,6 +6003,7 @@ def fleet_node_proxy(node_id, endpoint):
         'data/quality/history', 'data/system/history',
         'analytics/service-split', 'analytics/earnings-efficiency',
         'system/update', 'api/update-check',
+        'services/wireguard-mode',
     }
     endpoint_base = endpoint.split('?')[0]
     if (endpoint_base not in ALLOWED
@@ -6728,13 +6729,23 @@ def _update_node_active_services(node_url, headers, service_type, enable):
         else:
             active = [s for s in active if s not in to_toggle]
 
-        requests.post(
+        new_active = ','.join(active)
+        wr = requests.post(
             f'{node_url}/config',
             headers={**headers, 'Content-Type': 'application/json'},
-            json={'data': {'active-services': ','.join(active)}},
+            json={'data': {'active-services': new_active}},
             timeout=5,
         )
-        logger.debug(f"active-services updated: {','.join(active)} ({'enabled' if enable else 'disabled'} {service_type})")
+        # Verify write by reading back
+        if wr.status_code == 200:
+            vr = requests.get(f'{node_url}/config', headers=headers, timeout=5)
+            if vr.status_code == 200:
+                written = (vr.json().get('data', {}).get('active-services') or '')
+                if written != new_active:
+                    logger.warning(f"active-services config mismatch after write: wanted '{new_active}', got '{written}'")
+                else:
+                    logger.debug(f"active-services verified: {new_active}")
+        logger.debug(f"active-services updated: {new_active} ({'enabled' if enable else 'disabled'} {service_type})")
     except Exception as e:
         logger.debug(f"active-services config update skipped: {e}")
 
@@ -6877,6 +6888,123 @@ def start_service():
             except Exception as e:
                 return jsonify({'success': False, 'error': str(e)}), 200
 
+        return jsonify({'success': False, 'error': 'No node available'}), 200
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 200
+
+
+@app.route('/services/wireguard-mode', methods=['GET'])
+@require_auth
+def get_wireguard_mode():
+    """Return current wireguard mode: 'open', 'verified', or 'off'.
+    off      = wireguard service not running
+    open     = running + access_policies empty (anyone can connect)
+    verified = running + access_policies = 'mysterium' (verified consumers only)
+    """
+    try:
+        headers = MetricsCollector.get_tequilapi_headers()
+        for node_url in NODE_API_URLS:
+            try:
+                wg_running, wg_id = False, None
+                sr = requests.get(f'{node_url}/services', headers=headers, timeout=5)
+                if sr.status_code == 200:
+                    for svc in sr.json():
+                        if svc.get('type') == 'wireguard' and svc.get('status') == 'Running':
+                            wg_running, wg_id = True, svc.get('id')
+
+                access_policy = ''
+                cr = requests.get(f'{node_url}/config', headers=headers, timeout=5)
+                if cr.status_code == 200:
+                    cfg = cr.json()
+                    access_policy = (
+                        cfg.get('data', {}).get('wireguard.access-policies')
+                        or cfg.get('userConfig', {}).get('wireguard.access-policies')
+                        or ''
+                    )
+
+                mode = 'off' if not wg_running else ('verified' if 'mysterium' in str(access_policy).lower() else 'open')
+                return jsonify({'success': True, 'mode': mode, 'wg_running': wg_running,
+                                'wg_id': wg_id, 'access_policy_raw': access_policy}), 200
+            except Exception as e:
+                return jsonify({'success': False, 'error': str(e)}), 200
+        return jsonify({'success': False, 'error': 'No node available'}), 200
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 200
+
+
+@app.route('/services/wireguard-mode', methods=['POST'])
+@require_auth
+def set_wireguard_mode():
+    """Set wireguard mode: 'open', 'verified', or 'off'.
+    open     → wireguard running, wireguard.access-policies = '' (everyone)
+    verified → wireguard running, wireguard.access-policies = 'mysterium' (verified only)
+    off      → stop wireguard (existing WireGuard tunnels persist until natural disconnect)
+    Config change applies to new connections immediately.
+    """
+    try:
+        body = request.get_json() or {}
+        mode = body.get('mode', '').lower()
+        if mode not in ('open', 'verified', 'off'):
+            return jsonify({'success': False, 'error': "mode must be 'open', 'verified', or 'off'"}), 200
+
+        headers = MetricsCollector.get_tequilapi_headers()
+        headers['Content-Type'] = 'application/json'
+
+        for node_url in NODE_API_URLS:
+            try:
+                # Current wireguard state
+                wg_running, wg_id, provider_id = False, None, None
+                sr = requests.get(f'{node_url}/services', headers=headers, timeout=5)
+                if sr.status_code == 200:
+                    for svc in sr.json():
+                        if svc.get('type') == 'wireguard':
+                            if svc.get('status') == 'Running':
+                                wg_running, wg_id = True, svc.get('id')
+                            provider_id = svc.get('provider_id')
+
+                if not provider_id:
+                    try:
+                        ir = requests.get(f'{node_url}/identities', headers=headers, timeout=5)
+                        if ir.status_code == 200:
+                            ids = ir.json().get('identities', [])
+                            if ids:
+                                provider_id = ids[0].get('id', '')
+                    except Exception:
+                        pass
+
+                if mode == 'off':
+                    if wg_running and wg_id:
+                        dr = requests.delete(f'{node_url}/services/{wg_id}', headers=headers, timeout=10)
+                        if dr.status_code not in (200, 202, 204):
+                            return jsonify({'success': False, 'error': f'Stop failed: HTTP {dr.status_code}'}), 200
+                    requests.post(f'{node_url}/config', headers=headers,
+                                  json={'data': {'wireguard.access-policies': ''}}, timeout=5)
+                    return jsonify({'success': True, 'mode': 'off',
+                                    'message': 'Public service stopped. Existing tunnels persist until natural disconnect.'}), 200
+
+                # open / verified: set config first, then ensure service is running
+                policy_value = 'mysterium' if mode == 'verified' else ''
+                requests.post(f'{node_url}/config', headers=headers,
+                              json={'data': {'wireguard.access-policies': policy_value}}, timeout=5)
+
+                if not wg_running:
+                    payload = {'type': 'wireguard'}
+                    if provider_id:
+                        payload['provider_id'] = provider_id
+                    pr = requests.post(f'{node_url}/services', headers=headers, json=payload, timeout=10)
+                    if pr.status_code not in (200, 201):
+                        try:
+                            err = pr.json().get('message') or pr.json().get('error') or f'HTTP {pr.status_code}'
+                        except Exception:
+                            err = f'HTTP {pr.status_code}'
+                        if 'already' not in err.lower():
+                            return jsonify({'success': False, 'error': f'Start failed: {err}'}), 200
+
+                label = 'verified consumers only (Mysterium network)' if mode == 'verified' else 'open to everyone'
+                return jsonify({'success': True, 'mode': mode,
+                                'message': f'Public service set to {mode} — {label}.'}), 200
+            except Exception as e:
+                return jsonify({'success': False, 'error': str(e)}), 200
         return jsonify({'success': False, 'error': 'No node available'}), 200
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 200

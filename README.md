@@ -1,6 +1,6 @@
 # Mysterium Node Toolkit
 
-![Version](https://img.shields.io/badge/version-1.0.30-brightgreen) ![License](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Version](https://img.shields.io/badge/version-1.1.0-brightgreen) ![License](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 
 A professional monitoring and management dashboard for [Mysterium Network](https://mysterium.network) VPN node operators. Runs fully local on your node machine — no cloud account, no third-party service, no data leaving your server.
 
@@ -605,9 +605,31 @@ Every session is saved to SQLite with token values frozen the moment the session
 
 - Active tunnels — live consumer connections with identity and service type. Mysterium network quality monitoring bots are automatically detected and labelled with 🔧, separated from paying consumers in the Consumers tab
 - Consumer breakdown by country and service type
-- Full session history with duration, data transferred, earnings per session, and **MYST/GB efficiency** per session
+- Full session history with duration, data transferred, earnings per session, and **MYST/GB efficiency** per session (shown for sessions >1 MB to avoid misleading values on tiny sessions)
 - **Service Split Over Time** — stacked bar chart of daily earnings by service type (7d / 30d / 90d / 1y / All). Reveals trends in scraping vs VPN vs Public traffic over time
 - **Earnings Efficiency** — MYST per GB transferred as a daily timeseries. Detects when your node forwards more data but earns less per byte
+
+### Public service mode (wireguard)
+
+The **Public** service (wireguard) has three configurable modes — controlled via the Running Services card:
+
+| Mode | Who can connect | Node config flag |
+|---|---|---|
+| **Open** | Everyone — including Mysterium Dark, 3rd party apps | `wireguard.access-policies = ""` |
+| **Verified** | Mysterium-registered consumers only (on-chain identity + MYST stake) | `wireguard.access-policies = "mysterium"` |
+| **Off** | No new connections. Existing WireGuard tunnels persist until natural disconnect | service stopped |
+
+> **Note:** Individual consumer blocking is not possible at the Mysterium node API level. The Verified mode is the narrowest filter available — it restricts to the Mysterium identity network. Consumer payments are enforced automatically by Hermes (off-chain promise signing) — consumers without funded channels are rejected before any data flows.
+
+### Service types (Mysterium node core)
+
+| API type | Dashboard label | Access policy |
+|---|---|---|
+| `wireguard` | Public | configurable (see above) |
+| `dvpn` | VPN | mysterium |
+| `scraping` + `quic_scraping` | B2B Data Scraping | mysterium |
+| `data_transfer` | B2B VPN and data transfer | mysterium |
+| `monitoring` | Monitoring (internal) | node-managed |
 
 ### On-chain wallet
 

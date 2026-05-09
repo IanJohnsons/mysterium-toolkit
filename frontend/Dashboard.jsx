@@ -1906,9 +1906,14 @@ const MysteriumDashboard = () => {
                   <div className="space-y-2">
                     {/* User-controllable services — static list */}
                     {toggleRows.map((svc, i) => (
-                      <ServiceToggleRow key={svc.id || svc.type} svc={svc}
-                        backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current}
-                        onToggled={() => setTimeout(fetchMetrics, 3000)} />
+                      svc.type === 'wireguard'
+                        ? <WireguardModeSelector key="wireguard"
+                            backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current}
+                            isRunning={svc.is_active}
+                            onChanged={() => setTimeout(fetchMetrics, 3000)} />
+                        : <ServiceToggleRow key={svc.id || svc.type} svc={svc}
+                            backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current}
+                            onToggled={() => setTimeout(fetchMetrics, 3000)} />
                     ))}
                     {/* Divider */}
                     {internalRows.length > 0 && (
@@ -2248,9 +2253,9 @@ const MysteriumDashboard = () => {
                                   ? '<0.00001'
                                   : session.earnings_myst.toFixed(6)
                                 : '—'}
-                              {session.is_paid && session.data_total > 0 && (
-                                <div className="text-[9px] text-slate-500 font-normal" title="MYST per GB transferred">
-                                  {(session.earnings_myst / (session.data_total / 1024)).toFixed(4)}/GB
+                              {session.is_paid && session.data_total > 5 && (
+                                <div className="text-[9px] text-slate-500 font-normal" title="Total earnings per GB transferred (includes time-based component — not a pure data price)">
+                                  {(session.earnings_myst / (session.data_total / 1024)).toFixed(4)} eff/GB
                                 </div>
                               )}
                             </div>
@@ -2341,9 +2346,9 @@ const MysteriumDashboard = () => {
                                   <div className="col-span-1 text-slate-400">{formatDataSize(s.data_total)}</div>
                                   <div className={`col-span-1 font-semibold text-xs ${s.is_paid ? 'text-emerald-400/80' : 'text-slate-600'}`}>
                                     {s.is_paid ? s.earnings_myst.toFixed(6) : '—'}
-                                    {s.is_paid && s.data_total > 0 && (
-                                      <div className="text-[9px] text-slate-500 font-normal" title="MYST per GB transferred">
-                                        {(s.earnings_myst / (s.data_total / 1024)).toFixed(4)}/GB
+                                    {s.is_paid && s.data_total > 5 && (
+                                      <div className="text-[9px] text-slate-500 font-normal" title="Total earnings per GB transferred (includes time-based component — not a pure data price)">
+                                        {(s.earnings_myst / (s.data_total / 1024)).toFixed(4)} eff/GB
                                       </div>
                                     )}
                                   </div>
@@ -3142,13 +3147,15 @@ const MysteriumDashboard = () => {
 
                 <div>
                   <h4 className="text-emerald-400 font-semibold mb-1">Analytics Charts</h4>
-                  <p className="text-slate-400"><strong className="text-slate-300">Service Split Over Time</strong> — stacked bar chart showing daily earnings split by service type (B2B scraping, VPN, Public, QUIC). Reveals trends: if scraping share drops suddenly, check service config. <strong className="text-slate-300">Earnings Efficiency</strong> — MYST per GB transferred per day. Detects when your node forwards more data but earns less per byte — indicates lower-value consumers. Both charts use <strong className="text-slate-300">7d · 30d · 90d · 1y · All</strong>.</p>
+                  <p className="text-slate-400"><strong className="text-slate-300">Service Split Over Time</strong> — stacked bar chart showing daily earnings split by service type (B2B scraping, VPN, Public, QUIC). Reveals trends: if scraping share drops suddenly, check service config. <strong className="text-slate-300">Earnings Efficiency</strong> — total MYST per GB transferred per day. Note: Mysterium pricing has two components — <strong className="text-slate-300">time-based</strong> (MYST/hour) and <strong className="text-slate-300">data-based</strong> (MYST/GiB). This chart shows the combined ratio. For data-heavy B2B scraping sessions the data component dominates and this is a reliable efficiency metric. For short VPN sessions the time component inflates the apparent MYST/GB ratio. Both charts use <strong className="text-slate-300">7d · 30d · 90d · 1y · All</strong>.</p>
                 </div>
 
                 <div>
                   <h4 className="text-emerald-400 font-semibold mb-1">Node Analytics</h4>
                   <p className="text-slate-400"><strong className="text-slate-300">API cache row</strong> (grey) — live session data. Earnings are low because Mysterium zeroes token values after settlement. <strong className="text-slate-300">Archive row</strong> (green) — from sessions_history.db. Token values are frozen at fetch time before zeroing, giving accurate historical earnings. Includes service type breakdown and consumer origin.</p>
-                  <p className="text-slate-400 mt-1"><strong className="text-slate-300">Service types</strong> — reported directly by the Mysterium TequilAPI. <strong className="text-slate-300">B2B VPN and data transfer</strong> = B2B streaming/data traffic (access policy: mysterium). <strong className="text-slate-300">B2B Data Scraping</strong> = B2B scraping traffic including QUIC variant (access policy: mysterium). <strong className="text-slate-300">VPN</strong> = Mysterium VPN app users (access policy: mysterium). <strong className="text-slate-300">Public</strong> = open network, no access policy — includes Mysterium Dark and 3rd party consumers (service type: wireguard in TequilAPI). <strong className="text-slate-300">Monitoring</strong> = Mysterium network probe sessions, excluded from analytics.</p>
+                  <p className="text-slate-400 mt-1"><strong className="text-slate-300">Service types</strong> — reported directly by the Mysterium TequilAPI. <strong className="text-slate-300">B2B VPN and data transfer</strong> = B2B streaming/data traffic (access policy: mysterium). <strong className="text-slate-300">B2B Data Scraping</strong> = B2B scraping traffic including QUIC variant (access policy: mysterium). <strong className="text-slate-300">VPN</strong> = Mysterium VPN app users (access policy: mysterium). <strong className="text-slate-300">Public</strong> = wireguard service with configurable access mode — see below. <strong className="text-slate-300">Monitoring</strong> = Mysterium network probe sessions, excluded from analytics.</p>
+                  <p className="text-slate-400 mt-2"><strong className="text-slate-300">Public service modes</strong> (wireguard.access-policies config flag): <strong className="text-slate-300 text-emerald-400">Open</strong> = anyone can connect, including Mysterium Dark and 3rd party apps — flag = <code className="bg-slate-800 px-1 rounded">""</code>. <strong className="text-amber-400">Verified</strong> = only Mysterium-registered consumers with on-chain identity and MYST stake — flag = <code className="bg-slate-800 px-1 rounded">"mysterium"</code>. <strong className="text-slate-400">Off</strong> = wireguard service stopped, no new connections. Existing WireGuard tunnels stay active until consumers disconnect naturally — this is WireGuard kernel behavior, not a toolkit limitation. Individual consumer blocking is not possible at the node API level; use Verified mode to restrict to the Mysterium identity network.</p>
+                  <p className="text-slate-400 mt-2"><strong className="text-slate-300">Consumer payment enforcement</strong> — consumers must have a funded Hermes payment channel (MYST tokens on Polygon) to establish a session. The node enforces this automatically via off-chain promise signing. A consumer without sufficient balance is rejected before any data flows — you cannot lose earnings from unpaid consumers. Probe sessions (Mysterium network quality bots) are exempt and identified automatically by the toolkit.</p>
                 </div>
 
                 <div>
@@ -3454,7 +3461,7 @@ const EarningsEfficiencyChart = ({ backendUrl, authHeaders }) => {
       <button onClick={() => setOpen(o => !o)} className="w-full flex items-center justify-between">
         <div>
           <h3 className="text-sm font-semibold text-slate-300 tracking-wide text-left">Earnings Efficiency</h3>
-          <p className="text-[10px] text-slate-600 mt-0.5 text-left">MYST per GB transferred over time</p>
+          <p className="text-[10px] text-slate-600 mt-0.5 text-left">Total earnings per GB transferred — includes time-based component</p>
         </div>
         <span className="text-xs text-slate-500">{open ? '▲ collapse' : '▼ expand'}</span>
       </button>
@@ -5413,6 +5420,108 @@ const SettlementHistoryCard = ({ backendUrl, authHeaders }) => {
     </div>
   );
 };
+
+const WireguardModeSelector = ({ backendUrl, authHeaders, isRunning, onChanged }) => {
+  const [mode, setMode] = React.useState(null);   // null=loading, 'open'|'verified'|'off'
+  const [busy, setBusy] = React.useState(false);
+  const [status, setStatus] = React.useState(null);
+  const [confirm, setConfirm] = React.useState(null); // mode pending confirmation
+
+  React.useEffect(() => {
+    if (!backendUrl) return;
+    fetch(`${backendUrl}/services/wireguard-mode`, { headers: authHeaders || {} })
+      .then(r => r.json())
+      .then(d => { if (d.success) setMode(d.mode); })
+      .catch(() => {});
+  }, [backendUrl]);
+
+  const applyMode = async (newMode) => {
+    if (busy) return;
+    // Stopping or switching from open→verified needs confirmation
+    if ((newMode === 'off' || newMode === 'verified') && mode !== newMode && confirm !== newMode) {
+      setConfirm(newMode);
+      setTimeout(() => setConfirm(null), 4000);
+      return;
+    }
+    setConfirm(null);
+    setBusy(true);
+    setStatus(null);
+    try {
+      const r = await fetch(`${backendUrl}/services/wireguard-mode`, {
+        method: 'POST',
+        headers: { ...(authHeaders || {}), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: newMode }),
+      });
+      const d = await r.json();
+      if (d.success) {
+        setMode(newMode);
+        setStatus('✓');
+        if (onChanged) onChanged();
+      } else {
+        setStatus(`✗ ${d.error || 'failed'}`);
+      }
+    } catch (e) {
+      setStatus(`✗ ${e.message}`);
+    }
+    setBusy(false);
+    setTimeout(() => setStatus(null), 4000);
+  };
+
+  const modeConfig = {
+    open:     { label: 'Open',     desc: 'Everyone (incl. Mysterium Dark)', color: 'emerald' },
+    verified: { label: 'Verified', desc: 'Mysterium network users only',     color: 'amber'   },
+    off:      { label: 'Off',      desc: 'No connections',                   color: 'slate'   },
+  };
+
+  const btnCls = (m) => {
+    const isActive = mode === m;
+    const isPending = confirm === m;
+    const c = modeConfig[m].color;
+    if (isPending) return `px-3 py-1 text-xs rounded border font-semibold animate-pulse bg-red-500/20 text-red-300 border-red-500/40`;
+    if (isActive) return `px-3 py-1 text-xs rounded border font-semibold bg-${c}-500/20 border-${c}-500/40` + (c === 'emerald' ? ' text-emerald-300' : c === 'amber' ? ' text-amber-300' : ' text-slate-400');
+    return `px-3 py-1 text-xs rounded border font-semibold bg-slate-800/40 border-slate-700 text-slate-500 hover:text-slate-300 hover:border-slate-500 transition`;
+  };
+
+  return (
+    <div className="flex flex-col gap-1.5 px-4 py-3 rounded border bg-slate-800/30 border-slate-700/50">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 flex-1">
+          <span className="font-semibold text-slate-200 text-sm">Public</span>
+          <span className="text-[10px] text-slate-500">(wireguard)</span>
+          {mode && <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
+            mode === 'off' ? 'text-slate-500 border-slate-600 bg-slate-800/40'
+            : mode === 'verified' ? 'text-amber-400 border-amber-500/30 bg-amber-500/10'
+            : 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10'
+          }`}>{mode === 'off' ? 'Stopped' : 'Running'}</span>}
+          {status && <span className={`text-xs ml-1 ${status.startsWith('✓') ? 'text-emerald-400' : 'text-red-400'}`}>{status}</span>}
+        </div>
+        <div className="flex items-center gap-1">
+          {busy && <span className="text-xs text-slate-400 mr-1">…</span>}
+          {(['open','verified','off']).map(m => (
+            <button key={m} onClick={() => applyMode(m)} disabled={busy}
+              className={btnCls(m)} title={confirm === m ? 'Click again to confirm' : modeConfig[m].desc}>
+              {confirm === m ? `Confirm ${modeConfig[m].label}` : modeConfig[m].label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {/* Context line */}
+      <div className="text-[10px] text-slate-600 leading-relaxed">
+        {mode === 'open' && '● Open — all consumers including Mysterium Dark and 3rd party apps. Core flag: wireguard.access-policies = ""'}
+        {mode === 'verified' && '● Verified — Mysterium network consumers only (on-chain registered identities). Core flag: wireguard.access-policies = "mysterium"'}
+        {mode === 'off' && '● Off — no new Public connections. Existing WireGuard tunnels stay active until consumers disconnect naturally.'}
+        {mode === null && 'Loading…'}
+      </div>
+      {confirm && (
+        <div className="text-[10px] text-amber-400 mt-0.5">
+          {confirm === 'off' && '⚠ Stopping Public will block new connections but existing tunnels stay active. Click Confirm Off again to proceed.'}
+          {confirm === 'verified' && '⚠ Switching to Verified will reject new connections from unregistered consumers. Click Confirm Verified again to proceed.'}
+        </div>
+      )}
+    </div>
+  );
+};
+
 
 const ServiceToggleRow = ({ svc, backendUrl, authHeaders, onToggled }) => {
   const [status, setStatus]         = React.useState(null);
