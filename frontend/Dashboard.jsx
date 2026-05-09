@@ -392,6 +392,7 @@ const MysteriumDashboard = () => {
   const [updateInfo, setUpdateInfo]         = useState(null);
   const [nodeUpdateInfo, setNodeUpdateInfo] = useState(null);
   const [nodeUpdateStates, setNodeUpdateStates] = useState({}); // {nodeId: 'idle'|'updating'|'done'|'error'}
+  const [fleetMystPrice, setFleetMystPrice] = useState(null); // {usd, eur} for fleet bar
   const [healthToast, setHealthToast] = useState(null);
   // Track which health level the user already dismissed — don't re-show
   // until the level changes (e.g. warning → critical or back to ok).
@@ -568,6 +569,10 @@ const MysteriumDashboard = () => {
     // Check for available update (cached 1h on backend)
     fetch('/api/update-check').then(r => r.ok ? r.json() : null).then(d => {
       if (d) setUpdateInfo(d);
+    }).catch(() => {});
+    // Fetch MYST price for fleet bar fiat display
+    fetch('/myst-price').then(r => r.ok ? r.json() : null).then(d => {
+      if (d?.usd) setFleetMystPrice(d);
     }).catch(() => {});
     // Check for available Mysterium node update (cached 1h on backend)
     fetch('/api/node-update-check').then(r => r.ok ? r.json() : null).then(d => {
@@ -1362,7 +1367,7 @@ const MysteriumDashboard = () => {
               <span>Net lifetime: <span className="text-slate-300">{((Number(metrics.fleet.fleet_earnings?.lifetime)||0) * 0.80).toFixed(4)} MYST</span></span>
               <span className="text-slate-700">|</span>
               <span>Gross: <span className="text-slate-500">{(Number(metrics.fleet.fleet_earnings?.lifetime)||0).toFixed(4)} MYST</span> <span className="text-slate-700 text-[10px]">(pre 20% fee)</span></span>
-              {mystPrice?.usd && <span>≈ <span className="text-slate-300 font-semibold">${((Number(metrics.fleet.fleet_earnings?.unsettled)||0) * mystPrice.usd).toFixed(2)}</span> / <span className="text-slate-300 font-semibold">€{((Number(metrics.fleet.fleet_earnings?.unsettled)||0) * mystPrice.eur).toFixed(2)}</span></span>}
+              {fleetMystPrice?.usd && <span>≈ <span className="text-slate-300 font-semibold">${((Number(metrics.fleet.fleet_earnings?.unsettled)||0) * fleetMystPrice.usd).toFixed(2)}</span> / <span className="text-slate-300 font-semibold">€{((Number(metrics.fleet.fleet_earnings?.unsettled)||0) * fleetMystPrice.eur).toFixed(2)}</span></span>}
               <span>Active sessions: <span className="text-slate-300">{Number(metrics.fleet.fleet_sessions?.active)||0}</span></span>
               <span>Nodes: <span className="text-slate-300">{metrics.fleet.fleet_nodes}</span></span>
             </div>
