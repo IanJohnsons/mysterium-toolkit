@@ -5391,26 +5391,83 @@ def check_node_update():
 @require_auth
 def system_update():
     """Trigger a toolkit self-update: git pull + ./update.sh.
-    Runs detached so the service can restart without killing the response.
-    The toolkit will be unavailable for ~15-30 seconds while update.sh runs.
+    Runs detached with correct HOME and SSH environment so git pull works.
+    Logs output to /tmp/mysterium-toolkit-update.log — readable via GET /system/update/status.
     """
-    import subprocess
+    import subprocess, shutil
     try:
         toolkit_dir = str(Path(__file__).parent.parent)
         update_script = str(Path(toolkit_dir) / 'update.sh')
-        # Sleep 1s so the HTTP response can complete before the service restarts
-        cmd = f'sleep 1 && cd {toolkit_dir} && sudo bash {update_script}'
+        log_file = '/tmp/mysterium-toolkit-update.log'
+
+        # Build correct environment for the subprocess
+        env = os.environ.copy()
+
+        # Determine real HOME — needed for SSH keys and git config
+        real_home = env.get('HOME', '')
+        if not real_home or real_home == '/':
+            try:
+                import pwd
+                real_home = pwd.getpwuid(os.getuid()).pw_dir
+            except Exception:
+                real_home = '/root' if os.getuid() == 0 else f'/home/{os.environ.get("USER", "root")}'
+        env['HOME'] = real_home
+
+        # Find SSH key for github — check common locations
+        ssh_key = None
+        for candidate in [
+            f'{real_home}/.ssh/github_key',
+            f'{real_home}/.ssh/id_ed25519',
+            f'{real_home}/.ssh/id_rsa',
+        ]:
+            if Path(candidate).exists():
+                ssh_key = candidate
+                break
+
+        if ssh_key:
+            env['GIT_SSH_COMMAND'] = f'ssh -i {ssh_key} -o StrictHostKeyChecking=no -o BatchMode=yes'
+            logger.info(f"system/update: using SSH key {ssh_key}")
+        else:
+            logger.warning("system/update: no SSH key found — git pull may fail if remote is SSH")
+
+        # Ensure PATH includes common binary locations
+        env['PATH'] = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:' + env.get('PATH', '')
+
+        cmd = f'sleep 1 && cd {toolkit_dir} && sudo bash {update_script} >> {log_file} 2>&1'
+        with open(log_file, 'w') as lf:
+            lf.write(f'[toolkit] Update triggered at {time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())}\n')
+
         subprocess.Popen(
             ['bash', '-c', cmd],
+            env=env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
-        logger.info("system/update: update triggered, service will restart shortly")
-        return jsonify({'success': True, 'message': 'Update started — toolkit will restart in ~15 seconds'}), 200
+        logger.info("system/update: update process launched")
+        return jsonify({'success': True, 'message': 'Update started — check /system/update/status for progress'}), 200
     except Exception as e:
         logger.error(f"system/update error: {e}")
         return jsonify({'success': False, 'error': str(e)}), 200
+
+
+@app.route('/system/update/status', methods=['GET'])
+@require_auth
+def system_update_status():
+    """Return last lines of the update log so the UI can show progress."""
+    try:
+        log_file = Path('/tmp/mysterium-toolkit-update.log')
+        if not log_file.exists():
+            return jsonify({'log': 'No update log found.', 'done': True}), 200
+        content = log_file.read_text(errors='replace')
+        lines = content.strip().split('\n')
+        # Return last 30 lines
+        recent = '\n'.join(lines[-30:])
+        # Detect if done (restart line or error)
+        done = any(x in content for x in ['✓ Backend restarted', 'failed to restart', 'git pull failed', '✓ Done'])
+        return jsonify({'log': recent, 'done': done}), 200
+    except Exception as e:
+        return jsonify({'log': str(e), 'done': True}), 200
 def health():
     """Health check - no auth required"""
     with metrics_lock:
@@ -6002,7 +6059,7 @@ def fleet_node_proxy(node_id, endpoint):
         'data/stats', 'data/delete', 'data/retention',
         'data/quality/history', 'data/system/history',
         'analytics/service-split', 'analytics/earnings-efficiency',
-        'system/update', 'api/update-check',
+        'system/update', 'system/update/status', 'api/update-check',
         'services/wireguard-mode',
     }
     endpoint_base = endpoint.split('?')[0]

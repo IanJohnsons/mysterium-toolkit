@@ -1323,16 +1323,13 @@ const MysteriumDashboard = () => {
                 {updateInfo?.update_available && (
                   <button
                     onClick={async () => {
-                      const ids = ['local', ...fleetNodes.map(n => n.id)];
+                      const ids = fleetNodes.map(n => n.id);
                       for (const id of ids) {
                         setNodeUpdateStates(s => ({ ...s, [id]: 'updating' }));
                       }
-                      // Update all nodes in parallel
                       await Promise.all(ids.map(async id => {
                         try {
-                          const url = id === 'local'
-                            ? `${backendUrlRef.current}/system/update`
-                            : `${backendUrlRef.current}/fleet/node/${encodeURIComponent(id)}/proxy/system/update`;
+                          const url = `${backendUrlRef.current}/fleet/node/${encodeURIComponent(id)}/proxy/system/update`;
                           const r = await fetch(url, { method: 'POST', headers: authHeaderRef.current || {} });
                           const d = await r.json();
                           setNodeUpdateStates(s => ({ ...s, [id]: d.success ? 'done' : 'error' }));
