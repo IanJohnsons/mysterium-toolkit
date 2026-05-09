@@ -1358,7 +1358,9 @@ const MysteriumDashboard = () => {
             {/* Fleet aggregate bar */}
             <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-slate-500 mb-8 pb-4 border-b border-slate-800">
               <span>Unsettled: <span className="text-emerald-400 font-semibold">{(Number(metrics.fleet.fleet_earnings?.unsettled)||0).toFixed(4)} MYST</span></span>
-              <span>Lifetime: <span className="text-slate-300">{(Number(metrics.fleet.fleet_earnings?.lifetime)||0).toFixed(4)} MYST</span></span>
+              <span>In-system: <span className="text-cyan-400/80 font-semibold">{((Number(metrics.fleet.fleet_earnings?.unsettled)||0) + (Number(metrics.fleet.fleet_earnings?.balance)||0)).toFixed(4)} MYST</span></span>
+              <span>Net lifetime: <span className="text-slate-300">{((Number(metrics.fleet.fleet_earnings?.lifetime)||0) * 0.80).toFixed(4)} MYST</span></span>
+              {mystPrice?.usd && <span>≈ <span className="text-slate-300 font-semibold">${((Number(metrics.fleet.fleet_earnings?.unsettled)||0) * mystPrice.usd).toFixed(2)}</span> / <span className="text-slate-300 font-semibold">€{((Number(metrics.fleet.fleet_earnings?.unsettled)||0) * mystPrice.eur).toFixed(2)}</span></span>}
               <span>Active sessions: <span className="text-slate-300">{Number(metrics.fleet.fleet_sessions?.active)||0}</span></span>
               <span>Nodes: <span className="text-slate-300">{metrics.fleet.fleet_nodes}</span></span>
             </div>
@@ -5151,7 +5153,8 @@ const EarningsCard = ({ earnings, backendUrl, authHeaders }) => {
   const isTracked = earningsSource === 'delta';
   const isRateLimited = earningsSource === 'rate_limited';
   const isBuilding = earningsSource === 'building' || earningsSource === 'sessions';
-  const displayUnsettled = safeEarnings.unsettled > 0 ? safeEarnings.unsettled : safeEarnings.session_total;
+  const displayUnsettled = safeEarnings.unsettled;
+  const showSessionFallback = safeEarnings.unsettled <= 0 && safeEarnings.session_total > 0;
 
   const fmtEarning = (val) => val != null ? val.toFixed(4) : '—';
   const earningLabel = (val) => val != null
@@ -5179,10 +5182,10 @@ const EarningsCard = ({ earnings, backendUrl, authHeaders }) => {
         </button>
       </div>
       <div className="text-4xl font-bold text-emerald-400 mb-1">
-        {displayUnsettled.toFixed(4)} <span className="text-lg text-emerald-400/60">MYST</span>
-        {safeEarnings.unsettled <= 0 && safeEarnings.session_total > 0 && (
-          <span className="text-xs text-emerald-400/60 ml-2">(from session tokens)</span>
-        )}
+        {showSessionFallback
+          ? <span>{safeEarnings.session_total.toFixed(4)} <span className="text-lg text-emerald-400/60">MYST</span><span className="text-xs text-emerald-400/50 ml-2">(session tokens — TequilAPI settling)</span></span>
+          : <span>{displayUnsettled.toFixed(4)} <span className="text-lg text-emerald-400/60">MYST</span></span>
+        }
       </div>
       {/* Fiat value of unsettled + live token price */}
       <div className="flex items-center gap-3 mb-3 text-xs">
