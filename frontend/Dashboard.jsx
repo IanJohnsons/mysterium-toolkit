@@ -1444,8 +1444,9 @@ const MysteriumDashboard = () => {
                         )}
                         {n.earnings?.daily != null && (n.node_quality?.uptime_24h_local ?? n.node_quality?.uptime_24h_net) > 0 && (() => {
                           const up = (n.node_quality?.uptime_24h_local ?? n.node_quality?.uptime_24h_net) / 100;
+                          if (up >= 1.0) return null; // same as Today earnings — not useful to show
                           const eff = Number(n.earnings.daily) / up;
-                          return <span className="text-slate-500" title="MYST/day normalized for uptime">{eff.toFixed(4)} eff</span>;
+                          return <span className="text-slate-500" title="Estimated daily earnings at 100% uptime">{eff.toFixed(4)} proj/day</span>;
                         })()}
                       </div>
                       {n.error && <div className="text-red-400/80 text-[10px]">⚠ {n.error}</div>}
