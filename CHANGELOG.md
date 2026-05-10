@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.41] - 2026-05-10
+### Fixed
+- `update.sh`: replaced `grep -oP` with portable `awk` for PID extraction from ss output — grep PCRE not available on all Debian systems causing port 5000 kill to silently fail
+
+---
+
 ## [1.1.40] - 2026-05-10
 ### Fixed
 - Consumer ID popup modal restored — copy works over HTTP via execCommand fallback

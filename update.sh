@@ -237,9 +237,9 @@ echo
 echo -e "  Restarting backend..."
 $SUDO systemctl stop mysterium-toolkit 2>/dev/null || true
 sleep 1
-# Kill process on port 5000 by PID only — avoids self-matching with pkill -f
-_pid_on_5000=$(ss -tlnp 2>/dev/null | grep ':5000 ' | grep -oP 'pid=\K[0-9]+' | head -1 || true)
-if [ -n "$_pid_on_5000" ]; then
+# Kill process on port 5000 — use awk instead of grep -oP for portability
+_pid_on_5000=$(ss -tlnp 2>/dev/null | grep ':5000 ' | awk -F'pid=' '{print $2}' | awk -F',' '{print $1}' | head -1 || true)
+if [ -n "$_pid_on_5000" ] && [ "$_pid_on_5000" -gt 0 ] 2>/dev/null; then
     kill -9 "$_pid_on_5000" 2>/dev/null || true
 fi
 sleep 2
