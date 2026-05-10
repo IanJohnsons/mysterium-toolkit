@@ -357,6 +357,30 @@ const MobileSortBar = ({ state, setState, keys }) => (
   </div>
 );
 
+// Auto-retry component shown when backend is unreachable (e.g. during update)
+const UpdateWaiter = ({ onBack }) => {
+  const [secs, setSecs] = React.useState(10);
+  React.useEffect(() => {
+    const iv = setInterval(() => {
+      setSecs(s => {
+        if (s <= 1) {
+          // Try to reload the page — backend may be back
+          fetch('/api/version').then(() => window.location.reload()).catch(() => {});
+          return 10;
+        }
+        return s - 1;
+      });
+    }, 1000);
+    return () => clearInterval(iv);
+  }, []);
+  return (
+    <div className="flex flex-col items-center gap-3">
+      <p className="text-xs text-slate-600">Auto-retry in {secs}s…</p>
+      <button onClick={onBack} className="text-xs text-slate-500 underline">Try now</button>
+    </div>
+  );
+};
+
 const MysteriumDashboard = () => {
   // ============ STATE ============
   const [setupMode, setSetupMode] = useState('loading'); // loading | config | connected | error
@@ -899,12 +923,30 @@ const MysteriumDashboard = () => {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 text-white font-['SF_Mono',monospace] flex items-center justify-center p-6">
         <div className="max-w-md text-center">
-          <div className="inline-block p-4 rounded-lg bg-red-500/10 border border-red-500/30 mb-6">
-            <AlertCircle className="w-8 h-8 text-red-400" />
-          </div>
-          <h1 className="text-2xl font-bold mb-4">
-            {connectionError ? 'Cannot Connect to Backend' : 'Setup Required'}
-          </h1>
+          {/* Detect if this looks like an update restart (backend was reachable before) */}
+          {connectionError && connectionError.includes('connect') ? (
+            <>
+              <div className="inline-block p-4 rounded-lg bg-amber-500/10 border border-amber-500/30 mb-6">
+                <svg className="w-8 h-8 text-amber-400 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+                </svg>
+              </div>
+              <h1 className="text-2xl font-bold mb-3 text-amber-300">Update in progress…</h1>
+              <p className="text-sm text-slate-400 mb-4">The toolkit is restarting after an update. This takes 1–7 minutes depending on your system. The page will reload automatically when the backend is back.</p>
+              <div className="bg-slate-900/60 border border-amber-500/20 rounded p-3 mb-5 text-left text-xs text-slate-500">
+                If this message persists more than 10 minutes, run: <code className="text-amber-400">systemctl start mysterium-toolkit</code>
+              </div>
+              <UpdateWaiter onBack={() => { setSetupMode('loading'); setConnectionError(null); loadConfig(); }} />
+            </>
+          ) : (
+            <>
+              <div className="inline-block p-4 rounded-lg bg-red-500/10 border border-red-500/30 mb-6">
+                <AlertCircle className="w-8 h-8 text-red-400" />
+              </div>
+              <h1 className="text-2xl font-bold mb-4">
+                {connectionError ? 'Cannot Connect to Backend' : 'Setup Required'}
+              </h1>
           {connectionError ? (
             <>
               <div className="bg-slate-900/60 border border-red-500/20 rounded p-3 mb-5 text-left">
@@ -940,6 +982,8 @@ const MysteriumDashboard = () => {
               >
                 Retry
               </button>
+            </>
+          )}
             </>
           )}
         </div>

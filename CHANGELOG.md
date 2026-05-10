@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.27] - 2026-05-10
+### Added
+- Update-in-progress screen: when backend is unreachable during an update, dashboard shows "Update in progress…" with spinner and auto-retry every 10 seconds instead of a generic error. Page reloads automatically when backend comes back.
+
+---
+
 ## [1.1.26] - 2026-05-10
 ### Fixed
 - `system/update`: update log moved from `/tmp/mysterium-toolkit-update.log` to `logs/update.log` — `/tmp/` files become root-owned when toolkit runs as root, causing Permission denied for all 32+ users who may have this issue
