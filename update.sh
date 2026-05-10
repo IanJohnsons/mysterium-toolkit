@@ -196,7 +196,6 @@ Type=simple
 User=$_REAL_USER
 WorkingDirectory=$TOOLKIT_DIR
 ExecStartPre=/bin/bash -c 'mkdir -p $TOOLKIT_DIR/logs && touch $TOOLKIT_DIR/logs/backend.log'
-ExecStartPre=/bin/bash -c 'pkill -9 -f backend/app.py 2>/dev/null; sleep 1; exit 0'
 ExecStart=$_VENV_PYTHON backend/app.py
 Restart=on-failure
 RestartSec=10

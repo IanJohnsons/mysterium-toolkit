@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.37] - 2026-05-10
+### Fixed
+- Removed `ExecStartPre pkill` from service file — pkill matched its own bash process (command line contained backend/app.py as argument) causing SIGKILL on itself and service start failure
+
+---
+
 ## [1.1.36] - 2026-05-10
 ### Fixed
 - Service file ExecStartPre: removed ss/pid parsing that caused bash to execute commands during heredoc expansion — replaced with simple `pkill -9 -f backend/app.py` which is safe in unquoted heredoc
