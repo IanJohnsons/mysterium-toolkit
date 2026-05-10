@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.31] - 2026-05-10
+### Fixed
+- `update.sh`: kill leftover process on port 5000 after systemctl stop — prevents "Address already in use" crash when old process hasn't fully stopped yet
+
+---
+
 ## [1.1.30] - 2026-05-10
 ### Added
 - Settle History: **Network Rewards** section — incoming MYST transfers not from Hermes (MystNodes monthly rewards, referrals, other sources) detected from Polygon transaction history. Accurate even when wallet is empty. Shows per-transaction with date, amount, sender and Polygonscan link.

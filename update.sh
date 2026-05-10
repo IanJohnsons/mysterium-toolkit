@@ -231,6 +231,13 @@ fi
 echo
 echo -e "  Restarting backend..."
 $SUDO systemctl stop mysterium-toolkit 2>/dev/null || true
+# Kill any leftover process on port 5000
+sleep 2
+if command -v fuser >/dev/null 2>&1; then
+    fuser -k 5000/tcp 2>/dev/null || true
+else
+    pkill -f "backend/app.py" 2>/dev/null || true
+fi
 sleep 2
 $SUDO systemctl reset-failed mysterium-toolkit 2>/dev/null || true
 $SUDO systemctl start mysterium-toolkit
