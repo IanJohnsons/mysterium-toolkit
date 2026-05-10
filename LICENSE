@@ -1,44 +1,22 @@
+GNU AFFERO GENERAL PUBLIC LICENSE
+Version 3, 19 November 2007
+
 Mysterium Node Toolkit
-Copyright (c) 2026 Ian Johnsons
-All rights reserved.
+Copyright (C) 2026 Ian Johnsons
 
-This work is licensed under the Creative Commons
-Attribution-NonCommercial-ShareAlike 4.0 International License.
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
-You are free to:
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
 
-  Share — copy and redistribute the material in any medium or format
-  Adapt — remix, transform, and build upon the material
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-Under the following terms:
+---
 
-  Attribution — You must give appropriate credit to the original author
-  (Ian Johnsons), provide a link to this license, and indicate if changes
-  were made. You may do so in any reasonable manner, but not in any way
-  that suggests the licensor endorses you or your use.
-
-  NonCommercial — You may not use the material for commercial purposes.
-  This toolkit is free and open source and must remain so.
-
-  ShareAlike — If you remix, transform, or build upon the material, you
-  must distribute your contributions under the same license.
-
-No additional restrictions — You may not apply legal terms or technological
-measures that legally restrict others from doing anything the license permits.
-
-NOTICES:
-
-  Original author: Ian Johnsons
-  Project: Mysterium Node Toolkit
-  Contact: Mysterium Network Telegram, X (Twitter)
-  Repository: GitHub (download only via git clone or zip)
-
-  If you redistribute this toolkit or derivatives, you must credit
-  "Ian Johnsons" as the original author prominently in your documentation.
-
-  This toolkit is provided "as is" without warranty of any kind, express
-  or implied. The author is not responsible for any damages arising from
-  the use of this software.
-
-To view a copy of this license, visit:
-https://creativecommons.org/licenses/by-nc-sa/4.0/
+Full license text: https://www.gnu.org/licenses/agpl-3.0.txt

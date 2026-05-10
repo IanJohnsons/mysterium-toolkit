@@ -5,6 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.28] - 2026-05-10
+### Fixed
+- Wireguard mode read: config response uses nested `data.wireguard.access-policies` — was reading flat key, always returned empty → always showed Open
+- Wireguard mode write: POST /config returns 404 for nested keys — now uses `myst config set wireguard.access-policies` CLI subprocess
+- TypeError: toFixed() on undefined — all session earnings_myst and total_earnings calls now null-protected
+### Changed
+- License changed from CC BY-NC-SA 4.0 to AGPL-3.0 — correct open source software license that prevents commercial use and requires modifications to be open source
+
+---
+
 ## [1.1.27] - 2026-05-10
 ### Added
 - Update-in-progress screen: when backend is unreachable during an update, dashboard shows "Update in progress…" with spinner and auto-retry every 10 seconds instead of a generic error. Page reloads automatically when backend comes back.

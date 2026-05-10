@@ -7087,8 +7087,11 @@ def get_wireguard_mode():
                 cr = requests.get(f'{node_url}/config', headers=headers, timeout=5)
                 if cr.status_code == 200:
                     cfg = cr.json()
+                    # Config response uses nested structure: data.wireguard.access-policies
                     access_policy = (
-                        cfg.get('data', {}).get('wireguard.access-policies')
+                        cfg.get('data', {}).get('wireguard', {}).get('access-policies')
+                        or cfg.get('data', {}).get('wireguard.access-policies')
+                        or cfg.get('userConfig', {}).get('wireguard', {}).get('access-policies')
                         or cfg.get('userConfig', {}).get('wireguard.access-policies')
                         or ''
                     )
@@ -7148,17 +7151,29 @@ def set_wireguard_mode():
                         dr = requests.delete(f'{node_url}/services/{wg_id}', headers=headers, timeout=10)
                         if dr.status_code not in (200, 202, 204):
                             return jsonify({'success': False, 'error': f'Stop failed: HTTP {dr.status_code}'}), 200
-                    requests.post(f'{node_url}/config', headers=headers,
-                                  json={'data': {'wireguard.access-policies': ''}}, timeout=5)
+                    # Clear access-policies via myst CLI (POST /config returns 404 for nested keys)
+                    try:
+                        import subprocess as _sp
+                        _sp.run(['myst', 'config', 'set', 'wireguard.access-policies', ''],
+                                timeout=10, capture_output=True)
+                    except Exception:
+                        pass
                     return jsonify({'success': True, 'mode': 'off',
                                     'message': 'Public service stopped. Existing tunnels persist until natural disconnect.'}), 200
 
-                # open / verified: set config, cycle service (stop+start) so
-                # wireguard.access-policies is picked up by the new proposal.
-                # Existing WireGuard kernel tunnels persist — only new connections affected.
+                # open / verified: set config via myst CLI (POST /config returns 404 for nested keys)
+                # then cycle the wireguard service so new access-policies takes effect
                 policy_value = 'mysterium' if mode == 'verified' else ''
-                requests.post(f'{node_url}/config', headers=headers,
-                              json={'data': {'wireguard.access-policies': policy_value}}, timeout=5)
+                try:
+                    import subprocess as _sp
+                    result = _sp.run(
+                        ['myst', 'config', 'set', 'wireguard.access-policies', policy_value],
+                        timeout=10, capture_output=True, text=True
+                    )
+                    if result.returncode != 0:
+                        logger.warning(f"myst config set returned {result.returncode}: {result.stderr}")
+                except Exception as e:
+                    logger.warning(f"myst config set failed: {e}")
 
                 if wg_running and wg_id:
                     requests.delete(f'{node_url}/services/{wg_id}', headers=headers, timeout=10)

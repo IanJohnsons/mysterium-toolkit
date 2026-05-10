@@ -1498,7 +1498,7 @@ const MysteriumDashboard = () => {
                       <div className="flex gap-3 text-[10px] mt-0.5">
                         {n.earnings?.daily != null && (
                           <span className="text-cyan-400/80">
-                            Today: <span className="font-semibold">{Number(n.earnings.daily).toFixed(4)}</span> MYST
+                            Today: <span className="font-semibold">{Number(Number(n.earnings?.daily||0)).toFixed(4)}</span> MYST
                           </span>
                         )}
                         {(n.node_quality?.uptime_24h_local ?? n.node_quality?.uptime_24h_net) != null && (
@@ -1542,7 +1542,7 @@ const MysteriumDashboard = () => {
                   <span className="text-slate-600">⟩</span>
                 </div>
                 <div className="text-xs text-slate-600 tracking-wider">
-                  Mysterium Node Toolkit v{toolkitVersion} — Free &amp; Open Source (CC BY-NC-SA 4.0)
+                  Mysterium Node Toolkit v{toolkitVersion} — Free &amp; Open Source (AGPL-3.0)
                 </div>
               </div>
             </div>
@@ -2184,7 +2184,7 @@ const MysteriumDashboard = () => {
                               <div className="flex items-center justify-between mb-1">
                                 <CopyableId id={s.consumer_id} />
                                 <span className={`text-xs font-semibold ${s.earnings_myst > 0 ? 'text-emerald-400' : 'text-slate-500'}`}>
-                                  {s.earnings_myst > 0 ? `${s.earnings_myst.toFixed(4)} MYST` : '—'}
+                                  {s.earnings_myst > 0 ? `${(s.earnings_myst || 0).toFixed(4)} MYST` : '—'}
                                 </span>
                               </div>
                               <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-400">
@@ -2227,7 +2227,7 @@ const MysteriumDashboard = () => {
                                   : formatDataSize(s.data_in)}
                               </div>
                               <div className="col-span-2 text-emerald-400">{s.earnings_myst > 0
-                                ? s.earnings_myst < 0.00001 ? '< 0.00001 MYST' : `${s.earnings_myst.toFixed(6)} MYST`
+                                ? s.earnings_myst < 0.00001 ? '< 0.00001 MYST' : `${(s.earnings_myst || 0).toFixed(6)} MYST`
                                 : '—'}</div>
                             </div>
                           ))}
@@ -2267,7 +2267,7 @@ const MysteriumDashboard = () => {
                               <CopyableId id={s.consumer_id} />
                               <span className={`text-xs font-semibold ${s.is_paid ? 'text-emerald-400' : 'text-slate-500'}`}>
                                 {s.is_paid
-                                  ? s.earnings_myst < 0.00001 ? '< 0.00001 MYST' : `${s.earnings_myst.toFixed(6)} MYST`
+                                  ? s.earnings_myst < 0.00001 ? '< 0.00001 MYST' : `${(s.earnings_myst || 0).toFixed(6)} MYST`
                                   : '—'}
                               </span>
                             </div>
@@ -2315,7 +2315,7 @@ const MysteriumDashboard = () => {
                               {session.is_paid
                                 ? session.earnings_myst < 0.00001
                                   ? '<0.00001'
-                                  : session.earnings_myst.toFixed(6)
+                                  : (session.earnings_myst || 0).toFixed(6)
                                 : '—'}
                               {session.is_paid && session.data_total > 5 && (
                                 <div className="text-[9px] text-slate-500 font-normal" title="Total earnings per GB transferred (includes time-based component — not a pure data price)">
@@ -2384,7 +2384,7 @@ const MysteriumDashboard = () => {
                                   <div className="flex items-center justify-between mb-1">
                                     <CopyableId id={s.consumer_id} />
                                     <span className={`text-xs font-semibold ${s.is_paid ? 'text-emerald-400' : 'text-slate-500'}`}>
-                                      {s.is_paid ? `${s.earnings_myst.toFixed(6)} MYST` : '—'}
+                                      {s.is_paid ? `${(s.earnings_myst || 0).toFixed(6)} MYST` : '—'}
                                     </span>
                                   </div>
                                   <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-400">
@@ -2409,7 +2409,7 @@ const MysteriumDashboard = () => {
                                   <div className="col-span-2 text-slate-500 text-xs">{s.started_fmt || '—'}</div>
                                   <div className="col-span-1 text-slate-400">{formatDataSize(s.data_total)}</div>
                                   <div className={`col-span-1 font-semibold text-xs ${s.is_paid ? 'text-emerald-400/80' : 'text-slate-600'}`}>
-                                    {s.is_paid ? s.earnings_myst.toFixed(6) : '—'}
+                                    {s.is_paid ? (s.earnings_myst || 0).toFixed(6) : '—'}
                                     {s.is_paid && s.data_total > 5 && (
                                       <div className="text-[9px] text-slate-500 font-normal" title="Total earnings per GB transferred (includes time-based component — not a pure data price)">
                                         {(s.earnings_myst / (s.data_total / 1024)).toFixed(4)} eff/GB
@@ -2449,7 +2449,7 @@ const MysteriumDashboard = () => {
                     <div className="flex items-center justify-between mb-1">
                       <CopyableId id={c.consumer_id} />
                       <span className={`text-xs font-semibold ${c.total_earnings > 0 ? 'text-emerald-400' : 'text-slate-500'}`}>
-                        {c.total_earnings > 0 ? `${c.total_earnings.toFixed(4)} MYST` : '—'}
+                        {c.total_earnings > 0 ? `${(c.total_earnings || 0).toFixed(4)} MYST` : '—'}
                       </span>
                     </div>
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-400">
@@ -2470,7 +2470,7 @@ const MysteriumDashboard = () => {
                     <div className="col-span-1 text-slate-300">{c.sessions}{c.active_sessions > 0 ? ` (${c.active_sessions} live)` : ''}</div>
                     <div className="col-span-2 text-slate-300">{formatDataSize(c.total_data_mb)}</div>
                     <div className={`col-span-2 font-semibold ${c.total_earnings > 0 ? 'text-emerald-400' : 'text-slate-500'}`}>
-                      {c.total_earnings > 0 ? `${c.total_earnings.toFixed(4)} MYST` : '—'}
+                      {c.total_earnings > 0 ? `${(c.total_earnings || 0).toFixed(4)} MYST` : '—'}
                     </div>
                     <div className="col-span-1">
                       {c.active_sessions > 0 ? <span className="text-emerald-400 text-xs">● live</span> : <span className="text-slate-500 text-xs">○</span>}
@@ -3363,7 +3363,7 @@ const MysteriumDashboard = () => {
                 <span className="text-slate-600">⟩</span>
               </div>
               <div className="text-xs text-slate-600 tracking-wider">
-                Mysterium Node Toolkit v{toolkitVersion} — Free &amp; Open Source (CC BY-NC-SA 4.0)
+                Mysterium Node Toolkit v{toolkitVersion} — Free &amp; Open Source (AGPL-3.0)
               </div>
             </div>
           </div>
@@ -4163,7 +4163,7 @@ const AnalyticsCard = ({ sessions, backendUrl, authHeaders }) => {
                   key={i}
                   label={fmtType(s.service_type)}
                   pct={s.pct_earnings}
-                  value={`${s.sessions} · ${s.earnings_myst.toFixed(4)} MYST`}
+                  value={`${s.sessions} · ${(s.earnings_myst || 0).toFixed(4)} MYST`}
                   hex={svcColor(s.service_type).hex}
                 />
               ))}

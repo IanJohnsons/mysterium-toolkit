@@ -1,11 +1,11 @@
 # Mysterium Node Toolkit
 
-![Version](https://img.shields.io/badge/version-1.1.27-brightgreen) ![License](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Version](https://img.shields.io/badge/version-1.1.28-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 
 A professional monitoring and management dashboard for [Mysterium Network](https://mysterium.network) VPN node operators. Runs fully local on your node machine — no cloud account, no third-party service, no data leaving your server.
 
 **Author:** Ian Johnsons — [github.com/IanJohnsons](https://github.com/IanJohnsons)  
-**License:** CC BY-NC-SA 4.0 — free for personal and community use, not for commercial use, credit the author if redistributed  
+**License:** AGPL-3.0 — free to use and modify, modifications must be open source, not for commercial use without permission  
 **Community:** Mysterium Network Telegram
 
 ---
@@ -1082,4 +1082,4 @@ More wallet options coming in future releases.
 
 ## License
 
-[CC BY-NC-SA 4.0](LICENSE) — Free for personal and community use. Not for commercial use. Credit the author if redistributed or modified.
+[AGPL-3.0](LICENSE) — Free to use and modify. Modifications must be open source. Not for commercial use without permission.
