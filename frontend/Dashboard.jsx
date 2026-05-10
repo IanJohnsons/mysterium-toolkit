@@ -291,9 +291,7 @@ function generateThemeCSS(key) {
 // Unified behaviour — no hidden hover-only icons.
 const CopyableId = ({ id, className = '' }) => {
   const [copied, setCopied] = useState(false);
-  const [open, setOpen] = useState(false);
   if (!id) return <span className={`text-slate-500 font-mono text-xs ${className}`}>—</span>;
-  const short = id.length > 16 ? id.slice(0, 10) + '…' + id.slice(-4) : id;
   const doCopy = (e) => {
     e && e.stopPropagation();
     try { navigator.clipboard.writeText(id); } catch (_) {}
@@ -301,31 +299,11 @@ const CopyableId = ({ id, className = '' }) => {
     setTimeout(() => setCopied(false), 1500);
   };
   return (
-    <>
-      {/* ── Trigger: same on all screen sizes ── */}
-      <button
-        className={`font-mono text-xs text-cyan-300 text-left truncate hover:text-cyan-200 transition-colors ${className}`}
-        onClick={(e) => { e.stopPropagation(); setOpen(true); }}
-        title="Click to view & copy full ID"
-      >{short}</button>
-      {/* ── Overlay: shown on all screen sizes ── */}
-      {open && (
-        <div className="fixed inset-0 z-[300] flex items-center justify-center p-5 bg-black/70 backdrop-blur-sm" onClick={() => setOpen(false)}>
-          <div className="bg-slate-900 border border-slate-700 rounded-xl p-4 w-full max-w-sm shadow-2xl" onClick={e => e.stopPropagation()}>
-            <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1.5">Consumer ID</div>
-            <div className="font-mono text-xs text-cyan-300 break-all leading-relaxed mb-3 select-all">{id}</div>
-            <div className="flex gap-2">
-              <button onClick={doCopy} className="flex-1 py-2 text-xs bg-slate-800 border border-slate-600/40 rounded-lg hover:bg-slate-700 transition font-semibold text-slate-200">
-                {copied ? '✓ Copied!' : '⎘ Copy'}
-              </button>
-              <button onClick={() => setOpen(false)} className="flex-1 py-2 text-xs bg-slate-800 border border-slate-600/40 rounded-lg hover:bg-slate-700 transition text-slate-400">
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </>
+    <span
+      className={`font-mono text-xs text-cyan-300 cursor-pointer hover:text-cyan-200 transition-colors ${className}`}
+      onClick={doCopy}
+      title={copied ? '✓ Copied!' : 'Click to copy'}
+    >{copied ? '✓ Copied' : id}</span>
   );
 };
 
