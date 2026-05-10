@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.42] - 2026-05-10
+### Fixed
+- `update.sh`: fixed restart race condition — backend exits with code 1 on SIGTERM triggering Restart=on-failure after 10s. Update now detects and stops any auto-restart before starting the new version.
+
+---
+
 ## [1.1.41] - 2026-05-10
 ### Fixed
 - `update.sh`: replaced `grep -oP` with portable `awk` for PID extraction from ss output — grep PCRE not available on all Debian systems causing port 5000 kill to silently fail

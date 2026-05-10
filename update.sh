@@ -236,13 +236,25 @@ fi
 echo
 echo -e "  Restarting backend..."
 $SUDO systemctl stop mysterium-toolkit 2>/dev/null || true
-sleep 1
-# Kill process on port 5000 — use awk instead of grep -oP for portability
-_pid_on_5000=$(ss -tlnp 2>/dev/null | grep ':5000 ' | awk -F'pid=' '{print $2}' | awk -F',' '{print $1}' | head -1 || true)
-if [ -n "$_pid_on_5000" ] && [ "$_pid_on_5000" -gt 0 ] 2>/dev/null; then
-    kill -9 "$_pid_on_5000" 2>/dev/null || true
+# Wait and handle auto-restart: backend exits with code 1 on SIGTERM which triggers
+# Restart=on-failure after RestartSec (10s). Detect and stop any auto-restart.
+_wait=0
+while [ $_wait -lt 20 ]; do
+    sleep 1
+    _wait=$((_wait + 1))
+    if systemctl is-active --quiet mysterium-toolkit 2>/dev/null; then
+        $SUDO systemctl stop mysterium-toolkit 2>/dev/null || true
+    fi
+    if ! ss -tlnp 2>/dev/null | grep -q ':5000 '; then
+        break
+    fi
+done
+# Kill any remaining process on port 5000
+_pid=$(ss -tlnp 2>/dev/null | grep ':5000 ' | awk -F'pid=' '{print $2}' | awk -F',' '{print $1}' | head -1 || true)
+if [ -n "$_pid" ] && [ "$_pid" -gt 1 ] 2>/dev/null; then
+    kill -9 "$_pid" 2>/dev/null || true
+    sleep 1
 fi
-sleep 2
 # Wait until port 5000 is actually free (max 15s)
 _port_wait=0
 while ss -tlnp 2>/dev/null | grep -q ':5000 ' && [ $_port_wait -lt 15 ]; do
