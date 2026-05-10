@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.43] - 2026-05-10
+### Fixed
+- Consumer ID copy in all sections including Network probes: moved ConsumerCard and ConsumerRow to module level — inline component definitions caused React to remount on every render, resetting the popup open state immediately
+
+---
+
 ## [1.1.42] - 2026-05-10
 ### Fixed
 - `update.sh`: fixed restart race condition — backend exits with code 1 on SIGTERM triggering Restart=on-failure after 10s. Update now detects and stops any auto-restart before starting the new version.

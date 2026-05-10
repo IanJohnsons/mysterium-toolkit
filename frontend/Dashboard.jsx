@@ -362,6 +362,40 @@ const MobileSortBar = ({ state, setState, keys }) => (
 );
 
 // Auto-retry component shown when backend is unreachable (e.g. during update)
+const ConsumerCard = ({ c }) => (
+  <div className={`p-3 rounded border ${c.active_sessions > 0 ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-slate-900/30 border-slate-700/30'}`}>
+    <div className="flex items-center justify-between mb-1">
+      <CopyableId id={c.consumer_id} />
+      <span className={`text-xs font-semibold ${c.total_earnings > 0 ? 'text-emerald-400' : 'text-slate-500'}`}>
+        {c.total_earnings > 0 ? `${(c.total_earnings || 0).toFixed(4)} MYST` : '—'}
+      </span>
+    </div>
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-400">
+      <span>{c.is_probe ? '🔧' : (countryFlag(c.consumer_country) || '—')}</span>
+      {(c.service_types || []).map(st => <span key={st} className="text-slate-300">{fmtType(st)}</span>)}
+      <span>{c.sessions}{c.active_sessions > 0 ? ` (${c.active_sessions} live)` : ''}</span>
+      <span>{formatDataSize(c.total_data_mb)}</span>
+      {c.active_sessions > 0 ? <span className="text-emerald-400">● connected</span> : <span className="text-slate-500">○ offline</span>}
+    </div>
+  </div>
+);
+
+const ConsumerRow = ({ c }) => (
+  <div className={`grid grid-cols-12 gap-2 text-xs px-3 py-2 rounded border transition ${c.active_sessions > 0 ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-slate-900/30 border-slate-700/30'}`}>
+    <div className="col-span-3 min-w-0"><CopyableId id={c.consumer_id} /></div>
+    <div className="col-span-1 text-sm">{c.is_probe ? '🔧' : (countryFlag(c.consumer_country) || '—')}</div>
+    <div className="col-span-2 text-slate-300 text-xs truncate">{(c.service_types || []).map(t => fmtType(t)).join(', ') || '—'}</div>
+    <div className="col-span-1 text-slate-300">{c.sessions}{c.active_sessions > 0 ? ` (${c.active_sessions} live)` : ''}</div>
+    <div className="col-span-2 text-slate-300">{formatDataSize(c.total_data_mb)}</div>
+    <div className={`col-span-2 font-semibold ${c.total_earnings > 0 ? 'text-emerald-400' : 'text-slate-500'}`}>
+      {c.total_earnings > 0 ? `${(c.total_earnings || 0).toFixed(4)} MYST` : '—'}
+    </div>
+    <div className="col-span-1">
+      {c.active_sessions > 0 ? <span className="text-emerald-400 text-xs">● live</span> : <span className="text-slate-500 text-xs">○</span>}
+    </div>
+  </div>
+);
+
 const UpdateWaiter = ({ onBack }) => {
   const [secs, setSecs] = React.useState(10);
   React.useEffect(() => {
@@ -2448,39 +2482,8 @@ const MysteriumDashboard = () => {
                 const probeCount   = safeNum(metrics.sessions?.probe_consumers || probeList.length);
                 const realCount    = safeNum(metrics.sessions?.unique_consumers || 0) - probeCount;
 
-                const ConsumerCard = ({ c }) => (
-                  <div className={`p-3 rounded border ${c.active_sessions > 0 ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-slate-900/30 border-slate-700/30'}`}>
-                    <div className="flex items-center justify-between mb-1">
-                      <CopyableId id={c.consumer_id} />
-                      <span className={`text-xs font-semibold ${c.total_earnings > 0 ? 'text-emerald-400' : 'text-slate-500'}`}>
-                        {c.total_earnings > 0 ? `${(c.total_earnings || 0).toFixed(4)} MYST` : '—'}
-                      </span>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-400">
-                      <span>{c.is_probe ? '🔧' : (countryFlag(c.consumer_country) || '—')}</span>
-                      {(c.service_types || []).map(st => <span key={st} className="text-slate-300">{fmtType(st)}</span>)}
-                      <span>{c.sessions}{c.active_sessions > 0 ? ` (${c.active_sessions} live)` : ''}</span>
-                      <span>{formatDataSize(c.total_data_mb)}</span>
-                      {c.active_sessions > 0 ? <span className="text-emerald-400">● connected</span> : <span className="text-slate-500">○ offline</span>}
-                    </div>
-                  </div>
-                );
 
-                const ConsumerRow = ({ c }) => (
-                  <div className={`grid grid-cols-12 gap-2 text-xs px-3 py-2 rounded border transition ${c.active_sessions > 0 ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-slate-900/30 border-slate-700/30'}`}>
-                    <div className="col-span-3 min-w-0"><CopyableId id={c.consumer_id} /></div>
-                    <div className="col-span-1 text-sm">{c.is_probe ? '🔧' : (countryFlag(c.consumer_country) || '—')}</div>
-                    <div className="col-span-2 text-slate-300 text-xs truncate">{(c.service_types || []).map(t => fmtType(t)).join(', ') || '—'}</div>
-                    <div className="col-span-1 text-slate-300">{c.sessions}{c.active_sessions > 0 ? ` (${c.active_sessions} live)` : ''}</div>
-                    <div className="col-span-2 text-slate-300">{formatDataSize(c.total_data_mb)}</div>
-                    <div className={`col-span-2 font-semibold ${c.total_earnings > 0 ? 'text-emerald-400' : 'text-slate-500'}`}>
-                      {c.total_earnings > 0 ? `${(c.total_earnings || 0).toFixed(4)} MYST` : '—'}
-                    </div>
-                    <div className="col-span-1">
-                      {c.active_sessions > 0 ? <span className="text-emerald-400 text-xs">● live</span> : <span className="text-slate-500 text-xs">○</span>}
-                    </div>
-                  </div>
-                );
+
 
                 const desktopHeader = (
                   <div className="grid grid-cols-12 gap-2 text-xs text-slate-500 font-semibold uppercase tracking-widest px-3 py-1">
