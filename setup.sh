@@ -1407,6 +1407,7 @@ Description=Mysterium Node Monitoring Toolkit
 After=${_AFTER_DEPS}
 Wants=network-online.target
 StartLimitIntervalSec=0
+StartLimitBurst=0
 
 [Service]
 Type=simple

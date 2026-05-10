@@ -183,11 +183,13 @@ if [ -f "$_SERVICE_FILE" ]; then
     done
     _AFTER_DEPS="network-online.target${_MYST_SVC:+ $_MYST_SVC}"
 
-    sudo tee "$_SERVICE_FILE" > /dev/null << UNIT_EOF
+    $SUDO tee "$_SERVICE_FILE" > /dev/null << UNIT_EOF
 [Unit]
 Description=Mysterium Node Monitoring Toolkit
 After=${_AFTER_DEPS}
 Wants=network-online.target
+StartLimitIntervalSec=0
+StartLimitBurst=0
 
 [Service]
 Type=simple
@@ -197,7 +199,6 @@ ExecStartPre=/bin/bash -c 'mkdir -p $TOOLKIT_DIR/logs && touch $TOOLKIT_DIR/logs
 ExecStart=$_VENV_PYTHON backend/app.py
 Restart=on-failure
 RestartSec=10
-StartLimitIntervalSec=0
 StandardInput=null
 StandardOutput=append:$TOOLKIT_DIR/logs/backend.log
 StandardError=append:$TOOLKIT_DIR/logs/backend.log
@@ -229,26 +230,15 @@ fi
 # ── Restart backend ───────────────────────────────────────────────────────
 echo
 echo -e "  Restarting backend..."
+$SUDO systemctl stop mysterium-toolkit 2>/dev/null || true
+sleep 2
+$SUDO systemctl reset-failed mysterium-toolkit 2>/dev/null || true
+$SUDO systemctl start mysterium-toolkit
+sleep 3
 if systemctl is-active --quiet mysterium-toolkit 2>/dev/null; then
-    $SUDO systemctl stop mysterium-toolkit 2>/dev/null || true
-    sleep 1
-    $SUDO systemctl start mysterium-toolkit
-    sleep 3
-    if systemctl is-active --quiet mysterium-toolkit 2>/dev/null; then
-        echo -e "  ${GREEN}✓ Backend restarted via systemd${NC}"
-    else
-        echo -e "  ${RED}✗ Backend failed to restart — check: sudo journalctl -u mysterium-toolkit -n 20${NC}"
-    fi
+    echo -e "  ${GREEN}✓ Backend restarted via systemd${NC}"
 else
-    pkill -f "backend/app.py" 2>/dev/null || true
-    sleep 1
-    nohup venv/bin/python backend/app.py > logs/backend.log 2>&1 &
-    sleep 3
-    if pgrep -f "backend/app.py" > /dev/null; then
-        echo -e "  ${GREEN}✓ Backend started${NC}"
-    else
-        echo -e "  ${RED}✗ Backend failed to start — check logs/backend.log${NC}"
-    fi
+    echo -e "  ${RED}✗ Backend failed to restart — check: journalctl -u mysterium-toolkit -n 20${NC}"
 fi
 
 echo

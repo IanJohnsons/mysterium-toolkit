@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.29] - 2026-05-10
+### Fixed
+- `update.sh`: restart always uses systemd stop+start — removed nohup fallback that started service outside systemd causing it not to restart on next update
+- `update.sh`: `systemctl reset-failed` added before start to clear rate-limit state
+- Service file: `StartLimitIntervalSec=0` and `StartLimitBurst=0` moved to `[Unit]` section — fixes systemd warning and eliminates restart rate limiting
+- `update.sh`: `sudo tee` → `$SUDO tee` for service file write
+
+---
+
 ## [1.1.28] - 2026-05-10
 ### Fixed
 - Wireguard mode read: config response uses nested `data.wireguard.access-policies` — was reading flat key, always returned empty → always showed Open
