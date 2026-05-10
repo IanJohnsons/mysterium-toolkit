@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.47] - 2026-05-10
+### Fixed
+- Consumer ID copy: added `preventScroll: true` to textarea focus call — browser was scrolling page to top when focusing the temporary copy element
+
+---
+
 ## [1.1.46] - 2026-05-10
 ### Fixed
 - `system/update`: spawn update.sh via `systemd-run --scope` so it runs in its own cgroup, separate from the mysterium-toolkit service cgroup. Previously, update.sh inherited the service cgroup and was killed by `systemctl stop mysterium-toolkit` (KillMode=control-group default), causing the log to stop at "Restarting backend..." every other update. This is the definitive fix for the alternating update failure pattern.

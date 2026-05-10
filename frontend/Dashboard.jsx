@@ -300,7 +300,7 @@ const CopyableId = ({ id, className = '' }) => {
     ta.value = id;
     ta.style.cssText = 'position:fixed;top:-9999px;left:-9999px';
     document.body.appendChild(ta);
-    ta.focus(); ta.select();
+    ta.focus({ preventScroll: true }); ta.select();
     try { document.execCommand('copy'); } catch (_) {}
     document.body.removeChild(ta);
     setCopied(true);
