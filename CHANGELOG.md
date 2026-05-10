@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.48] - 2026-05-10
+### Fixed
+- Consumer ID copy: textarea positioned at top:0 opacity:0 in viewport — prevents browser from scrolling page when focusing copy element
+- Network probes moved to top of consumer list — easier to find and copy
+
+---
+
 ## [1.1.47] - 2026-05-10
 ### Fixed
 - Consumer ID copy: added `preventScroll: true` to textarea focus call — browser was scrolling page to top when focusing the temporary copy element

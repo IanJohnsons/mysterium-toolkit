@@ -298,7 +298,7 @@ const CopyableId = ({ id, className = '' }) => {
     e && e.stopPropagation();
     const ta = document.createElement('textarea');
     ta.value = id;
-    ta.style.cssText = 'position:fixed;top:-9999px;left:-9999px';
+    ta.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none';
     document.body.appendChild(ta);
     ta.focus({ preventScroll: true }); ta.select();
     try { document.execCommand('copy'); } catch (_) {}
@@ -2516,6 +2516,17 @@ const MysteriumDashboard = () => {
                       <span>Sessions: <span className="text-slate-200">{safeNum(metrics.sessions?.total || 0)}</span></span>
                     </div>
 
+                    {probeList.length > 0 && (
+                      <div className="mb-3 p-2 rounded border border-slate-700/40 bg-slate-900/20">
+                        <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1.5 px-1">🔧 Network probes — Mysterium quality monitoring · never pay</div>
+                        <div className="sm:hidden space-y-1.5">
+                          {probeList.map((c, i) => <ConsumerCard key={c.consumer_id || i} c={c} />)}
+                        </div>
+                        <div className="hidden sm:block space-y-1">
+                          {probeList.map((c, i) => <ConsumerRow key={c.consumer_id || i} c={c} />)}
+                        </div>
+                      </div>
+                    )}
                     {realConsumers.length > 0 ? (
                       <>
                         <div className="sm:hidden space-y-2">
@@ -2540,26 +2551,7 @@ const MysteriumDashboard = () => {
                       <div className="text-xs text-slate-500 py-4 text-center">No consumer data available</div>
                     )}
 
-                    {probeList.length > 0 && (
-                      <div className="mt-4 pt-3 border-t border-slate-700/40">
-                        <button onClick={() => setShowProbes(v => !v)}
-                          className="flex items-center gap-2 text-xs text-slate-500 hover:text-slate-300 transition mb-2">
-                          <span>{showProbes ? '▼' : '▶'}</span>
-                          <span className="font-semibold uppercase tracking-wider">🔧 Network probes ({probeList.length})</span>
-                          <span className="text-slate-600 normal-case font-normal">— Mysterium quality monitoring · never pay</span>
-                        </button>
-                        {showProbes && (
-                          <>
-                            <div className="sm:hidden space-y-1.5">
-                              {probeList.map((c, i) => <ConsumerCard key={c.consumer_id || i} c={c} />)}
-                            </div>
-                            <div className="hidden sm:block space-y-1">
-                              {probeList.map((c, i) => <ConsumerRow key={c.consumer_id || i} c={c} />)}
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    )}
+
                   </>
                 );
               })()}
