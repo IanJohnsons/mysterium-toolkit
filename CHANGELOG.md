@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.35] - 2026-05-10
+### Fixed
+- Wireguard mode write: when `myst config set` fails (non-root daemon can't write system config), falls back to writing `/etc/mysterium-node/config.toml` directly via `sudo tee` — fixes verified mode not persisting on laptop/desktop installs
+- Sudoers: added `tee /etc/mysterium-node/config.toml` and `config-mainnet.toml` to NOPASSWD
+
+---
+
 ## [1.1.34] - 2026-05-10
 ### Fixed
 - Service file: added `ExecStartPre` that kills any process on port 5000 before starting — systemd itself guarantees port is free, regardless of what update.sh does. Definitive fix for "Address already in use" after update.

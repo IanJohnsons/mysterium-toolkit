@@ -7154,8 +7154,20 @@ def set_wireguard_mode():
                     # Clear access-policies via myst CLI (POST /config returns 404 for nested keys)
                     try:
                         import subprocess as _sp
-                        _sp.run(['myst', 'config', 'set', 'wireguard.access-policies', ''],
-                                timeout=10, capture_output=True)
+                        _r = _sp.run(['myst', 'config', 'set', 'wireguard.access-policies', ''],
+                                timeout=10, capture_output=True, text=True)
+                        if _r.returncode != 0:
+                            for _cfg_path in ['/etc/mysterium-node/config.toml', '/etc/mysterium-node/config-mainnet.toml']:
+                                try:
+                                    import os as _os, re as _re
+                                    if not _os.path.exists(_cfg_path): continue
+                                    with open(_cfg_path, 'r') as _f:
+                                        _c = _f.read()
+                                    _c = _re.sub(r'^\s*access-policies\s*=.*$', '', _c, flags=_re.MULTILINE)
+                                    _wr = _sp.run(['sudo', '-n', 'tee', _cfg_path],
+                                                  input=_c, capture_output=True, text=True, timeout=5)
+                                    if _wr.returncode == 0: break
+                                except Exception: pass
                     except Exception:
                         pass
                     return jsonify({'success': True, 'mode': 'off',
@@ -7172,6 +7184,46 @@ def set_wireguard_mode():
                     )
                     if result.returncode != 0:
                         logger.warning(f"myst config set returned {result.returncode}: {result.stderr}")
+                        # Fallback: write directly to system config file (needed on non-root installs
+                        # where daemon runs as mysterium-node and cannot write system config itself)
+                        _cfg_paths = [
+                            '/etc/mysterium-node/config.toml',
+                            '/etc/mysterium-node/config-mainnet.toml',
+                        ]
+                        for _cfg_path in _cfg_paths:
+                            try:
+                                import os as _os
+                                if not _os.path.exists(_cfg_path):
+                                    continue
+                                with open(_cfg_path, 'r') as _f:
+                                    _cfg_content = _f.read()
+                                import re as _re
+                                # Remove any existing wireguard.access-policies line
+                                _cfg_content = _re.sub(
+                                    r'^\s*access-policies\s*=.*$', '',
+                                    _cfg_content, flags=_re.MULTILINE
+                                )
+                                # Add wireguard section with access-policies if not present
+                                if '[wireguard]' not in _cfg_content:
+                                    _cfg_content += f'\n[wireguard]\n  access-policies = "{policy_value}"\n'
+                                else:
+                                    # Insert after [wireguard]
+                                    _cfg_content = _re.sub(
+                                        r'(\[wireguard\])',
+                                        f'\\1\n  access-policies = "{policy_value}"',
+                                        _cfg_content, count=1
+                                    )
+                                # Write via sudo tee
+                                _wr = _sp.run(
+                                    ['sudo', '-n', 'tee', _cfg_path],
+                                    input=_cfg_content, capture_output=True,
+                                    text=True, timeout=5
+                                )
+                                if _wr.returncode == 0:
+                                    logger.info(f"Wrote wireguard.access-policies to {_cfg_path} via sudo tee")
+                                    break
+                            except Exception as _e:
+                                logger.debug(f"Config write fallback error for {_cfg_path}: {_e}")
                 except Exception as e:
                     logger.warning(f"myst config set failed: {e}")
 
