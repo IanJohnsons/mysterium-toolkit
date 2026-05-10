@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.36] - 2026-05-10
+### Fixed
+- Service file ExecStartPre: removed ss/pid parsing that caused bash to execute commands during heredoc expansion — replaced with simple `pkill -9 -f backend/app.py` which is safe in unquoted heredoc
+
+---
+
 ## [1.1.35] - 2026-05-10
 ### Fixed
 - Wireguard mode write: when `myst config set` fails (non-root daemon can't write system config), falls back to writing `/etc/mysterium-node/config.toml` directly via `sudo tee` — fixes verified mode not persisting on laptop/desktop installs
