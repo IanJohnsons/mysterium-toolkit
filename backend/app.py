@@ -8790,6 +8790,14 @@ def get_system_history():
 
 
 if __name__ == '__main__':
+    # Handle SIGTERM cleanly (exit code 0) so systemd Restart=on-failure does not trigger.
+    # Without this, Flask exits with code 1 on SIGTERM → Restart=on-failure restarts during update.
+    import signal as _signal
+    def _handle_sigterm(sig, frame):
+        logger.info('Received SIGTERM — shutting down cleanly')
+        raise SystemExit(0)
+    _signal.signal(_signal.SIGTERM, _handle_sigterm)
+
     # Write PID file so start.sh menu can detect running backend
     # regardless of whether it was started manually or via systemd
     try:

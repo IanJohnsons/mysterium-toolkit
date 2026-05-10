@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.44] - 2026-05-10
+### Fixed
+- Backend: SIGTERM handler added — exits with code 0 so systemd `Restart=on-failure` does NOT trigger during updates. This is the definitive fix for the backend not restarting after fleet update.
+
+---
+
 ## [1.1.43] - 2026-05-10
 ### Fixed
 - Consumer ID copy in all sections including Network probes: moved ConsumerCard and ConsumerRow to module level — inline component definitions caused React to remount on every render, resetting the popup open state immediately
