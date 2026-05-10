@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.33] - 2026-05-10
+### Fixed
+- `update.sh`: kill process on port 5000 by PID (from ss output) with SIGKILL — previous approach missed processes started outside systemd
+
+---
+
 ## [1.1.32] - 2026-05-10
 ### Fixed
 - `update.sh`: wait for port 5000 to actually be free before starting (max 15s loop using `ss`) — fixes "Address already in use" crash when old process hasn't fully stopped

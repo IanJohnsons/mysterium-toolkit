@@ -231,10 +231,14 @@ fi
 echo
 echo -e "  Restarting backend..."
 $SUDO systemctl stop mysterium-toolkit 2>/dev/null || true
-sleep 2
-# Kill any leftover process on port 5000
-pkill -f "backend/app.py" 2>/dev/null || true
 sleep 1
+# Kill ANY process on port 5000 — including processes started outside systemd
+_pid_on_5000=$(ss -tlnp 2>/dev/null | grep ':5000 ' | grep -oP 'pid=\K[0-9]+' || true)
+if [ -n "$_pid_on_5000" ]; then
+    kill -9 "$_pid_on_5000" 2>/dev/null || true
+fi
+pkill -9 -f "backend/app.py" 2>/dev/null || true
+sleep 2
 # Wait until port 5000 is actually free (max 15s)
 _port_wait=0
 while ss -tlnp 2>/dev/null | grep -q ':5000 ' && [ $_port_wait -lt 15 ]; do
