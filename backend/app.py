@@ -5349,7 +5349,20 @@ def system_update():
     try:
         toolkit_dir = str(Path(__file__).parent.parent)
         update_script = str(Path(toolkit_dir) / 'update.sh')
-        log_file = '/tmp/mysterium-toolkit-update.log'
+
+        # Always use logs/update.log — always writable by toolkit user, never /tmp
+        logs_dir = Path(toolkit_dir) / 'logs'
+        logs_dir.mkdir(exist_ok=True)
+        log_file = str(logs_dir / 'update.log')
+
+        # Clean up stale /tmp log files left by older versions (may be root-owned)
+        for _stale in ['/tmp/mysterium-toolkit-update.log', '/tmp/myst-toolkit-update.log']:
+            try:
+                _sp = Path(_stale)
+                if _sp.exists() and os.access(_stale, os.W_OK):
+                    _sp.unlink()
+            except Exception:
+                pass
 
         env = os.environ.copy()
         real_home = env.get('HOME', '')
@@ -5406,7 +5419,8 @@ def system_update():
 def system_update_status():
     """Return last lines of the update log so the UI can show progress."""
     try:
-        log_file = Path('/tmp/mysterium-toolkit-update.log')
+        toolkit_dir = str(Path(__file__).parent.parent)
+        log_file = Path(toolkit_dir) / 'logs' / 'update.log'
         if not log_file.exists():
             return jsonify({'log': 'No update log found.', 'done': True}), 200
         content = log_file.read_text(errors='replace')
@@ -8702,6 +8716,22 @@ if __name__ == '__main__':
         _pid_file.write_text(str(os.getpid()))
     except Exception:
         pass
+
+    # Ensure logs/ directory exists
+    try:
+        Path('logs').mkdir(exist_ok=True)
+    except Exception:
+        pass
+
+    # Remove stale /tmp update log if root-owned (left by older toolkit versions)
+    for _stale_log in ['/tmp/mysterium-toolkit-update.log', '/tmp/myst-toolkit-update.log']:
+        try:
+            _sp = Path(_stale_log)
+            if _sp.exists() and os.access(_stale_log, os.W_OK):
+                _sp.unlink()
+                logger.info(f"Removed stale root-owned log: {_stale_log}")
+        except Exception:
+            pass
 
     start_collector()
 

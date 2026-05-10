@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.26] - 2026-05-10
+### Fixed
+- `system/update`: update log moved from `/tmp/mysterium-toolkit-update.log` to `logs/update.log` — `/tmp/` files become root-owned when toolkit runs as root, causing Permission denied for all 32+ users who may have this issue
+- `system/update`: stale `/tmp/` log files from older versions are automatically cleaned up on update
+- `system/update/status`: reads from `logs/update.log` only — no more stale `/tmp/` log confusion
+
+---
+
 ## [1.1.25] - 2026-05-10
 ### Fixed
 - `update.sh`: replaced `systemctl restart` with `systemctl stop` + `systemctl start` — `restart` was not in NOPASSWD sudoers, causing sudo password prompt during fleet update
