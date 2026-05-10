@@ -231,14 +231,16 @@ fi
 echo
 echo -e "  Restarting backend..."
 $SUDO systemctl stop mysterium-toolkit 2>/dev/null || true
+sleep 2
 # Kill any leftover process on port 5000
-sleep 2
-if command -v fuser >/dev/null 2>&1; then
-    fuser -k 5000/tcp 2>/dev/null || true
-else
-    pkill -f "backend/app.py" 2>/dev/null || true
-fi
-sleep 2
+pkill -f "backend/app.py" 2>/dev/null || true
+sleep 1
+# Wait until port 5000 is actually free (max 15s)
+_port_wait=0
+while ss -tlnp 2>/dev/null | grep -q ':5000 ' && [ $_port_wait -lt 15 ]; do
+    sleep 1
+    _port_wait=$((_port_wait + 1))
+done
 $SUDO systemctl reset-failed mysterium-toolkit 2>/dev/null || true
 $SUDO systemctl start mysterium-toolkit
 sleep 3
