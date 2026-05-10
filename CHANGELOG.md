@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.46] - 2026-05-10
+### Fixed
+- `system/update`: spawn update.sh via `systemd-run --scope` so it runs in its own cgroup, separate from the mysterium-toolkit service cgroup. Previously, update.sh inherited the service cgroup and was killed by `systemctl stop mysterium-toolkit` (KillMode=control-group default), causing the log to stop at "Restarting backend..." every other update. This is the definitive fix for the alternating update failure pattern.
+
+---
+
 ## [1.1.45] - 2026-05-10
 ### Fixed
 - Consumer ID copy: `countryFlag` and `formatDataSize` moved to module level alongside ConsumerCard/ConsumerRow — fixes ReferenceError when opening Consumers tab

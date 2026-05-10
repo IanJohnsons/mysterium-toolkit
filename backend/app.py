@@ -5406,9 +5406,25 @@ def system_update():
             # git pull runs as the real user with their SSH key.
             cmd = f'sleep 1 && cd {toolkit_dir} && bash {update_script} >> {log_file} 2>&1'
 
-        subprocess.Popen(['bash', '-c', cmd], env=env,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         start_new_session=True)
+        # Use systemd-run --scope to run update.sh in its own cgroup.
+        # Without this, update.sh inherits the mysterium-toolkit service cgroup.
+        # When systemctl stop mysterium-toolkit is called inside update.sh,
+        # systemd kills ALL processes in the cgroup (KillMode=control-group default),
+        # including update.sh itself — causing the update to abort at the restart step.
+        try:
+            if is_root:
+                launcher = ['systemd-run', '--scope', '-u', 'mysterium-toolkit-update',
+                            'bash', '-c', cmd]
+            else:
+                launcher = ['systemd-run', '--scope', '--user', '-u', 'mysterium-toolkit-update',
+                            'bash', '-c', cmd]
+            subprocess.Popen(launcher, env=env,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            # Fallback if systemd-run is unavailable
+            subprocess.Popen(['bash', '-c', cmd], env=env,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True)
         logger.info(f"system/update: launched ({'root' if is_root else 'non-root git pull+restart'})")
         return jsonify({'success': True, 'message': 'Update started — toolkit will restart shortly'}), 200
     except Exception as e:
