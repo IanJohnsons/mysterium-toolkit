@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.40] - 2026-05-10
+### Fixed
+- Consumer ID popup modal restored — copy works over HTTP via execCommand fallback
+- toFixed() crash fix for cpu_temp, earnings efficiency and other fields with undefined values
+
+---
+
 ## [1.1.39] - 2026-05-10
 ### Fixed
 - Consumer ID display restored to full address — removed truncation and modal popup that was added without request. Click address to copy directly, no modal.

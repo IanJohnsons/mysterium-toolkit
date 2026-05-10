@@ -291,19 +291,45 @@ function generateThemeCSS(key) {
 // Unified behaviour — no hidden hover-only icons.
 const CopyableId = ({ id, className = '' }) => {
   const [copied, setCopied] = useState(false);
+  const [open, setOpen] = useState(false);
   if (!id) return <span className={`text-slate-500 font-mono text-xs ${className}`}>—</span>;
+  const short = id.length > 16 ? id.slice(0, 10) + '…' + id.slice(-4) : id;
   const doCopy = (e) => {
     e && e.stopPropagation();
-    try { navigator.clipboard.writeText(id); } catch (_) {}
+    const ta = document.createElement('textarea');
+    ta.value = id;
+    ta.style.cssText = 'position:fixed;top:-9999px;left:-9999px';
+    document.body.appendChild(ta);
+    ta.focus(); ta.select();
+    try { document.execCommand('copy'); } catch (_) {}
+    document.body.removeChild(ta);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };
   return (
-    <span
-      className={`font-mono text-xs text-cyan-300 cursor-pointer hover:text-cyan-200 transition-colors ${className}`}
-      onClick={doCopy}
-      title={copied ? '✓ Copied!' : 'Click to copy'}
-    >{copied ? '✓ Copied' : id}</span>
+    <>
+      <button
+        className={`font-mono text-xs text-cyan-300 text-left hover:text-cyan-200 transition-colors ${className}`}
+        onClick={(e) => { e.stopPropagation(); setOpen(true); }}
+        title="Click to view & copy full ID"
+      >{short}</button>
+      {open && (
+        <div className="fixed inset-0 z-[300] flex items-center justify-center p-5 bg-black/70 backdrop-blur-sm" onClick={() => setOpen(false)}>
+          <div className="bg-slate-900 border border-slate-700 rounded-xl p-4 w-full max-w-sm shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1.5">Consumer ID</div>
+            <div className="font-mono text-xs text-cyan-300 break-all leading-relaxed mb-3 select-all">{id}</div>
+            <div className="flex gap-2">
+              <button onClick={doCopy} className="flex-1 py-2 text-xs bg-slate-800 border border-slate-600/40 rounded-lg hover:bg-slate-700 transition font-semibold text-slate-200">
+                {copied ? '✓ Copied!' : '⎘ Copy'}
+              </button>
+              <button onClick={() => setOpen(false)} className="flex-1 py-2 text-xs bg-slate-800 border border-slate-600/40 rounded-lg hover:bg-slate-700 transition text-slate-400">
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 };
 
@@ -1488,7 +1514,7 @@ const MysteriumDashboard = () => {
                           const up = (n.node_quality?.uptime_24h_local ?? n.node_quality?.uptime_24h_net) / 100;
                           if (up >= 1.0) return null; // same as Today earnings — not useful to show
                           const eff = Number(n.earnings.daily) / up;
-                          return <span className="text-slate-500" title="Estimated daily earnings at 100% uptime">{eff.toFixed(4)} proj/day</span>;
+                          return <span className="text-slate-500" title="Estimated daily earnings at 100% uptime">{(eff || 0).toFixed(4)} proj/day</span>;
                         })()}
                       </div>
                       {n.error && <div className="text-red-400/80 text-[10px]">⚠ {n.error}</div>}
@@ -2594,7 +2620,7 @@ const MysteriumDashboard = () => {
                     <>
                       {metrics.resources.cpu_temp != null && (
                         <div className={`flex items-center justify-between gap-3 mt-1`}>
-                          <span className={`text-xs font-medium ${cpuTempColor(metrics.resources.cpu_temp)}`}>CPU: {metrics.resources.cpu_temp.toFixed(0)}°C</span>
+                          <span className={`text-xs font-medium ${cpuTempColor(metrics.resources.cpu_temp)}`}>CPU: {(metrics.resources.cpu_temp || 0).toFixed(0)}°C</span>
                           <span className={`text-xs font-medium ${cpuPctColor(safeNum(metrics.resources.cpu))}`}>CPU: {cpuPct}%</span>
                         </div>
                       )}
@@ -3463,7 +3489,7 @@ const ServiceSplitChart = ({ backendUrl, authHeaders }) => {
                   return (
                     <rect key={`${date}-${t}`} x={x} y={yOff} width={barW} height={barH}
                       fill={svcColor(t).hex} opacity="0.8">
-                      <title>{date} · {fmtType(t)}: {val.toFixed(4)} MYST</title>
+                      <title>{date} · {fmtType(t)}: {(val || 0).toFixed(4)} MYST</title>
                     </rect>
                   );
                 });
@@ -5299,7 +5325,7 @@ const EarningsCard = ({ earnings, backendUrl, authHeaders }) => {
 
   const fmtEarning = (val) => val != null ? val.toFixed(4) : '—';
   const earningLabel = (val) => val != null
-    ? <span className="text-emerald-300 font-semibold">{val.toFixed(4)}</span>
+    ? <span className="text-emerald-300 font-semibold">{(val || 0).toFixed(4)}</span>
     : <span className="text-slate-500 font-semibold">— <span className="font-normal text-slate-600 text-[10px]">building</span></span>;
 
   const handleSettle = async () => {
