@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.34] - 2026-05-10
+### Fixed
+- Service file: added `ExecStartPre` that kills any process on port 5000 before starting — systemd itself guarantees port is free, regardless of what update.sh does. Definitive fix for "Address already in use" after update.
+
+---
+
 ## [1.1.33] - 2026-05-10
 ### Fixed
 - `update.sh`: kill process on port 5000 by PID (from ss output) with SIGKILL — previous approach missed processes started outside systemd
