@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.30] - 2026-05-10
+### Added
+- Settle History: **Network Rewards** section — incoming MYST transfers not from Hermes (MystNodes monthly rewards, referrals, other sources) detected from Polygon transaction history. Accurate even when wallet is empty. Shows per-transaction with date, amount, sender and Polygonscan link.
+- Backend: `rewards_txs` and `total_rewards` added to `/settle/history` response — filters on known Hermes contract addresses (chain 1 + chain 2)
+
+---
+
 ## [1.1.29] - 2026-05-10
 ### Fixed
 - `update.sh`: restart always uses systemd stop+start — removed nohup fallback that started service outside systemd causing it not to restart on next update

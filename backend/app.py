@@ -7617,6 +7617,19 @@ def get_settle_history():
 
         total_onchain = round(sum(t['amount_myst'] for t in onchain_txs if t['direction'] == 'in'), 6)
 
+        # Known Hermes contract addresses (chain 1 + chain 2)
+        HERMES_ADDRESSES = {
+            '0x80ed28d84792d8b153bf2f25f0c4b7a1381de4ab',  # Hermes chain 2 (Polygon)
+            '0xa62a2a75949d25e17c6f08a7818e7be97c18a8d2',  # Hermes chain 1 (Ethereum)
+        }
+        # Rewards = incoming transfers NOT from Hermes
+        rewards_txs = [
+            t for t in onchain_txs
+            if t['direction'] == 'in'
+            and t.get('from', '').lower() not in HERMES_ADDRESSES
+        ]
+        total_rewards = round(sum(t['amount_myst'] for t in rewards_txs), 6)
+
         return jsonify({
             'settlements':      settlements,
             'total_settled':    total_settled,
@@ -7624,6 +7637,8 @@ def get_settle_history():
             'onchain_txs':      onchain_txs,
             'total_onchain':    total_onchain,
             'onchain_count':    len(onchain_txs),
+            'rewards_txs':      rewards_txs,
+            'total_rewards':    total_rewards,
             'beneficiary':      beneficiary or '',
             'wallet_balance':   wallet_balance_myst,
             'polygonscan_wallet': f'https://polygonscan.com/token/{MYST_CONTRACT}?a={beneficiary}' if beneficiary else None,

@@ -5487,6 +5487,8 @@ const SettlementHistoryCard = ({ backendUrl, authHeaders }) => {
     : '';
   const polyWalletUrl = data?.polygonscan_wallet;
   const hasData       = data !== null;
+  const rewardsTxs    = data?.rewards_txs || [];
+  const totalRewards  = data?.total_rewards || 0;
 
   return (
     <div className="mb-6 p-4 bg-slate-800/30 border border-slate-700 rounded-lg backdrop-blur">
@@ -5556,6 +5558,33 @@ const SettlementHistoryCard = ({ backendUrl, authHeaders }) => {
           <span>·</span>
           <span>Total: <span className="text-emerald-300 font-semibold">{totalDisplay.toFixed(4)} MYST</span></span>
           <span className="text-slate-700">({txSource})</span>
+        </div>
+      )}
+
+      {/* Network Rewards section */}
+      {rewardsTxs.length > 0 && (
+        <div className="mt-3 mb-2 px-3 py-2.5 rounded border bg-violet-500/5 border-violet-500/20">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-xs font-semibold text-violet-300">Network Rewards</span>
+            <span className="text-xs font-semibold text-violet-300">{totalRewards.toFixed(4)} MYST</span>
+          </div>
+          <p className="text-[10px] text-slate-500 mb-2">
+            Incoming MYST not from Hermes — MystNodes monthly reward pool, referrals, or other sources.
+            Based on Polygon transaction history. Accurate even if wallet was emptied.
+          </p>
+          <div className="space-y-1 max-h-32 overflow-y-auto">
+            {rewardsTxs.map((tx, i) => (
+              <div key={i} className="flex items-center justify-between text-[10px] text-slate-400">
+                <span className="text-slate-600">{tx.date}</span>
+                <span className="text-violet-300 font-semibold">+{tx.amount_myst.toFixed(4)} MYST</span>
+                <span className="text-slate-700 font-mono">{tx.from ? `${tx.from.slice(0,8)}…` : '—'}</span>
+                {tx.polygonscan_url && (
+                  <a href={tx.polygonscan_url} target="_blank" rel="noopener noreferrer"
+                    className="text-slate-600 hover:text-violet-400 transition">↗</a>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
