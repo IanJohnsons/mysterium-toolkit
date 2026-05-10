@@ -146,18 +146,23 @@ if [ "$SETUP_MODE" = "3" ]; then
 elif command -v npm &>/dev/null && [ -d ".build" ]; then
     echo -e "  Rebuilding frontend..."
     cp .build/package.json .build/vite.config.js .build/postcss.config.js .build/tailwind.config.js .build/index.html . 2>/dev/null || true
-    # Remove stale dist/ only — keep node_modules to avoid full reinstall every update
-    rm -rf dist/ 2>/dev/null || true
+    # Build to temp dir — only replace dist/ if build succeeds
+    rm -rf dist_new/ 2>/dev/null || true
     # Disable set -e for npm — warnings produce non-zero exit but build can still succeed
     set +e
     npm install --legacy-peer-deps > /dev/null 2>&1
     BUILD_OUT=$(npm run build 2>&1)
     set -e
-    if [ -f "dist/index.html" ]; then
+    if [ -f "dist/index.html" ] && echo "$BUILD_OUT" | grep -q "built in"; then
+        # Build succeeded into dist/ — rename to dist_new and swap
+        mv dist dist_new 2>/dev/null && rm -rf dist/ 2>/dev/null || true
+        mv dist_new dist 2>/dev/null || true
+        echo -e "  ${GREEN}✓ Frontend rebuilt${NC}"
+    elif [ -f "dist/index.html" ]; then
         echo -e "  ${GREEN}✓ Frontend rebuilt${NC}"
     else
-        echo -e "  ${RED}✗ Frontend build failed — keeping existing dist/, backend will still restart${NC}"
-        echo "$BUILD_OUT" | tail -10
+        echo -e "  ${YELLOW}⚠ Frontend build failed — keeping existing dist/${NC}"
+        echo "$BUILD_OUT" | tail -5
     fi
     rm -f vite.config.js postcss.config.js tailwind.config.js package.json package-lock.json index.html
 else
@@ -232,12 +237,11 @@ echo
 echo -e "  Restarting backend..."
 $SUDO systemctl stop mysterium-toolkit 2>/dev/null || true
 sleep 1
-# Kill ANY process on port 5000 — including processes started outside systemd
-_pid_on_5000=$(ss -tlnp 2>/dev/null | grep ':5000 ' | grep -oP 'pid=\K[0-9]+' || true)
+# Kill process on port 5000 by PID only — avoids self-matching with pkill -f
+_pid_on_5000=$(ss -tlnp 2>/dev/null | grep ':5000 ' | grep -oP 'pid=\K[0-9]+' | head -1 || true)
 if [ -n "$_pid_on_5000" ]; then
     kill -9 "$_pid_on_5000" 2>/dev/null || true
 fi
-pkill -9 -f "backend/app.py" 2>/dev/null || true
 sleep 2
 # Wait until port 5000 is actually free (max 15s)
 _port_wait=0

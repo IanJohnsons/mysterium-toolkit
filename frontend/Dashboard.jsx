@@ -5726,6 +5726,11 @@ const WireguardModeSelector = ({ backendUrl, authHeaders, isRunning, onChanged }
         {mode === 'off' && '● Off — no new Public connections. Existing WireGuard tunnels stay active until consumers disconnect naturally.'}
         {mode === null && 'Loading…'}
       </div>
+      {mode === 'verified' && (
+        <div className="text-[10px] text-amber-400/80 mt-1 leading-relaxed">
+          ⚠ Verified mode blocks Mysterium monitoring agents — node quality metrics (uptime, bandwidth, latency) will show 0% until switched back to Open. This may affect your node ranking and earnings visibility.
+        </div>
+      )}
       {confirm && (
         <div className="text-[10px] text-amber-400 mt-0.5">
           {confirm === 'off' && '⚠ Stopping Public will block new connections but existing tunnels stay active. Click Confirm Off again to proceed.'}

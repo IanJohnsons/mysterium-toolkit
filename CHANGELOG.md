@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.38] - 2026-05-10
+### Fixed
+- `update.sh`: build to temp, only replace dist/ if build succeeds — existing dist/ kept intact on build failure
+- `update.sh`: removed `pkill -f` — uses PID-only kill from ss output to avoid self-matching
+### Added
+- Verified mode warning: explains monitoring agents are blocked and quality metrics will show 0%
+
+---
+
 ## [1.1.37] - 2026-05-10
 ### Fixed
 - Removed `ExecStartPre pkill` from service file — pkill matched its own bash process (command line contained backend/app.py as argument) causing SIGKILL on itself and service start failure
