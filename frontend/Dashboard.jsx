@@ -362,6 +362,21 @@ const MobileSortBar = ({ state, setState, keys }) => (
 );
 
 // Auto-retry component shown when backend is unreachable (e.g. during update)
+const formatDataSize = (mb) => {
+  const v = (mb == null || isNaN(mb)) ? 0 : Number(mb);
+  if (v >= 1024 * 1024) return `${(v / 1024 / 1024).toFixed(2)} TiB`;
+  if (v >= 1024)        return `${(v / 1024).toFixed(2)} GiB`;
+  if (v >= 1)           return `${v.toFixed(1)} MB`;
+  if (v > 0)            return `${(v * 1024).toFixed(0)} KB`;
+  return '0 MB';
+};
+
+const countryFlag = (code) => {
+  if (!code || code.length !== 2) return '';
+  const offset = 127397;
+  return String.fromCodePoint(...[...code.toUpperCase()].map(c => c.charCodeAt(0) + offset));
+};
+
 const ConsumerCard = ({ c }) => (
   <div className={`p-3 rounded border ${c.active_sessions > 0 ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-slate-900/30 border-slate-700/30'}`}>
     <div className="flex items-center justify-between mb-1">
@@ -573,21 +588,7 @@ const MysteriumDashboard = () => {
     return Number.isFinite(n) ? n : fallback;
   };
 
-  const formatDataSize = (mb) => {
-    const v = safeNum(mb);
-    if (v >= 1024 * 1024) return `${(v / 1024 / 1024).toFixed(2)} TiB`;
-    if (v >= 1024)        return `${(v / 1024).toFixed(2)} GiB`;
-    if (v >= 1)           return `${v.toFixed(1)} MB`;
-    if (v > 0)            return `${(v * 1024).toFixed(0)} KB`;
-    return '0 MB';
-  };
-
-  // Convert 2-letter country code to flag emoji
-  const countryFlag = (code) => {
-    if (!code || code.length !== 2) return '';
-    const offset = 127397;
-    return String.fromCodePoint(...[...code.toUpperCase()].map(c => c.charCodeAt(0) + offset));
-  };
+  // formatDataSize and countryFlag moved to module level
 
   // Format speed in MB/s with auto-scale + bits
   const formatSpeed = (mbps) => {
