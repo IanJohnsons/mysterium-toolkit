@@ -5924,37 +5924,44 @@ def fail2ban_get_jails():
         if not shutil.which('fail2ban-client'):
             return jsonify({'ok': False, 'error': 'fail2ban not installed'}), 200
         jails = _f2b_all_jails()
-        # Enrich with live ban data from fail2ban-client
+        # Check if running
+        running = False
+        try:
+            rp = subprocess.run(['fail2ban-client', 'ping'], capture_output=True, timeout=3, text=True)
+            running = rp.returncode == 0 and 'pong' in rp.stdout.lower()
+        except Exception:
+            pass
+        # Enrich with live ban data if running
+        # Enrich with live ban data if running
         for jail in jails:
-            try:
-                r = subprocess.run(
-                    ['fail2ban-client', 'status', jail['name']],
-                    capture_output=True, timeout=5, text=True
-                )
-                if r.returncode == 0:
-                    active_bans, total_bans, banned_ips = 0, 0, []
-                    for line in r.stdout.splitlines():
-                        if 'Currently banned:' in line:
-                            try: active_bans = int(line.split(':', 1)[1].strip())
-                            except: pass
-                        elif 'Total banned:' in line:
-                            try: total_bans = int(line.split(':', 1)[1].strip())
-                            except: pass
-                        elif 'Banned IP list:' in line:
-                            ips = line.split(':', 1)[1].strip()
-                            banned_ips = [ip.strip() for ip in ips.split() if ip.strip()]
-                    jail['active_bans'] = active_bans
-                    jail['total_bans'] = total_bans
-                    jail['banned_ips'] = banned_ips[:20]
-                else:
-                    jail['active_bans'] = 0
-                    jail['total_bans'] = 0
-                    jail['banned_ips'] = []
-            except Exception:
-                jail['active_bans'] = 0
-                jail['total_bans'] = 0
-                jail['banned_ips'] = []
-        return jsonify({'ok': True, 'jails': jails}), 200
+            if running:
+                try:
+                    r = subprocess.run(
+                        ['fail2ban-client', 'status', jail['name']],
+                        capture_output=True, timeout=5, text=True
+                    )
+                    if r.returncode == 0:
+                        active_bans, total_bans, banned_ips = 0, 0, []
+                        for line in r.stdout.splitlines():
+                            if 'Currently banned:' in line:
+                                try: active_bans = int(line.split(':', 1)[1].strip())
+                                except: pass
+                            elif 'Total banned:' in line:
+                                try: total_bans = int(line.split(':', 1)[1].strip())
+                                except: pass
+                            elif 'Banned IP list:' in line:
+                                ips = line.split(':', 1)[1].strip()
+                                banned_ips = [ip.strip() for ip in ips.split() if ip.strip()]
+                        jail['active_bans'] = active_bans
+                        jail['total_bans'] = total_bans
+                        jail['banned_ips'] = banned_ips[:20]
+                    else:
+                        jail['active_bans'] = 0; jail['total_bans'] = 0; jail['banned_ips'] = []
+                except Exception:
+                    jail['active_bans'] = 0; jail['total_bans'] = 0; jail['banned_ips'] = []
+            else:
+                jail['active_bans'] = 0; jail['total_bans'] = 0; jail['banned_ips'] = []
+        return jsonify({'ok': True, 'jails': jails, 'running': running}), 200
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 200
 
@@ -6074,6 +6081,53 @@ def fail2ban_reload():
     try:
         ok = _f2b_reload()
         return jsonify({'ok': ok}), 200
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 200
+
+
+@app.route('/firewall/fail2ban/reload', methods=['POST'])
+@require_auth
+def fail2ban_reload():
+    """Reload fail2ban configuration."""
+    try:
+        ok = _f2b_reload()
+        return jsonify({'ok': ok, 'message': 'fail2ban reloaded' if ok else 'reload failed'}), 200
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 200
+
+
+@app.route('/firewall/fail2ban/start', methods=['POST'])
+@require_auth
+def fail2ban_start():
+    """Start fail2ban service."""
+    try:
+        for prefix in [[], ['sudo', '-n']]:
+            try:
+                r = subprocess.run(prefix + ['systemctl', 'start', 'fail2ban'],
+                                   capture_output=True, timeout=15, text=True)
+                if r.returncode == 0:
+                    return jsonify({'ok': True, 'message': 'fail2ban started'}), 200
+            except Exception:
+                continue
+        return jsonify({'ok': False, 'error': 'Could not start fail2ban'}), 200
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 200
+
+
+@app.route('/firewall/fail2ban/stop', methods=['POST'])
+@require_auth
+def fail2ban_stop():
+    """Stop fail2ban service."""
+    try:
+        for prefix in [[], ['sudo', '-n']]:
+            try:
+                r = subprocess.run(prefix + ['systemctl', 'stop', 'fail2ban'],
+                                   capture_output=True, timeout=15, text=True)
+                if r.returncode == 0:
+                    return jsonify({'ok': True, 'message': 'fail2ban stopped'}), 200
+            except Exception:
+                continue
+        return jsonify({'ok': False, 'error': 'Could not stop fail2ban'}), 200
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 200
 
@@ -6604,7 +6658,8 @@ def fleet_node_proxy(node_id, endpoint):
         'node/config/current', 'node/config/set', 'node/config/reset',
         'firewall/cleanup',
         'firewall/fail2ban/unban', 'firewall/fail2ban/jails',
-        'firewall/fail2ban/reload', 'firewall/ufw/add', 'firewall/ufw/delete',
+        'firewall/fail2ban/reload', 'firewall/fail2ban/start', 'firewall/fail2ban/stop',
+        'firewall/ufw/add', 'firewall/ufw/delete',
         'system/fail2ban/install',
         'data/stats', 'data/delete', 'data/retention',
         'data/quality/history', 'data/system/history',

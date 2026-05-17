@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.60] - 2026-05-17
+### Changed
+- Security page: complete rewrite — full fail2ban management (start/stop, jails list, edit/add/delete per jail, unban IPs, install button), UFW rules (add/delete)
+- Security page: jails loaded from config files regardless of fail2ban running state
+- Firewall card: fail2ban shows status + banned IPs only, all management via 🛡 Security → button
+- 🛡 Security → button scrolls to Security section automatically
+### Added
+- Backend: /firewall/fail2ban/start and /firewall/fail2ban/stop endpoints
+- Backend: /firewall/fail2ban/reload endpoint
+- Backend: jails endpoint returns running state and only fetches live ban data when running
+
+---
+
 ## [1.1.59] - 2026-05-17
 ### Fixed
 - Root cause fix: removed 123 orphan lines (duplicate FirewallSection x2, UpdateWaiter x2, and remnants of old Fail2banManager) that were at module level — minifier combined them with component definitions causing useState to execute outside React render context → blank dashboard crash
@@ -46,6 +59,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [1.1.54] - 2026-05-17
 ### Fixed
 - Security page: removed incorrect text about toolkit.conf restriction — all official fail2ban jails are shown and editable
+
+---
+
+## [1.1.60] - 2026-05-17
+### Changed
+- Security page: complete rewrite — full fail2ban management (start/stop, jails list, edit/add/delete per jail, unban IPs, install button), UFW rules (add/delete)
+- Security page: jails loaded from config files regardless of fail2ban running state
+- Firewall card: fail2ban shows status + banned IPs only, all management via 🛡 Security → button
+- 🛡 Security → button scrolls to Security section automatically
+### Added
+- Backend: /firewall/fail2ban/start and /firewall/fail2ban/stop endpoints
+- Backend: /firewall/fail2ban/reload endpoint
+- Backend: jails endpoint returns running state and only fetches live ban data when running
 
 ---
 
@@ -119,6 +145,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.60] - 2026-05-17
+### Changed
+- Security page: complete rewrite — full fail2ban management (start/stop, jails list, edit/add/delete per jail, unban IPs, install button), UFW rules (add/delete)
+- Security page: jails loaded from config files regardless of fail2ban running state
+- Firewall card: fail2ban shows status + banned IPs only, all management via 🛡 Security → button
+- 🛡 Security → button scrolls to Security section automatically
+### Added
+- Backend: /firewall/fail2ban/start and /firewall/fail2ban/stop endpoints
+- Backend: /firewall/fail2ban/reload endpoint
+- Backend: jails endpoint returns running state and only fetches live ban data when running
+
+---
+
 ## [1.1.59] - 2026-05-17
 ### Fixed
 - Root cause fix: removed 123 orphan lines (duplicate FirewallSection x2, UpdateWaiter x2, and remnants of old Fail2banManager) that were at module level — minifier combined them with component definitions causing useState to execute outside React render context → blank dashboard crash
@@ -160,6 +199,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [1.1.54] - 2026-05-17
 ### Fixed
 - Security page: removed incorrect text about toolkit.conf restriction — all official fail2ban jails are shown and editable
+
+---
+
+## [1.1.60] - 2026-05-17
+### Changed
+- Security page: complete rewrite — full fail2ban management (start/stop, jails list, edit/add/delete per jail, unban IPs, install button), UFW rules (add/delete)
+- Security page: jails loaded from config files regardless of fail2ban running state
+- Firewall card: fail2ban shows status + banned IPs only, all management via 🛡 Security → button
+- 🛡 Security → button scrolls to Security section automatically
+### Added
+- Backend: /firewall/fail2ban/start and /firewall/fail2ban/stop endpoints
+- Backend: /firewall/fail2ban/reload endpoint
+- Backend: jails endpoint returns running state and only fetches live ban data when running
 
 ---
 
