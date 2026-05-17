@@ -5,9 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.58] - 2026-05-17
+### Fixed
+- Fleet proxy whitelist: added fail2ban/jails, fail2ban/unban, fail2ban/reload, fail2ban/install, ufw/add, ufw/delete
+- Removed duplicate FirewallSection and UpdateWaiter components causing dashboard crash after update
+
+---
+
 ## [1.1.57] - 2026-05-17
 ### Fixed
 - Removed duplicate FirewallSection and UpdateWaiter components that caused dashboard to crash after update
+- Fleet proxy whitelist: added all new security endpoints (fail2ban/jails, fail2ban/unban, fail2ban/reload, fail2ban/install, ufw/add, ufw/delete)
 
 ---
 
@@ -34,9 +42,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.58] - 2026-05-17
+### Fixed
+- Fleet proxy whitelist: added fail2ban/jails, fail2ban/unban, fail2ban/reload, fail2ban/install, ufw/add, ufw/delete
+- Removed duplicate FirewallSection and UpdateWaiter components causing dashboard crash after update
+
+---
+
 ## [1.1.57] - 2026-05-17
 ### Fixed
 - Removed duplicate FirewallSection and UpdateWaiter components that caused dashboard to crash after update
+- Fleet proxy whitelist: added all new security endpoints (fail2ban/jails, fail2ban/unban, fail2ban/reload, fail2ban/install, ufw/add, ufw/delete)
 
 ---
 
@@ -89,9 +105,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.58] - 2026-05-17
+### Fixed
+- Fleet proxy whitelist: added fail2ban/jails, fail2ban/unban, fail2ban/reload, fail2ban/install, ufw/add, ufw/delete
+- Removed duplicate FirewallSection and UpdateWaiter components causing dashboard crash after update
+
+---
+
 ## [1.1.57] - 2026-05-17
 ### Fixed
 - Removed duplicate FirewallSection and UpdateWaiter components that caused dashboard to crash after update
+- Fleet proxy whitelist: added all new security endpoints (fail2ban/jails, fail2ban/unban, fail2ban/reload, fail2ban/install, ufw/add, ufw/delete)
 
 ---
 
@@ -118,9 +142,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.58] - 2026-05-17
+### Fixed
+- Fleet proxy whitelist: added fail2ban/jails, fail2ban/unban, fail2ban/reload, fail2ban/install, ufw/add, ufw/delete
+- Removed duplicate FirewallSection and UpdateWaiter components causing dashboard crash after update
+
+---
+
 ## [1.1.57] - 2026-05-17
 ### Fixed
 - Removed duplicate FirewallSection and UpdateWaiter components that caused dashboard to crash after update
+- Fleet proxy whitelist: added all new security endpoints (fail2ban/jails, fail2ban/unban, fail2ban/reload, fail2ban/install, ufw/add, ufw/delete)
 
 ---
 
