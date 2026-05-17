@@ -5829,19 +5829,34 @@ def _f2b_read_conf(path):
 
 
 def _f2b_all_jails():
-    """Return all jails with source file info."""
+    """Return all jails with source file info.
+    Reads jail.conf, jail.local and all jail.d/*.conf files.
+    When fail2ban is running, enriches with live jail list from fail2ban-client.
+    """
     import glob, configparser
     jails = {}
-    # Read all jail.d files
-    for fpath in sorted(glob.glob('/etc/fail2ban/jail.d/*.conf')):
+
+    # Read all config files in priority order (later overrides earlier)
+    config_files = (
+        ['/etc/fail2ban/jail.conf'] +
+        sorted(glob.glob('/etc/fail2ban/jail.d/*.conf')) +
+        ['/etc/fail2ban/jail.local']
+    )
+    for fpath in config_files:
+        import os as _os
+        if not _os.path.exists(fpath):
+            continue
         data = _f2b_read_conf(fpath)
         is_toolkit = fpath == TOOLKIT_JAIL_FILE
         for name, vals in data.items():
+            if name == 'DEFAULT':
+                continue
+            enabled_val = vals.get('enabled', 'false' if fpath == '/etc/fail2ban/jail.conf' else 'true')
             jails[name] = {
                 'name': name,
                 'source_file': fpath,
                 'is_toolkit': is_toolkit,
-                'enabled': vals.get('enabled', 'true').strip().lower() == 'true',
+                'enabled': enabled_val.strip().lower() == 'true',
                 'maxretry': int(vals.get('maxretry', 5)),
                 'bantime': int(vals.get('bantime', 3600)),
                 'findtime': int(vals.get('findtime', 600)),
@@ -5849,23 +5864,33 @@ def _f2b_all_jails():
                 'logpath': vals.get('logpath', ''),
                 'filter': vals.get('filter', name),
             }
-    # Also read jail.local if exists
-    for fpath in ['/etc/fail2ban/jail.local']:
-        data = _f2b_read_conf(fpath)
-        for name, vals in data.items():
-            if name not in jails:
-                jails[name] = {
-                    'name': name,
-                    'source_file': fpath,
-                    'is_toolkit': False,
-                    'enabled': vals.get('enabled', 'true').strip().lower() == 'true',
-                    'maxretry': int(vals.get('maxretry', 5)),
-                    'bantime': int(vals.get('bantime', 3600)),
-                    'findtime': int(vals.get('findtime', 600)),
-                    'port': vals.get('port', ''),
-                    'logpath': vals.get('logpath', ''),
-                    'filter': vals.get('filter', name),
-                }
+
+    # When fail2ban is running, also get active jail list from fail2ban-client
+    # This catches any jails not found in config files
+    try:
+        r = subprocess.run(['fail2ban-client', 'status'],
+                           capture_output=True, timeout=5, text=True)
+        if r.returncode == 0:
+            for line in r.stdout.splitlines():
+                if 'Jail list:' in line:
+                    names = line.split(':', 1)[1].strip()
+                    for jname in [n.strip() for n in names.split(',') if n.strip()]:
+                        if jname not in jails:
+                            jails[jname] = {
+                                'name': jname,
+                                'source_file': 'fail2ban-client',
+                                'is_toolkit': False,
+                                'enabled': True,
+                                'maxretry': 5,
+                                'bantime': 3600,
+                                'findtime': 600,
+                                'port': '',
+                                'logpath': '',
+                                'filter': jname,
+                            }
+    except Exception:
+        pass
+
     return list(jails.values())
 
 
@@ -6656,7 +6681,7 @@ def fleet_node_proxy(node_id, endpoint):
         'earnings/chart', 'settle/history',
         'node/restart', 'node/settle', 'node/test',
         'node/config/current', 'node/config/set', 'node/config/reset',
-        'firewall/cleanup',
+        'firewall', 'firewall/cleanup',
         'firewall/fail2ban/unban', 'firewall/fail2ban/jails',
         'firewall/fail2ban/reload', 'firewall/fail2ban/start', 'firewall/fail2ban/stop',
         'firewall/ufw/add', 'firewall/ufw/delete',

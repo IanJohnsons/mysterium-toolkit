@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.61] - 2026-05-17
+### Fixed
+- Fleet proxy: added /firewall to whitelist — UFW rules now load correctly for fleet nodes
+- Security page: UFW rules loaded from firewallData prop instead of extra fetch
+- Security page: all jails editable — external jails get saved as override to mysterium-toolkit.conf
+- Firewall card: "+X more" banned IPs is now a toggle button to show/hide all IPs
+
+---
+
 ## [1.1.60] - 2026-05-17
 ### Changed
 - Security page: complete rewrite — full fail2ban management (start/stop, jails list, edit/add/delete per jail, unban IPs, install button), UFW rules (add/delete)
@@ -59,6 +68,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [1.1.54] - 2026-05-17
 ### Fixed
 - Security page: removed incorrect text about toolkit.conf restriction — all official fail2ban jails are shown and editable
+
+---
+
+## [1.1.61] - 2026-05-17
+### Fixed
+- Fleet proxy: added /firewall to whitelist — UFW rules now load correctly for fleet nodes
+- Security page: UFW rules loaded from firewallData prop instead of extra fetch
+- Security page: all jails editable — external jails get saved as override to mysterium-toolkit.conf
+- Firewall card: "+X more" banned IPs is now a toggle button to show/hide all IPs
 
 ---
 
@@ -145,6 +163,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.61] - 2026-05-17
+### Fixed
+- Fleet proxy: added /firewall to whitelist — UFW rules now load correctly for fleet nodes
+- Security page: UFW rules loaded from firewallData prop instead of extra fetch
+- Security page: all jails editable — external jails get saved as override to mysterium-toolkit.conf
+- Firewall card: "+X more" banned IPs is now a toggle button to show/hide all IPs
+
+---
+
 ## [1.1.60] - 2026-05-17
 ### Changed
 - Security page: complete rewrite — full fail2ban management (start/stop, jails list, edit/add/delete per jail, unban IPs, install button), UFW rules (add/delete)
@@ -199,6 +226,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [1.1.54] - 2026-05-17
 ### Fixed
 - Security page: removed incorrect text about toolkit.conf restriction — all official fail2ban jails are shown and editable
+
+---
+
+## [1.1.61] - 2026-05-17
+### Fixed
+- Fleet proxy: added /firewall to whitelist — UFW rules now load correctly for fleet nodes
+- Security page: UFW rules loaded from firewallData prop instead of extra fetch
+- Security page: all jails editable — external jails get saved as override to mysterium-toolkit.conf
+- Firewall card: "+X more" banned IPs is now a toggle button to show/hide all IPs
 
 ---
 

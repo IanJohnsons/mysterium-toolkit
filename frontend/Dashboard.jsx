@@ -442,13 +442,8 @@ const SecurityPage = ({ backendUrl, authHeaders }) => {
       }).catch(()=>{ setF2bJails([]); setF2bLoading(false); });
   };
 
-  const loadUfw = () => {
-    fetch(`${backendUrl}/firewall`, { headers: authHeaders||{} })
-      .then(r=>r.json()).then(d=>setUfwRules(d.ufw_rules||[]))
-      .catch(()=>setUfwRules([]));
-  };
-
-  useEffect(()=>{ loadJails(); loadUfw(); }, []);
+  useEffect(()=>{ loadJails(); }, []);
+  useEffect(()=>{ if(firewallData?.ufw_rules) setUfwRules(firewallData.ufw_rules); }, [firewallData]);
 
   const installF2b = () => {
     setInstalling(true);
@@ -582,7 +577,12 @@ const SecurityPage = ({ backendUrl, authHeaders }) => {
                         <input type="checkbox" checked={editJail.enabled} onChange={e=>setEditJail({...editJail,enabled:e.target.checked})} className="accent-violet-500" /> Enabled
                       </label>
                       <div className="flex gap-2">
-                        <button onClick={()=>saveJails((f2bJails||[]).filter(j=>j.is_toolkit).map(j=>j.name===editJail.name?editJail:j))} disabled={f2bSaving}
+                        <button onClick={()=>{
+                          const tkJails = (f2bJails||[]).filter(j=>j.is_toolkit);
+                          const exists = tkJails.find(j=>j.name===editJail.name);
+                          const updated = exists ? tkJails.map(j=>j.name===editJail.name?{...editJail,is_toolkit:true}:j) : [...tkJails,{...editJail,is_toolkit:true}];
+                          saveJails(updated);
+                        }} disabled={f2bSaving}
                           className="flex-1 py-2 text-xs bg-violet-600 hover:bg-violet-700 text-white rounded font-semibold transition disabled:opacity-50">
                           {f2bSaving?'Saving…':'✓ Save & reload'}
                         </button>
@@ -619,8 +619,8 @@ const SecurityPage = ({ backendUrl, authHeaders }) => {
                           )}
                         </div>
                         <div className="flex gap-1 flex-shrink-0">
-                          {jail.is_toolkit && <button onClick={()=>setEditJail({...jail})} className="text-[10px] px-2 py-1.5 border border-slate-600 rounded hover:border-violet-500/40 hover:text-violet-400 text-slate-400 transition">✎</button>}
-                          {jail.is_toolkit && <button onClick={()=>{ if(confirm(`Remove [${jail.name}]?`)) saveJails((f2bJails||[]).filter(j=>j.is_toolkit&&j.name!==jail.name)); }} className="text-[10px] px-2 py-1.5 border border-slate-700 rounded hover:border-red-500/40 hover:text-red-400 text-slate-600 transition">✕</button>}
+                          <button onClick={()=>setEditJail({...jail})} className="text-[10px] px-2 py-1.5 border border-slate-600 rounded hover:border-violet-500/40 hover:text-violet-400 text-slate-400 transition">✎</button>
+                          {!jail.is_toolkit && <button onClick={()=>{ if(confirm(`Remove [${jail.name}]?`)) saveJails((f2bJails||[]).filter(j=>j.is_toolkit&&j.name!==jail.name)); }} className="text-[10px] px-2 py-1.5 border border-slate-700 rounded hover:border-red-500/40 hover:text-red-400 text-slate-600 transition" title="Only toolkit-added jails can be removed">✕</button>}
                         </div>
                       </div>
                     </div>
@@ -893,6 +893,7 @@ const MysteriumDashboard = () => {
   const [showLogs, setShowLogs] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [showSecurity, setShowSecurity] = useState(false);
+  const [showAllBans, setShowAllBans] = useState({});
   const [theme, setTheme] = useState(() => {
     try { return localStorage.getItem('myst-theme') || 'emerald'; } catch { return 'emerald'; }
   });
@@ -3096,10 +3097,15 @@ const MysteriumDashboard = () => {
                         {metrics.firewall.fail2ban.jails.filter(j=>j.active_bans>0).map(jail=>(
                           <div key={jail.name} className="text-[10px]">
                             <span className="text-slate-500 font-mono">{jail.name}:</span> <span className="text-amber-400 font-semibold">{jail.active_bans} banned</span>
-                            {(jail.banned_ips||[]).slice(0,3).map(ip=>(
+                            {(showAllBans[jail.name] ? (jail.banned_ips||[]) : (jail.banned_ips||[]).slice(0,3)).map(ip=>(
                               <div key={ip} className="pl-3 font-mono text-red-400/70">{ip}</div>
                             ))}
-                            {jail.banned_ips?.length > 3 && <div className="pl-3 text-slate-600">+{jail.banned_ips.length-3} more — manage in Security</div>}
+                            {jail.banned_ips?.length > 3 && (
+                              <button onClick={()=>setShowAllBans(p=>({...p,[jail.name]:!p[jail.name]}))}
+                                className="pl-3 text-slate-500 hover:text-slate-300 transition text-[10px]">
+                                {showAllBans[jail.name] ? '▲ show less' : `+${jail.banned_ips.length-3} more`}
+                              </button>
+                            )}
                           </div>
                         ))}
                       </div>
