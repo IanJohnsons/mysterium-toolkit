@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.64] - 2026-05-17
+### Fixed
+- fail2ban jails: rewritten to use fail2ban-client as primary source — works on all distros (Debian, Ubuntu, RHEL, CentOS, Fedora, Arch). Gets live maxretry/bantime/findtime per jail via fail2ban-client get
+- Security page: UFW rules now have edit button (✎) — opens inline form to change action/port/protocol
+- Security page: loadUfw function restored for refresh after edit
+- No duplicate components, no orphan code
+
+---
+
 ## [1.1.63] - 2026-05-17
 ### Fixed
 - SecurityPage: firewallData prop added to function signature
@@ -85,6 +94,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [1.1.54] - 2026-05-17
 ### Fixed
 - Security page: removed incorrect text about toolkit.conf restriction — all official fail2ban jails are shown and editable
+
+---
+
+## [1.1.64] - 2026-05-17
+### Fixed
+- fail2ban jails: rewritten to use fail2ban-client as primary source — works on all distros (Debian, Ubuntu, RHEL, CentOS, Fedora, Arch). Gets live maxretry/bantime/findtime per jail via fail2ban-client get
+- Security page: UFW rules now have edit button (✎) — opens inline form to change action/port/protocol
+- Security page: loadUfw function restored for refresh after edit
+- No duplicate components, no orphan code
 
 ---
 
@@ -197,6 +215,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.64] - 2026-05-17
+### Fixed
+- fail2ban jails: rewritten to use fail2ban-client as primary source — works on all distros (Debian, Ubuntu, RHEL, CentOS, Fedora, Arch). Gets live maxretry/bantime/findtime per jail via fail2ban-client get
+- Security page: UFW rules now have edit button (✎) — opens inline form to change action/port/protocol
+- Security page: loadUfw function restored for refresh after edit
+- No duplicate components, no orphan code
+
+---
+
 ## [1.1.63] - 2026-05-17
 ### Fixed
 - SecurityPage: firewallData prop added to function signature
@@ -277,6 +304,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [1.1.54] - 2026-05-17
 ### Fixed
 - Security page: removed incorrect text about toolkit.conf restriction — all official fail2ban jails are shown and editable
+
+---
+
+## [1.1.64] - 2026-05-17
+### Fixed
+- fail2ban jails: rewritten to use fail2ban-client as primary source — works on all distros (Debian, Ubuntu, RHEL, CentOS, Fedora, Arch). Gets live maxretry/bantime/findtime per jail via fail2ban-client get
+- Security page: UFW rules now have edit button (✎) — opens inline form to change action/port/protocol
+- Security page: loadUfw function restored for refresh after edit
+- No duplicate components, no orphan code
 
 ---
 

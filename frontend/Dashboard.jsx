@@ -427,6 +427,7 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
   const [ufwRules, setUfwRules] = useState(null);
   const [newRule, setNewRule] = useState({ action:'allow', port:'', proto:'tcp' });
   const [ufwSaving, setUfwSaving] = useState(false);
+  const [editUfwRule, setEditUfwRule] = useState(null); // {index, original, action, port, proto}
 
   const fmtTime = s => { s=parseInt(s); if(s>=86400) return `${Math.round(s/86400)}d`; if(s>=3600) return `${Math.round(s/3600)}h`; if(s>=60) return `${Math.round(s/60)}m`; return `${s}s`; };
 
@@ -442,6 +443,11 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
       }).catch(()=>{ setF2bJails([]); setF2bLoading(false); });
   };
 
+  const loadUfw = () => {
+    fetch(`${backendUrl}/firewall`, { headers: authHeaders||{} })
+      .then(r=>r.json()).then(d=>setUfwRules(d.ufw_rules||[]))
+      .catch(()=>setUfwRules([]));
+  };
   useEffect(()=>{ loadJails(); }, []);
   useEffect(()=>{ if(firewallData?.ufw_rules) setUfwRules(firewallData.ufw_rules); }, [firewallData]);
 
@@ -697,14 +703,70 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
               {ufwSaving?'…':'+ Add rule'}
             </button>
           </div>
-          <div className="space-y-1 max-h-64 overflow-y-auto">
+          <div className="space-y-1 max-h-80 overflow-y-auto">
             {ufwRules === null && <p className="text-xs text-slate-500">Loading…</p>}
             {(ufwRules||[]).length === 0 && ufwRules !== null && <p className="text-[10px] text-slate-600">No UFW rules configured.</p>}
             {(ufwRules||[]).map((rule,i)=>(
-              <div key={i} className="flex items-center justify-between px-2 py-1.5 bg-slate-900/30 border border-slate-700/30 rounded">
-                <span className="text-xs font-mono text-slate-400 flex-1 mr-2">{rule}</span>
-                <button onClick={()=>ufwDelete(rule.split(' ').slice(0,2).join(' '))}
-                  className="flex-shrink-0 text-[10px] text-slate-600 hover:text-red-400 transition px-2 py-0.5 border border-slate-700 rounded hover:border-red-500/40">✕</button>
+              <div key={i} className="bg-slate-900/30 border border-slate-700/30 rounded">
+                {editUfwRule?.index === i ? (
+                  <div className="p-2">
+                    <div className="flex flex-wrap gap-2 items-end mb-2">
+                      <div>
+                        <label className="block text-[10px] text-slate-400 mb-1">Action</label>
+                        <select value={editUfwRule.action} onChange={e=>setEditUfwRule({...editUfwRule,action:e.target.value})}
+                          className="bg-slate-900 border border-slate-600 rounded px-2 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-violet-500/50">
+                          <option value="allow">allow</option>
+                          <option value="deny">deny</option>
+                          <option value="reject">reject</option>
+                          <option value="limit">limit</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] text-slate-400 mb-1">Port</label>
+                        <input type="text" value={editUfwRule.port} onChange={e=>setEditUfwRule({...editUfwRule,port:e.target.value})}
+                          className="w-28 bg-slate-900 border border-slate-600 rounded px-2 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-violet-500/50" />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] text-slate-400 mb-1">Protocol</label>
+                        <select value={editUfwRule.proto} onChange={e=>setEditUfwRule({...editUfwRule,proto:e.target.value})}
+                          className="bg-slate-900 border border-slate-600 rounded px-2 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-violet-500/50">
+                          <option value="tcp">tcp</option>
+                          <option value="udp">udp</option>
+                          <option value="">any</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <button onClick={()=>{
+                        setUfwSaving(true);
+                        // Delete old rule then add new
+                        fetch(`${backendUrl}/firewall/ufw/delete`,{method:'POST',headers:{...(authHeaders||{}),'Content-Type':'application/json'},body:JSON.stringify({rule:editUfwRule.original.split(' ').slice(0,2).join(' ')})})
+                          .then(()=>fetch(`${backendUrl}/firewall/ufw/add`,{method:'POST',headers:{...(authHeaders||{}),'Content-Type':'application/json'},body:JSON.stringify({action:editUfwRule.action,port:editUfwRule.port,proto:editUfwRule.proto})}))
+                          .then(r=>r.json()).then(d=>{ setUfwSaving(false); setEditUfwRule(null); if(d.ok) loadUfw(); else setUfwMsg({ok:false,text:d.error}); })
+                          .catch(()=>{ setUfwSaving(false); });
+                      }} disabled={ufwSaving||!editUfwRule.port}
+                        className="flex-1 py-1.5 text-xs bg-violet-600 hover:bg-violet-700 text-white rounded font-semibold transition disabled:opacity-50">
+                        {ufwSaving?'…':'✓ Save'}
+                      </button>
+                      <button onClick={()=>setEditUfwRule(null)} className="px-3 py-1.5 text-xs text-slate-500 hover:text-slate-300 border border-slate-700 rounded">cancel</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-between px-2 py-1.5">
+                    <span className="text-xs font-mono text-slate-400 flex-1 mr-2">{rule}</span>
+                    <div className="flex gap-1">
+                      <button onClick={()=>{
+                        const parts = rule.split(' ');
+                        const action = parts.find(p=>['ALLOW','DENY','REJECT','LIMIT'].includes(p.toUpperCase()))?.toLowerCase()||'allow';
+                        const portProto = parts[0]||'';
+                        const [port,proto] = portProto.includes('/') ? portProto.split('/') : [portProto,'tcp'];
+                        setEditUfwRule({index:i,original:rule,action,port,proto:proto||'tcp'});
+                      }} className="text-[10px] text-slate-600 hover:text-violet-400 transition px-2 py-0.5 border border-slate-700 rounded hover:border-violet-500/40">✎</button>
+                      <button onClick={()=>ufwDelete(rule.split(' ').slice(0,2).join(' '))}
+                        className="text-[10px] text-slate-600 hover:text-red-400 transition px-2 py-0.5 border border-slate-700 rounded hover:border-red-500/40">✕</button>
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
           </div>
