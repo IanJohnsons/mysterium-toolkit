@@ -5,9 +5,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.55] - 2026-05-17
+### Added
+- Security page: Install fail2ban button when not installed — no setup.sh needed
+- Security page: active bans + unban buttons visible per jail
+- Backend: /system/fail2ban/install endpoint
+- Backend: /firewall/fail2ban/jails now includes active ban count and banned IPs
+### Fixed
+- Fail2banManager modal component fully removed — Security page is now the only fail2ban management interface
+
+---
+
 ## [1.1.54] - 2026-05-17
 ### Fixed
 - Security page: removed incorrect text about toolkit.conf restriction — all official fail2ban jails are shown and editable
+
+---
+
+## [1.1.55] - 2026-05-17
+### Added
+- Security page: Install fail2ban button when not installed — no setup.sh needed
+- Security page: active bans + unban buttons visible per jail
+- Backend: /system/fail2ban/install endpoint
+- Backend: /firewall/fail2ban/jails now includes active ban count and banned IPs
+### Fixed
+- Fail2banManager modal component fully removed — Security page is now the only fail2ban management interface
 
 ---
 
@@ -43,9 +65,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.55] - 2026-05-17
+### Added
+- Security page: Install fail2ban button when not installed — no setup.sh needed
+- Security page: active bans + unban buttons visible per jail
+- Backend: /system/fail2ban/install endpoint
+- Backend: /firewall/fail2ban/jails now includes active ban count and banned IPs
+### Fixed
+- Fail2banManager modal component fully removed — Security page is now the only fail2ban management interface
+
+---
+
 ## [1.1.54] - 2026-05-17
 ### Fixed
 - Security page: removed incorrect text about toolkit.conf restriction — all official fail2ban jails are shown and editable
+
+---
+
+## [1.1.55] - 2026-05-17
+### Added
+- Security page: Install fail2ban button when not installed — no setup.sh needed
+- Security page: active bans + unban buttons visible per jail
+- Backend: /system/fail2ban/install endpoint
+- Backend: /firewall/fail2ban/jails now includes active ban count and banned IPs
+### Fixed
+- Fail2banManager modal component fully removed — Security page is now the only fail2ban management interface
 
 ---
 

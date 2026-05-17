@@ -5918,12 +5918,43 @@ def _f2b_reload():
 @app.route('/firewall/fail2ban/jails', methods=['GET'])
 @require_auth
 def fail2ban_get_jails():
-    """Return all fail2ban jails with source and editability info."""
+    """Return all fail2ban jails with source, editability and active ban info."""
     try:
         import shutil
         if not shutil.which('fail2ban-client'):
             return jsonify({'ok': False, 'error': 'fail2ban not installed'}), 200
-        return jsonify({'ok': True, 'jails': _f2b_all_jails()}), 200
+        jails = _f2b_all_jails()
+        # Enrich with live ban data from fail2ban-client
+        for jail in jails:
+            try:
+                r = subprocess.run(
+                    ['fail2ban-client', 'status', jail['name']],
+                    capture_output=True, timeout=5, text=True
+                )
+                if r.returncode == 0:
+                    active_bans, total_bans, banned_ips = 0, 0, []
+                    for line in r.stdout.splitlines():
+                        if 'Currently banned:' in line:
+                            try: active_bans = int(line.split(':', 1)[1].strip())
+                            except: pass
+                        elif 'Total banned:' in line:
+                            try: total_bans = int(line.split(':', 1)[1].strip())
+                            except: pass
+                        elif 'Banned IP list:' in line:
+                            ips = line.split(':', 1)[1].strip()
+                            banned_ips = [ip.strip() for ip in ips.split() if ip.strip()]
+                    jail['active_bans'] = active_bans
+                    jail['total_bans'] = total_bans
+                    jail['banned_ips'] = banned_ips[:20]
+                else:
+                    jail['active_bans'] = 0
+                    jail['total_bans'] = 0
+                    jail['banned_ips'] = []
+            except Exception:
+                jail['active_bans'] = 0
+                jail['total_bans'] = 0
+                jail['banned_ips'] = []
+        return jsonify({'ok': True, 'jails': jails}), 200
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 200
 
@@ -5953,7 +5984,90 @@ def fail2ban_save_jails():
         return jsonify({'ok': False, 'error': str(e)}), 200
 
 
-@app.route('/firewall/fail2ban/reload', methods=['POST'])
+@app.route('/system/fail2ban/install', methods=['POST'])
+@require_auth
+def fail2ban_install():
+    """Install fail2ban and configure basic jails."""
+    try:
+        import shutil
+        if shutil.which('fail2ban-client'):
+            return jsonify({'ok': True, 'message': 'fail2ban already installed'}), 200
+
+        # Install
+        for prefix in [[], ['sudo', '-n']]:
+            try:
+                r = subprocess.run(
+                    prefix + ['apt-get', 'install', '-y', '-qq', 'fail2ban'],
+                    capture_output=True, timeout=60, text=True
+                )
+                if r.returncode == 0:
+                    break
+            except Exception:
+                continue
+        else:
+            return jsonify({'ok': False, 'error': 'apt-get install failed — check permissions'}), 200
+
+        toolkit_dir = str(Path(__file__).parent.parent)
+        f2b_conf = '/etc/fail2ban/jail.d/mysterium-toolkit.conf'
+        f2b_filter = '/etc/fail2ban/filter.d/mysterium-dashboard.conf'
+
+        filter_content = '[Definition]\nfailregex = ^.*\\[.*\\] ".*" 401\nignoreregex =\n'
+        jail_content = f"""# Mysterium Node Toolkit — fail2ban jails
+[sshd]
+enabled  = true
+port     = ssh
+logpath  = /var/log/auth.log
+maxretry = 5
+bantime  = 3600
+findtime = 600
+
+[mysterium-dashboard]
+enabled  = true
+port     = 5000
+filter   = mysterium-dashboard
+logpath  = {toolkit_dir}/logs/backend.log
+maxretry = 5
+bantime  = 3600
+findtime = 600
+
+[recidive]
+enabled  = true
+logpath  = /var/log/fail2ban.log
+bantime  = 604800
+findtime = 86400
+maxretry = 5
+"""
+        for path, content in [(f2b_filter, filter_content), (f2b_conf, jail_content)]:
+            for prefix in [[], ['sudo', '-n']]:
+                try:
+                    r = subprocess.run(
+                        prefix + ['tee', path],
+                        input=content, capture_output=True, text=True, timeout=5
+                    )
+                    if r.returncode == 0:
+                        break
+                except Exception:
+                    continue
+
+        for cmd in [
+            ['systemctl', 'enable', 'fail2ban'],
+            ['systemctl', 'start', 'fail2ban'],
+        ]:
+            for prefix in [[], ['sudo', '-n']]:
+                try:
+                    subprocess.run(prefix + cmd, capture_output=True, timeout=15)
+                    break
+                except Exception:
+                    continue
+
+        logger.info('fail2ban installed and configured')
+        return jsonify({'ok': True, 'message': 'fail2ban installed and started'}), 200
+    except Exception as e:
+        logger.error(f'fail2ban install error: {e}')
+        return jsonify({'ok': False, 'error': str(e)}), 200
+
+
+
 @require_auth
 def fail2ban_reload():
     """Reload fail2ban."""

@@ -426,11 +426,27 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
 
   const fmtTime = s => { s=parseInt(s); if(s>=86400) return `${Math.round(s/86400)}d`; if(s>=3600) return `${Math.round(s/3600)}h`; if(s>=60) return `${Math.round(s/60)}m`; return `${s}s`; };
 
+  const [f2bInstalled, setF2bInstalled] = React.useState(null);
+  const [installing, setInstalling] = React.useState(false);
   const loadJails = () => {
     setF2bLoading(true);
     fetch(`${backendUrl}/firewall/fail2ban/jails`, { headers: authHeaders||{} })
-      .then(r=>r.json()).then(d=>{ setF2bJails(d.ok?d.jails:[]); setF2bLoading(false); })
+      .then(r=>r.json()).then(d=>{
+        if (!d.ok && d.error === 'fail2ban not installed') { setF2bInstalled(false); setF2bLoading(false); return; }
+        setF2bInstalled(true);
+        setF2bJails(d.ok?d.jails:[]);
+        setF2bLoading(false);
+      })
       .catch(()=>{ setF2bJails([]); setF2bLoading(false); });
+  };
+  const installF2b = () => {
+    setInstalling(true);
+    fetch(`${backendUrl}/system/fail2ban/install`, { method:'POST', headers: authHeaders||{} })
+      .then(r=>r.json()).then(d=>{
+        setInstalling(false);
+        if(d.ok){ setF2bInstalled(true); loadJails(); }
+        else setF2bMsg({ok:false, text:d.error});
+      }).catch(()=>{ setInstalling(false); setF2bMsg({ok:false,text:'Install failed'}); });
   };
   const loadUfw = () => {
     fetch(`${backendUrl}/firewall`, { headers: authHeaders||{} })
@@ -492,7 +508,18 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
             All jails are read from the official fail2ban configuration. Jails marked <span className="text-slate-400">external</span> are managed by another config file — changes there must be made in that file directly.
           </div>
           {f2bMsg && <div className={`mb-2 p-2 rounded text-xs ${f2bMsg.ok?'bg-emerald-500/10 text-emerald-400':'bg-red-500/10 text-red-400'}`}>{f2bMsg.ok?'✓':'✗'} {f2bMsg.text}</div>}
-          {f2bLoading && <p className="text-xs text-slate-500">Loading jails…</p>}
+          {f2bInstalled === false ? (
+            <div className="p-4 border border-slate-700/40 rounded text-center">
+              <p className="text-xs text-slate-400 mb-3">fail2ban is not installed on this system.</p>
+              <p className="text-[10px] text-slate-500 mb-4">Installing will add brute force protection for SSH, dashboard (port 5000) and enable recidive jail.</p>
+              <button onClick={installF2b} disabled={installing}
+                className="px-5 py-2 text-xs bg-violet-600 hover:bg-violet-700 text-white rounded font-semibold transition disabled:opacity-50">
+                {installing ? 'Installing…' : '⬇ Install fail2ban'}
+              </button>
+            </div>
+          ) : f2bLoading ? (
+            <p className="text-xs text-slate-500">Loading jails…</p>
+          ) : null}
           <div className="space-y-2">
             {(f2bJails||[]).map(jail => (
               <div key={jail.name} className={`rounded border p-3 ${jail.is_toolkit?'border-slate-600 bg-slate-800/30':'border-slate-700/30 bg-slate-800/10'}`}>
@@ -525,7 +552,7 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
                   </div>
                 ) : (
                   <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-xs font-mono font-semibold text-slate-200">[{jail.name}]</span>
                         <span className={`text-[9px] px-1.5 py-0.5 rounded ${jail.is_toolkit?'bg-violet-500/20 text-violet-400':'bg-slate-600/40 text-slate-400'}`}>{jail.is_toolkit?'toolkit':'external'}</span>
@@ -537,6 +564,23 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
                         <span>window: <span className="text-slate-400">{fmtTime(jail.findtime)}</span></span>
                         {!jail.is_toolkit&&<span className="text-slate-600 text-[9px]">{jail.source_file?.split('/').pop()}</span>}
                       </div>
+                      {/* Active bans + unban */}
+                      {jail.active_bans > 0 && (
+                        <div className="mt-2 space-y-1">
+                          <span className="text-[10px] text-amber-400 font-semibold">{jail.active_bans} active ban{jail.active_bans!==1?'s':''}</span>
+                          {(jail.banned_ips||[]).map(ip => (
+                            <div key={ip} className="flex items-center justify-between pl-2">
+                              <span className="text-[10px] font-mono text-red-400/80">{ip}</span>
+                              <button onClick={()=>{
+                                fetch(`${backendUrl}/firewall/fail2ban/unban`,{
+                                  method:'POST',headers:{...(authHeaders||{}),'Content-Type':'application/json'},
+                                  body:JSON.stringify({jail:jail.name,ip})
+                                }).then(()=>loadJails());
+                              }} className="text-[10px] px-2 py-0.5 border border-slate-700 rounded hover:border-emerald-500/40 hover:text-emerald-400 text-slate-500 transition">unban</button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                     <div className="flex gap-1 flex-shrink-0">
                       {jail.is_toolkit&&<button onClick={()=>setEditJail({...jail})} className="text-[10px] px-2 py-1.5 border border-slate-600 rounded hover:border-violet-500/40 hover:text-violet-400 text-slate-400 transition">✎</button>}
@@ -679,11 +723,7 @@ const UpdateWaiter = ({ onBack }) => {
   );
 };
 
-const Fail2banManager = ({ backendUrl, authHeaders, onClose }) => {
-  const [jails, setJails] = React.useState(null);
-  const [loading, setLoading] = React.useState(true);
-  const [saving, setSaving] = React.useState(false);
-  const [msg, setMsg] = React.useState(null);
+
   const [editJail, setEditJail] = React.useState(null);
   const [showAdd, setShowAdd] = React.useState(false);
   const [newJail, setNewJail] = React.useState({ name: '', port: '', logpath: '', filter: '', maxretry: 5, bantime: 3600, findtime: 600, enabled: true });
@@ -755,165 +795,6 @@ const Fail2banManager = ({ backendUrl, authHeaders, onClose }) => {
         className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500/50" />
     </div>
   );
-
-  return (
-    <div className="fixed inset-0 z-[400] flex items-start justify-center bg-black/80 backdrop-blur-sm overflow-y-auto p-4 sm:p-6">
-      <div className="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-2xl shadow-2xl my-4">
-        {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-slate-700">
-          <div>
-            <h2 className="text-sm font-semibold text-slate-200">fail2ban Manager</h2>
-            <p className="text-[10px] text-slate-500 mt-0.5">Only jails in mysterium-toolkit.conf are editable. Jails from other config files are read-only.</p>
-          </div>
-          <button onClick={onClose} className="text-slate-500 hover:text-slate-300 transition text-lg px-2">✕</button>
-        </div>
-
-        {/* Warning */}
-        <div className="mx-4 mt-3 p-3 bg-amber-500/10 border border-amber-500/20 rounded text-[10px] text-amber-300/80 leading-relaxed">
-          ⚠ Changes apply immediately after saving. If you manage fail2ban with another tool, only edit jails shown as <span className="font-semibold">toolkit</span> — external jails are shown read-only to avoid conflicts.
-        </div>
-
-        {msg && (
-          <div className={`mx-4 mt-3 p-2 rounded text-xs ${msg.ok ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
-            {msg.ok ? '✓' : '✗'} {msg.text}
-          </div>
-        )}
-
-        <div className="p-4 space-y-3">
-          {loading && <p className="text-xs text-slate-500 text-center py-4">Loading jails…</p>}
-
-          {!loading && jails?.map(jail => (
-            <div key={jail.name} className={`rounded border p-3 ${jail.is_toolkit ? 'border-slate-600 bg-slate-800/30' : 'border-slate-700/40 bg-slate-800/10'}`}>
-              {editJail?.name === jail.name ? (
-                /* Edit mode */
-                <div>
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-xs font-semibold font-mono text-slate-200">[{jail.name}]</span>
-                    <button onClick={() => setEditJail(null)} className="text-[10px] text-slate-500 hover:text-slate-300">cancel</button>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    <div>
-                      <label className="block text-[10px] text-slate-400 mb-1">Max retries <span className="text-slate-600">— attempts before ban</span></label>
-                      <input type="number" min="1" max="100" value={editJail.maxretry}
-                        onChange={e => setEditJail({...editJail, maxretry: parseInt(e.target.value)||5})}
-                        className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500/50" />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] text-slate-400 mb-1">Ban time <span className="text-slate-600">— seconds</span></label>
-                      <input type="number" min="60" value={editJail.bantime}
-                        onChange={e => setEditJail({...editJail, bantime: parseInt(e.target.value)||3600})}
-                        className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500/50" />
-                      <p className="text-[9px] text-slate-600 mt-0.5">{fmtTime(editJail.bantime)}</p>
-                    </div>
-                    <div>
-                      <label className="block text-[10px] text-slate-400 mb-1">Find time <span className="text-slate-600">— window (seconds)</span></label>
-                      <input type="number" min="60" value={editJail.findtime}
-                        onChange={e => setEditJail({...editJail, findtime: parseInt(e.target.value)||600})}
-                        className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500/50" />
-                      <p className="text-[9px] text-slate-600 mt-0.5">{fmtTime(editJail.findtime)}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 mt-3">
-                    <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer">
-                      <input type="checkbox" checked={editJail.enabled} onChange={e => setEditJail({...editJail, enabled: e.target.checked})}
-                        className="accent-emerald-500" />
-                      Enabled
-                    </label>
-                  </div>
-                  <div className="flex gap-2 mt-3">
-                    <button onClick={() => saveJail(editJail)} disabled={saving}
-                      className="flex-1 py-2 text-xs bg-emerald-600 hover:bg-emerald-700 text-white rounded font-semibold transition disabled:opacity-50">
-                      {saving ? 'Saving…' : '✓ Save & reload'}
-                    </button>
-                    <button onClick={() => { if(confirm(`Remove jail [${jail.name}] from toolkit config?`)) removeJail(jail.name); }}
-                      className="px-3 py-2 text-xs bg-red-500/10 border border-red-500/30 hover:bg-red-500/20 text-red-400 rounded transition">
-                      Remove
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                /* View mode */
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-xs font-mono font-semibold text-slate-200">[{jail.name}]</span>
-                      <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium ${jail.is_toolkit ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-600/40 text-slate-400'}`}>
-                        {jail.is_toolkit ? 'toolkit' : 'external'}
-                      </span>
-                      <span className={`text-[9px] px-1.5 py-0.5 rounded ${jail.enabled ? 'bg-emerald-500/10 text-emerald-500' : 'bg-slate-700 text-slate-500'}`}>
-                        {jail.enabled ? 'enabled' : 'disabled'}
-                      </span>
-                    </div>
-                    <div className="flex gap-3 mt-1 text-[10px] text-slate-500 flex-wrap">
-                      <span>retry: <span className="text-slate-400">{jail.maxretry}×</span></span>
-                      <span>ban: <span className="text-slate-400">{fmtTime(jail.bantime)}</span></span>
-                      <span>window: <span className="text-slate-400">{fmtTime(jail.findtime)}</span></span>
-                      {!jail.is_toolkit && <span className="text-slate-600 truncate max-w-[200px]">from: {jail.source_file?.split('/').pop()}</span>}
-                    </div>
-                  </div>
-                  {jail.is_toolkit && (
-                    <button onClick={() => setEditJail({...jail})}
-                      className="flex-shrink-0 text-[10px] px-3 py-1.5 border border-slate-600 rounded hover:border-emerald-500/40 hover:text-emerald-400 text-slate-400 transition">
-                      ✎ Edit
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-          ))}
-
-          {/* Add custom jail */}
-          {showAdd ? (
-            <div className="border border-emerald-500/30 bg-slate-800/30 rounded p-3">
-              <h4 className="text-xs font-semibold text-slate-200 mb-3">Add custom jail</h4>
-              <InputRow label="Jail name" hint="e.g. nginx or custom-app" value={newJail.name} onChange={v => setNewJail({...newJail, name: v})} />
-              <InputRow label="Port" hint="e.g. 80,443 or http,https" value={newJail.port} onChange={v => setNewJail({...newJail, port: v})} />
-              <InputRow label="Log path" hint="full path to log file" value={newJail.logpath} onChange={v => setNewJail({...newJail, logpath: v})} />
-              <InputRow label="Filter" hint="filter name from /etc/fail2ban/filter.d/ (leave empty = jail name)" value={newJail.filter} onChange={v => setNewJail({...newJail, filter: v})} />
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-[10px] text-slate-400 mb-1">Max retries</label>
-                  <input type="number" min="1" value={newJail.maxretry} onChange={e => setNewJail({...newJail, maxretry: parseInt(e.target.value)||5})}
-                    className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500/50" />
-                </div>
-                <div>
-                  <label className="block text-[10px] text-slate-400 mb-1">Ban time (s)</label>
-                  <input type="number" min="60" value={newJail.bantime} onChange={e => setNewJail({...newJail, bantime: parseInt(e.target.value)||3600})}
-                    className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500/50" />
-                </div>
-                <div>
-                  <label className="block text-[10px] text-slate-400 mb-1">Find time (s)</label>
-                  <input type="number" min="60" value={newJail.findtime} onChange={e => setNewJail({...newJail, findtime: parseInt(e.target.value)||600})}
-                    className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500/50" />
-                </div>
-              </div>
-              <div className="flex gap-2 mt-3">
-                <button onClick={addJail} disabled={saving || !newJail.name}
-                  className="flex-1 py-2 text-xs bg-emerald-600 hover:bg-emerald-700 text-white rounded font-semibold transition disabled:opacity-50">
-                  {saving ? 'Saving…' : '+ Add jail'}
-                </button>
-                <button onClick={() => setShowAdd(false)} className="px-4 py-2 text-xs text-slate-500 hover:text-slate-300 transition">cancel</button>
-              </div>
-            </div>
-          ) : (
-            <button onClick={() => setShowAdd(true)}
-              className="w-full py-2.5 text-xs border border-dashed border-slate-600 rounded hover:border-emerald-500/40 hover:text-emerald-400 text-slate-500 transition">
-              + Add custom jail
-            </button>
-          )}
-        </div>
-
-        <div className="p-4 border-t border-slate-700/50">
-          <p className="text-[9px] text-slate-600 leading-relaxed">
-            The toolkit only writes to <code className="text-slate-500">/etc/fail2ban/jail.d/mysterium-toolkit.conf</code>.
-            Your <code className="text-slate-500">jail.local</code> and other configuration files are never modified.
-            External jails are read-only — edit them directly in their source file.
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-};
 
 
 const MysteriumDashboard = () => {
