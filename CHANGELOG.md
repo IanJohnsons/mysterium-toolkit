@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.62] - 2026-05-17
+### Fixed
+- SecurityPage: firewallData prop added to function signature — fixes ReferenceError crash on open
+- iptables: field names corrected (target/proto/src/dst/details) — columns now show correctly
+- fail2ban: ping uses sudo -n fallback for non-root installs — fixes "stopped" on laptop
+
+---
+
 ## [1.1.61] - 2026-05-17
 ### Fixed
 - Fleet proxy: added /firewall to whitelist — UFW rules now load correctly for fleet nodes
@@ -68,6 +76,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [1.1.54] - 2026-05-17
 ### Fixed
 - Security page: removed incorrect text about toolkit.conf restriction — all official fail2ban jails are shown and editable
+
+---
+
+## [1.1.62] - 2026-05-17
+### Fixed
+- SecurityPage: firewallData prop added to function signature — fixes ReferenceError crash on open
+- iptables: field names corrected (target/proto/src/dst/details) — columns now show correctly
+- fail2ban: ping uses sudo -n fallback for non-root installs — fixes "stopped" on laptop
 
 ---
 
@@ -163,6 +179,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.62] - 2026-05-17
+### Fixed
+- SecurityPage: firewallData prop added to function signature — fixes ReferenceError crash on open
+- iptables: field names corrected (target/proto/src/dst/details) — columns now show correctly
+- fail2ban: ping uses sudo -n fallback for non-root installs — fixes "stopped" on laptop
+
+---
+
 ## [1.1.61] - 2026-05-17
 ### Fixed
 - Fleet proxy: added /firewall to whitelist — UFW rules now load correctly for fleet nodes
@@ -226,6 +250,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [1.1.54] - 2026-05-17
 ### Fixed
 - Security page: removed incorrect text about toolkit.conf restriction — all official fail2ban jails are shown and editable
+
+---
+
+## [1.1.62] - 2026-05-17
+### Fixed
+- SecurityPage: firewallData prop added to function signature — fixes ReferenceError crash on open
+- iptables: field names corrected (target/proto/src/dst/details) — columns now show correctly
+- fail2ban: ping uses sudo -n fallback for non-root installs — fixes "stopped" on laptop
 
 ---
 

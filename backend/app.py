@@ -3978,11 +3978,11 @@ class MetricsCollector:
 
                             rules_list.append({
                                 'chain': current_chain,
-                                'action': action,
-                                'protocol': proto,
-                                'source': source,
-                                'destination': dest,
-                                'extra': extra,
+                                'target': action,
+                                'proto': proto,
+                                'src': source,
+                                'dst': dest,
+                                'details': extra,
                                 'blocked': is_blocked,
                             })
                         found_rules = True
@@ -4115,11 +4115,19 @@ class MetricsCollector:
             if shutil.which('fail2ban-client'):
                 fail2ban['installed'] = True
                 # Check if running
-                r = subprocess.run(
-                    ['fail2ban-client', 'ping'],
-                    capture_output=True, timeout=3, text=True
-                )
-                if r.returncode == 0 and 'pong' in r.stdout.lower():
+                _ping_ok = False
+                for _pfx in [[], ['sudo', '-n']]:
+                    try:
+                        r = subprocess.run(
+                            _pfx + ['fail2ban-client', 'ping'],
+                            capture_output=True, timeout=3, text=True
+                        )
+                        if r.returncode == 0 and 'pong' in r.stdout.lower():
+                            _ping_ok = True
+                            break
+                    except Exception:
+                        continue
+                if _ping_ok:
                     fail2ban['running'] = True
                     # Get list of jails
                     r2 = subprocess.run(
@@ -5952,8 +5960,15 @@ def fail2ban_get_jails():
         # Check if running
         running = False
         try:
-            rp = subprocess.run(['fail2ban-client', 'ping'], capture_output=True, timeout=3, text=True)
-            running = rp.returncode == 0 and 'pong' in rp.stdout.lower()
+            running = False
+            for _pfx in [[], ['sudo', '-n']]:
+                try:
+                    rp = subprocess.run(_pfx + ['fail2ban-client', 'ping'], capture_output=True, timeout=3, text=True)
+                    if rp.returncode == 0 and 'pong' in rp.stdout.lower():
+                        running = True
+                        break
+                except Exception:
+                    continue
         except Exception:
             pass
         # Enrich with live ban data if running

@@ -411,7 +411,7 @@ const ConsumerRow = ({ c }) => (
   </div>
 );
 
-const SecurityPage = ({ backendUrl, authHeaders }) => {
+const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
   const [f2bJails, setF2bJails] = useState(null);
   const [f2bLoading, setF2bLoading] = useState(false);
   const [f2bSaving, setF2bSaving] = useState(false);
