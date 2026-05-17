@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.53] - 2026-05-17
+### Fixed
+- FirewallSection badge: replaced dynamic Tailwind classes with static conditionals — dynamic classes are not included in production builds
+
+---
+
 ## [1.1.52] - 2026-05-17
 ### Added
 - Security button in bottom nav bar — opens full Security Settings page below (same pattern as Logs/Help)
@@ -20,6 +26,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Firewall card: 3 collapsed sections (iptables ▶, UFW ▶, fail2ban ▶) — nothing open by default
 - fail2ban section: status + jail list + "Manage fail2ban →" button
 - fail2ban management opens as a panel in the same page using existing activePanel system, not a modal
+
+---
+
+## [1.1.53] - 2026-05-17
+### Fixed
+- FirewallSection badge: replaced dynamic Tailwind classes with static conditionals — dynamic classes are not included in production builds
 
 ---
 

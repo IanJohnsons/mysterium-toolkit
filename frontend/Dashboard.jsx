@@ -626,15 +626,19 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
 
 const FirewallSection = ({ title, count, badge, badgeColor = 'slate', children }) => {
   const [open, setOpen] = React.useState(false);
+  const badgeCls = badge
+    ? badgeColor === 'emerald' ? 'bg-emerald-500/20 text-emerald-400'
+    : badgeColor === 'red' ? 'bg-red-500/20 text-red-400'
+    : badgeColor === 'amber' ? 'bg-amber-500/20 text-amber-400'
+    : 'bg-slate-500/20 text-slate-400'
+    : '';
   return (
     <div className="border border-slate-700/40 rounded overflow-hidden">
       <button onClick={() => setOpen(v => !v)}
         className="w-full flex items-center justify-between px-3 py-2 bg-slate-900/20 hover:bg-slate-800/40 transition">
         <div className="flex items-center gap-2">
           <span className="text-xs font-semibold text-slate-300">{title}</span>
-          {badge && (
-            <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium bg-${badgeColor}-500/20 text-${badgeColor}-400`}>{badge}</span>
-          )}
+          {badge && <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium ${badgeCls}`}>{badge}</span>}
           <span className="text-[10px] text-slate-500">{count}</span>
         </div>
         <span className="text-[10px] text-slate-500">{open ? '▲' : '▶'}</span>
