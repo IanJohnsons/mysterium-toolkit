@@ -5,7 +5,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.1.52] - 2026-05-17
+## [1.1.51] - 2026-05-17
 ### Changed
 - Firewall card: 3 collapsed sections (iptables ▶, UFW ▶, fail2ban ▶) — nothing open by default
 - fail2ban section: status + jail list + "Manage fail2ban →" button
