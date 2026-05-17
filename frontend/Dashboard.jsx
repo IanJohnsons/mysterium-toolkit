@@ -3111,28 +3111,27 @@ const MysteriumDashboard = () => {
                   </FirewallSection>
                 )}
 
-                {/* fail2ban section */}
+                {/* fail2ban — status only, management in Security page */}
                 {metrics.firewall.fail2ban?.installed ? (
-                  <FirewallSection title="fail2ban" count={
-                    metrics.firewall.fail2ban.running
-                      ? `${metrics.firewall.fail2ban.jails.length} jails · ${metrics.firewall.fail2ban.jails.reduce((a,j) => a+j.active_bans,0)} active bans`
-                      : 'stopped'
-                  } badge={metrics.firewall.fail2ban.running ? 'running' : 'stopped'} badgeColor={metrics.firewall.fail2ban.running ? 'emerald' : 'red'}>
-                    <div className="space-y-1">
-                      {metrics.firewall.fail2ban.jails.map(jail => (
-                        <div key={jail.name} className="flex items-center justify-between text-xs px-2 py-1 bg-slate-900/30 border border-slate-700/30 rounded">
-                          <span className="font-mono text-slate-300">{jail.name}</span>
-                          <div className="flex gap-3 text-[10px] text-slate-500">
-                            <span>active: <span className={jail.active_bans > 0 ? 'text-amber-400 font-semibold' : 'text-slate-400'}>{jail.active_bans}</span></span>
-                            <span>total: <span className="text-slate-400">{jail.total_bans}</span></span>
-                          </div>
-                        </div>
-                      ))}
-
+                  <div className="flex items-center justify-between px-3 py-2 border border-slate-700/40 rounded">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-slate-300">fail2ban</span>
+                      <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium ${metrics.firewall.fail2ban.running ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}`}>
+                        {metrics.firewall.fail2ban.running ? 'running' : 'stopped'}
+                      </span>
+                      {metrics.firewall.fail2ban.running && (
+                        <span className="text-[10px] text-slate-500">
+                          {metrics.firewall.fail2ban.jails.length} jails · {metrics.firewall.fail2ban.jails.reduce((a,j)=>a+j.active_bans,0)} active bans
+                        </span>
+                      )}
                     </div>
-                  </FirewallSection>
+                    <button onClick={()=>setShowSecurity(true)} className="text-[10px] text-violet-400 hover:text-violet-300 transition">🛡 Manage →</button>
+                  </div>
                 ) : metrics.firewall.fail2ban?.installed === false ? (
-                  <p className="text-[10px] text-slate-600 px-1">fail2ban not installed — run setup to enable brute force protection.</p>
+                  <div className="flex items-center justify-between px-3 py-2 border border-slate-700/40 rounded">
+                    <span className="text-[10px] text-slate-600">fail2ban not installed</span>
+                    <button onClick={()=>setShowSecurity(true)} className="text-[10px] text-violet-400 hover:text-violet-300 transition">🛡 Install →</button>
+                  </div>
                 ) : null}
               </div>
             </div>

@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.56] - 2026-05-17
+### Fixed
+- Firewall card: fail2ban shows status only (running/stopped + counts) — no jail details. "🛡 Manage →" links to Security page.
+
+---
+
 ## [1.1.55] - 2026-05-17
 ### Added
 - Security page: Install fail2ban button when not installed — no setup.sh needed
@@ -19,6 +25,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [1.1.54] - 2026-05-17
 ### Fixed
 - Security page: removed incorrect text about toolkit.conf restriction — all official fail2ban jails are shown and editable
+
+---
+
+## [1.1.56] - 2026-05-17
+### Fixed
+- Firewall card: fail2ban shows status only (running/stopped + counts) — no jail details. "🛡 Manage →" links to Security page.
 
 ---
 
@@ -65,6 +77,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.56] - 2026-05-17
+### Fixed
+- Firewall card: fail2ban shows status only (running/stopped + counts) — no jail details. "🛡 Manage →" links to Security page.
+
+---
+
 ## [1.1.55] - 2026-05-17
 ### Added
 - Security page: Install fail2ban button when not installed — no setup.sh needed
@@ -79,6 +97,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [1.1.54] - 2026-05-17
 ### Fixed
 - Security page: removed incorrect text about toolkit.conf restriction — all official fail2ban jails are shown and editable
+
+---
+
+## [1.1.56] - 2026-05-17
+### Fixed
+- Firewall card: fail2ban shows status only (running/stopped + counts) — no jail details. "🛡 Manage →" links to Security page.
 
 ---
 
