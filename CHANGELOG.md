@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.49] - 2026-05-17
+### Added
+- Firewall card: fail2ban sectie — toont installed/running status, actieve jails, banned IPs per jail met unban knop
+- Backend: fail2ban status in /metrics firewall data, nieuw /firewall/fail2ban/unban endpoint
+- setup.sh + bin/setup.sh: optionele stap 12.5 — fail2ban installeren met sshd, mysterium-dashboard en recidive jails. Schrijft enkel naar jail.d/mysterium-toolkit.conf, conflicteert nooit met bestaande fail2ban configuratie
+
+---
+
 ## [1.1.48] - 2026-05-10
 ### Fixed
 - Consumer ID copy: textarea positioned at top:0 opacity:0 in viewport — prevents browser from scrolling page when focusing copy element

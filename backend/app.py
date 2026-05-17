@@ -4108,6 +4108,60 @@ class MetricsCollector:
         except Exception:
             pass
 
+        # ── fail2ban status ───────────────────────────────────────────────
+        fail2ban = {'installed': False, 'running': False, 'jails': []}
+        try:
+            import shutil
+            if shutil.which('fail2ban-client'):
+                fail2ban['installed'] = True
+                # Check if running
+                r = subprocess.run(
+                    ['fail2ban-client', 'ping'],
+                    capture_output=True, timeout=3, text=True
+                )
+                if r.returncode == 0 and 'pong' in r.stdout.lower():
+                    fail2ban['running'] = True
+                    # Get list of jails
+                    r2 = subprocess.run(
+                        ['fail2ban-client', 'status'],
+                        capture_output=True, timeout=5, text=True
+                    )
+                    jail_names = []
+                    if r2.returncode == 0:
+                        for line in r2.stdout.splitlines():
+                            if 'Jail list:' in line:
+                                names = line.split(':', 1)[1].strip()
+                                jail_names = [j.strip() for j in names.split(',') if j.strip()]
+                    # Get per-jail stats
+                    for jail in jail_names:
+                        try:
+                            r3 = subprocess.run(
+                                ['fail2ban-client', 'status', jail],
+                                capture_output=True, timeout=5, text=True
+                            )
+                            if r3.returncode == 0:
+                                active_bans, total_bans, banned_ips = 0, 0, []
+                                for line in r3.stdout.splitlines():
+                                    if 'Currently banned:' in line:
+                                        try: active_bans = int(line.split(':', 1)[1].strip())
+                                        except: pass
+                                    elif 'Total banned:' in line:
+                                        try: total_bans = int(line.split(':', 1)[1].strip())
+                                        except: pass
+                                    elif 'Banned IP list:' in line:
+                                        ips = line.split(':', 1)[1].strip()
+                                        banned_ips = [ip.strip() for ip in ips.split() if ip.strip()]
+                                fail2ban['jails'].append({
+                                    'name': jail,
+                                    'active_bans': active_bans,
+                                    'total_bans': total_bans,
+                                    'banned_ips': banned_ips[:20],
+                                })
+                        except Exception:
+                            fail2ban['jails'].append({'name': jail, 'active_bans': 0, 'total_bans': 0, 'banned_ips': []})
+        except Exception:
+            pass
+
         return {
             'status': fw_status,
             'fw_type': fw_type,
@@ -4116,6 +4170,7 @@ class MetricsCollector:
             'rule_details': rules_list[:100],
             'ufw_rules': ufw_rules[:50],
             'legacy_ports': legacy_ports_found,
+            'fail2ban': fail2ban,
         }
 
     @staticmethod
@@ -5722,7 +5777,40 @@ def firewall_cleanup():
         return jsonify({'ok': False, 'error': str(e)}), 200
 
 
-@app.route('/sessions/live', methods=['GET'])
+@app.route('/firewall/fail2ban/unban', methods=['POST'])
+@require_auth
+def fail2ban_unban():
+    """Unban an IP from a specific fail2ban jail."""
+    try:
+        data = request.get_json() or {}
+        jail = data.get('jail', '').strip()
+        ip   = data.get('ip', '').strip()
+        if not jail or not ip:
+            return jsonify({'ok': False, 'error': 'jail and ip required'}), 200
+        # Basic validation
+        import re as _re
+        if not _re.match(r'^[\w\-]+$', jail):
+            return jsonify({'ok': False, 'error': 'invalid jail name'}), 200
+        if not _re.match(r'^[\d\.:a-fA-F]+$', ip):
+            return jsonify({'ok': False, 'error': 'invalid IP address'}), 200
+        for prefix in [[], ['sudo', '-n']]:
+            try:
+                r = subprocess.run(
+                    prefix + ['fail2ban-client', 'set', jail, 'unbanip', ip],
+                    capture_output=True, timeout=5, text=True
+                )
+                if r.returncode == 0:
+                    logger.info(f"fail2ban: unbanned {ip} from {jail}")
+                    return jsonify({'ok': True, 'message': f'Unbanned {ip} from {jail}'}), 200
+            except Exception:
+                continue
+        return jsonify({'ok': False, 'error': 'fail2ban-client unban failed'}), 200
+    except Exception as e:
+        logger.error(f"fail2ban/unban error: {e}")
+        return jsonify({'ok': False, 'error': str(e)}), 200
+
+
+
 @require_auth
 def get_live_sessions():
     """Fetch active sessions directly from TequilAPI (status=New) in realtime.

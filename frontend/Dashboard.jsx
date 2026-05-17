@@ -457,7 +457,7 @@ const MysteriumDashboard = () => {
     clients: { connected: 0, peak: 0 },
     performance: { latency: 0, packet_loss: 0, speed_in: 0, speed_out: 0, speed_total: 0, sys_speed_in: 0, sys_speed_out: 0, sys_speed_total: 0, sys_nic: 'NIC', idle: false },
     resources: { cpu: 0, ram: 0, disk: 0, cpu_temp: null, cpu_temp_source: '', all_temps: [] },
-    firewall: { status: 'unconfigured', rules: 0, blocked: 0, rule_details: [], ufw_rules: [] },
+    firewall: { status: 'unconfigured', rules: 0, blocked: 0, rule_details: [], ufw_rules: [], fail2ban: { installed: null, running: false, jails: [] } },
     systemHealth: { overall: 'unknown', subsystems: [] },
     nodeQuality: { available: false, quality_score: null, latency_ms: null, bandwidth_mbps: null, uptime_24h_net: null, packet_loss_net: null, uptime_24h_local: null, uptime_30d_local: null, tracking_since: null, tracking_days: 0, monitoring_failed: null, services: [], error: null },
     logs: [],
@@ -811,7 +811,7 @@ const MysteriumDashboard = () => {
           bandwidth:       raw.traffic || {},
           clients:         { connected: raw.sessions?.vpn_tunnel_count || raw.live_connections?.active || 0, peak: 0 },
           performance:     raw.performance || { speed_total: 0, speed_in: 0, speed_out: 0, idle: true },
-          firewall:        raw.firewall || { status: 'unknown', rules: 0, blocked: 0, rule_details: [], ufw_rules: [] },
+          firewall:        raw.firewall || { status: 'unknown', rules: 0, blocked: 0, rule_details: [], ufw_rules: [], fail2ban: { installed: null, running: false, jails: [] } },
           systemHealth:    raw.systemHealth || { overall: 'ok', subsystems: [] },
           live_connections: raw.live_connections || { active: 0, peers: [], svc_connections: 0 },
           logs:            raw.logs || [],
@@ -2809,6 +2809,60 @@ const MysteriumDashboard = () => {
                   </div>
                 </div>
               )}
+
+              {/* fail2ban section */}
+              {metrics.firewall.fail2ban?.installed ? (
+                <div className="border-t border-slate-700/40 pt-4 mt-2">
+                  <div className="flex items-center gap-2 mb-3">
+                    <h4 className="text-xs font-semibold text-slate-300 tracking-wide">fail2ban</h4>
+                    <span className={`text-[10px] px-2 py-0.5 rounded font-medium ${
+                      metrics.firewall.fail2ban.running
+                        ? 'bg-emerald-500/20 text-emerald-400'
+                        : 'bg-red-500/20 text-red-400'
+                    }`}>{metrics.firewall.fail2ban.running ? 'running' : 'stopped'}</span>
+                    {metrics.firewall.fail2ban.running && (
+                      <span className="text-[10px] text-slate-500">{metrics.firewall.fail2ban.jails.length} jail{metrics.firewall.fail2ban.jails.length !== 1 ? 's' : ''}</span>
+                    )}
+                  </div>
+                  {metrics.firewall.fail2ban.running && metrics.firewall.fail2ban.jails.length > 0 && (
+                    <div className="space-y-2">
+                      {metrics.firewall.fail2ban.jails.map(jail => (
+                        <div key={jail.name} className="bg-slate-900/30 border border-slate-700/30 rounded p-3">
+                          <div className="flex items-center justify-between mb-1.5">
+                            <span className="text-xs font-mono text-slate-300">{jail.name}</span>
+                            <div className="flex gap-3 text-[10px] text-slate-500">
+                              <span>active bans: <span className={jail.active_bans > 0 ? 'text-amber-400 font-semibold' : 'text-slate-400'}>{jail.active_bans}</span></span>
+                              <span>total: <span className="text-slate-400">{jail.total_bans}</span></span>
+                            </div>
+                          </div>
+                          {jail.banned_ips.length > 0 && (
+                            <div className="space-y-1">
+                              {jail.banned_ips.map(ip => (
+                                <div key={ip} className="flex items-center justify-between">
+                                  <span className="text-[10px] font-mono text-red-400/80">{ip}</span>
+                                  <button
+                                    onClick={() => fetch(`${getNodeAwareUrl()}/firewall/fail2ban/unban`, {
+                                      method: 'POST',
+                                      headers: { ...(authHeaderRef.current || {}), 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ jail: jail.name, ip })
+                                    }).then(() => setActivePanel(null))}
+                                    className="text-[10px] text-slate-500 hover:text-emerald-400 transition px-2 py-0.5 border border-slate-700 rounded hover:border-emerald-500/40"
+                                  >unban</button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : metrics.firewall.fail2ban?.installed === false ? (
+                <div className="border-t border-slate-700/40 pt-3 mt-2">
+                  <p className="text-[10px] text-slate-600">fail2ban not installed — install it to enable brute force protection for SSH, dashboard and node services.</p>
+                </div>
+              ) : null}
+
             </div>
           )}
 

@@ -1452,6 +1452,66 @@ SUDOERS_EOF
     fi
 fi
 
+# ============ STEP 12.5: OPTIONAL FAIL2BAN ============
+echo
+echo "Step 12.5: fail2ban (optional brute force protection)..."
+if command -v fail2ban-client &>/dev/null; then
+    echo -e "  ${GREEN}✓ fail2ban already installed — skipping${NC}"
+else
+    echo -e "  fail2ban provides brute force protection for SSH, toolkit dashboard and Mysterium node."
+    echo -e "  ${DIM}  Jails: sshd, mysterium-dashboard (port 5000), recidive${NC}"
+    echo
+    printf "  Install fail2ban? [y/N]: "
+    read -r _f2b_answer </dev/tty
+    if [[ "$_f2b_answer" =~ ^[Yy]$ ]]; then
+        apt-get install -y -qq fail2ban >/dev/null 2>&1 || true
+        if command -v fail2ban-client &>/dev/null; then
+            _F2B_CONF="/etc/fail2ban/jail.d/mysterium-toolkit.conf"
+            _F2B_FILTER="/etc/fail2ban/filter.d/mysterium-dashboard.conf"
+            tee "$_F2B_FILTER" > /dev/null << 'F2B_FILTER_EOF'
+[Definition]
+failregex = ^.*\[.*\] ".*" 401
+ignoreregex =
+F2B_FILTER_EOF
+            tee "$_F2B_CONF" > /dev/null << F2B_EOF
+# Mysterium Node Toolkit — fail2ban jails
+# This file is managed by the toolkit. Edit jail.local for global settings.
+
+[sshd]
+enabled  = true
+port     = ssh
+logpath  = /var/log/auth.log
+maxretry = 5
+bantime  = 3600
+findtime = 600
+
+[mysterium-dashboard]
+enabled  = true
+port     = 5000
+filter   = mysterium-dashboard
+logpath  = $TOOLKIT_DIR/logs/backend.log
+maxretry = 5
+bantime  = 3600
+findtime = 600
+
+[recidive]
+enabled  = true
+logpath  = /var/log/fail2ban.log
+bantime  = 604800
+findtime = 86400
+maxretry = 5
+F2B_EOF
+            systemctl enable fail2ban >/dev/null 2>&1 || true
+            systemctl restart fail2ban >/dev/null 2>&1 || true
+            echo -e "  ${GREEN}✓ fail2ban installed and configured${NC}"
+        else
+            echo -e "  ${RED}✗ fail2ban installation failed${NC}"
+        fi
+    else
+        echo -e "  ${DIM}  Skipped${NC}"
+    fi
+fi
+
 # ============ STEP 13: OPEN MENU ============
 echo "Step 13: Opening menu..."
 echo
