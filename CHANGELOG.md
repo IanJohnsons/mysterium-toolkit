@@ -5,6 +5,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.54] - 2026-05-17
+### Fixed
+- Security page: removed incorrect text about toolkit.conf restriction — all official fail2ban jails are shown and editable
+
+---
+
+## [1.1.54] - 2026-05-17
+### Fixed
+- Security page: removed incorrect jail restriction message
+- Security page: UFW rules now fetched by SecurityPage itself — no longer depends on firewall card being open first
+- Security page: jail delete button directly visible per jail (✕), no longer hidden in edit mode
+
+---
+
 ## [1.1.53] - 2026-05-17
 ### Fixed
 - FirewallSection badge: replaced dynamic Tailwind classes with static conditionals — dynamic classes are not included in production builds
@@ -26,6 +40,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Firewall card: 3 collapsed sections (iptables ▶, UFW ▶, fail2ban ▶) — nothing open by default
 - fail2ban section: status + jail list + "Manage fail2ban →" button
 - fail2ban management opens as a panel in the same page using existing activePanel system, not a modal
+
+---
+
+## [1.1.54] - 2026-05-17
+### Fixed
+- Security page: removed incorrect text about toolkit.conf restriction — all official fail2ban jails are shown and editable
+
+---
+
+## [1.1.54] - 2026-05-17
+### Fixed
+- Security page: removed incorrect jail restriction message
+- Security page: UFW rules now fetched by SecurityPage itself — no longer depends on firewall card being open first
+- Security page: jail delete button directly visible per jail (✕), no longer hidden in edit mode
 
 ---
 

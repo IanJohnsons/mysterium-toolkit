@@ -420,6 +420,7 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
   const [showAddJail, setShowAddJail] = React.useState(false);
   const [newJail, setNewJail] = React.useState({ name:'', port:'', logpath:'', filter:'', maxretry:5, bantime:3600, findtime:600, enabled:true });
   const [ufwMsg, setUfwMsg] = React.useState(null);
+  const [ufwRules, setUfwRules] = React.useState(null);
   const [newRule, setNewRule] = React.useState({ action:'allow', port:'', proto:'tcp' });
   const [ufwSaving, setUfwSaving] = React.useState(false);
 
@@ -431,7 +432,12 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
       .then(r=>r.json()).then(d=>{ setF2bJails(d.ok?d.jails:[]); setF2bLoading(false); })
       .catch(()=>{ setF2bJails([]); setF2bLoading(false); });
   };
-  React.useEffect(()=>{ loadJails(); }, []);
+  const loadUfw = () => {
+    fetch(`${backendUrl}/firewall`, { headers: authHeaders||{} })
+      .then(r=>r.json()).then(d=>{ setUfwRules(d.ufw_rules||[]); })
+      .catch(()=>setUfwRules([]));
+  };
+  React.useEffect(()=>{ loadJails(); loadUfw(); }, []);
 
   const saveJails = (jails) => {
     setF2bSaving(true);
@@ -454,7 +460,7 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
     }).then(r=>r.json()).then(d=>{
       setUfwSaving(false);
       setUfwMsg(d.ok?{ok:true,text:d.message}:{ok:false,text:d.error});
-      if(d.ok) setNewRule({action:'allow',port:'',proto:'tcp'});
+      if(d.ok){ setNewRule({action:'allow',port:'',proto:'tcp'}); loadUfw(); }
     }).catch(()=>{ setUfwSaving(false); setUfwMsg({ok:false,text:'Failed'}); });
   };
 
@@ -465,7 +471,7 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
       body: JSON.stringify({ rule })
     }).then(r=>r.json()).then(d=>{
       setUfwSaving(false);
-      setUfwMsg(d.ok?{ok:true,text:'Rule deleted'}:{ok:false,text:d.error});
+      setUfwMsg(d.ok?{ok:true,text:'Rule deleted'}:{ok:false,text:d.error}); if(d.ok) loadUfw();
     }).catch(()=>{ setUfwSaving(false); setUfwMsg({ok:false,text:'Failed'}); });
   };
 
@@ -483,8 +489,7 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
         <div>
           <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-3">fail2ban</h4>
           <div className="mb-2 p-3 bg-slate-900/30 border border-slate-700/30 rounded text-[10px] text-slate-500 leading-relaxed">
-            Only jails in <code className="text-slate-400">jail.d/mysterium-toolkit.conf</code> are editable here.
-            Jails from other config files are shown read-only — edit them directly in their source file to avoid conflicts.
+            All jails are read from the official fail2ban configuration. Jails marked <span className="text-slate-400">external</span> are managed by another config file — changes there must be made in that file directly.
           </div>
           {f2bMsg && <div className={`mb-2 p-2 rounded text-xs ${f2bMsg.ok?'bg-emerald-500/10 text-emerald-400':'bg-red-500/10 text-red-400'}`}>{f2bMsg.ok?'✓':'✗'} {f2bMsg.text}</div>}
           {f2bLoading && <p className="text-xs text-slate-500">Loading jails…</p>}
@@ -533,7 +538,10 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
                         {!jail.is_toolkit&&<span className="text-slate-600 text-[9px]">{jail.source_file?.split('/').pop()}</span>}
                       </div>
                     </div>
-                    {jail.is_toolkit&&<button onClick={()=>setEditJail({...jail})} className="flex-shrink-0 text-[10px] px-3 py-1.5 border border-slate-600 rounded hover:border-violet-500/40 hover:text-violet-400 text-slate-400 transition">✎ Edit</button>}
+                    <div className="flex gap-1 flex-shrink-0">
+                      {jail.is_toolkit&&<button onClick={()=>setEditJail({...jail})} className="text-[10px] px-2 py-1.5 border border-slate-600 rounded hover:border-violet-500/40 hover:text-violet-400 text-slate-400 transition">✎</button>}
+                      {jail.is_toolkit&&<button onClick={()=>{ if(confirm(`Remove [${jail.name}]?`)) saveJails((f2bJails||[]).filter(j=>j.is_toolkit&&j.name!==jail.name)); }} className="text-[10px] px-2 py-1.5 border border-slate-700 rounded hover:border-red-500/40 hover:text-red-400 text-slate-600 transition">✕</button>}
+                    </div>
                   </div>
                 )}
               </div>
@@ -607,8 +615,9 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
             </button>
           </div>
           {/* Existing rules */}
+          {ufwRules === null && <p className="text-xs text-slate-500 mb-2">Loading rules…</p>}
           <div className="space-y-1 max-h-64 overflow-y-auto">
-            {(firewallData?.ufw_rules||[]).map((rule,i)=>(
+            {(ufwRules||[]).map((rule,i)=>(
               <div key={i} className="flex items-center justify-between px-2 py-1.5 bg-slate-900/30 border border-slate-700/30 rounded">
                 <span className="text-xs font-mono text-slate-400 flex-1 mr-2">{rule}</span>
                 <button onClick={()=>ufwDelete(rule.split(' ').slice(0,2).join(' '))}
