@@ -5,6 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.50] - 2026-05-17
+### Added
+- fail2ban Manager modal — edit jail settings (maxretry, bantime, findtime), add custom jails, enable/disable jails. Accessible via ⚙ Manage button in firewall card.
+- Read-only view of jails managed by external configs — no conflicts with other tools
+- Only writes to /etc/fail2ban/jail.d/mysterium-toolkit.conf, never touches jail.local
+### Changed
+- UFW rules collapsed by default — shows first 5 rules with "show all" toggle to avoid scrolling past 84 rules
+
+---
+
 ## [1.1.49] - 2026-05-17
 ### Added
 - Firewall card: fail2ban sectie — toont installed/running status, actieve jails, banned IPs per jail met unban knop

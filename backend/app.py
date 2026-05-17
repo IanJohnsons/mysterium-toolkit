@@ -5810,6 +5810,160 @@ def fail2ban_unban():
         return jsonify({'ok': False, 'error': str(e)}), 200
 
 
+TOOLKIT_JAIL_FILE = '/etc/fail2ban/jail.d/mysterium-toolkit.conf'
+TOOLKIT_FILTER_FILE = '/etc/fail2ban/filter.d/mysterium-dashboard.conf'
+
+
+def _f2b_read_conf(path):
+    """Parse a fail2ban conf file into {jail_name: {key: value}}."""
+    import configparser
+    cp = configparser.ConfigParser(strict=False)
+    try:
+        cp.read(path)
+    except Exception:
+        return {}
+    result = {}
+    for section in cp.sections():
+        result[section] = dict(cp[section])
+    return result
+
+
+def _f2b_all_jails():
+    """Return all jails with source file info."""
+    import glob, configparser
+    jails = {}
+    # Read all jail.d files
+    for fpath in sorted(glob.glob('/etc/fail2ban/jail.d/*.conf')):
+        data = _f2b_read_conf(fpath)
+        is_toolkit = fpath == TOOLKIT_JAIL_FILE
+        for name, vals in data.items():
+            jails[name] = {
+                'name': name,
+                'source_file': fpath,
+                'is_toolkit': is_toolkit,
+                'enabled': vals.get('enabled', 'true').strip().lower() == 'true',
+                'maxretry': int(vals.get('maxretry', 5)),
+                'bantime': int(vals.get('bantime', 3600)),
+                'findtime': int(vals.get('findtime', 600)),
+                'port': vals.get('port', ''),
+                'logpath': vals.get('logpath', ''),
+                'filter': vals.get('filter', name),
+            }
+    # Also read jail.local if exists
+    for fpath in ['/etc/fail2ban/jail.local']:
+        data = _f2b_read_conf(fpath)
+        for name, vals in data.items():
+            if name not in jails:
+                jails[name] = {
+                    'name': name,
+                    'source_file': fpath,
+                    'is_toolkit': False,
+                    'enabled': vals.get('enabled', 'true').strip().lower() == 'true',
+                    'maxretry': int(vals.get('maxretry', 5)),
+                    'bantime': int(vals.get('bantime', 3600)),
+                    'findtime': int(vals.get('findtime', 600)),
+                    'port': vals.get('port', ''),
+                    'logpath': vals.get('logpath', ''),
+                    'filter': vals.get('filter', name),
+                }
+    return list(jails.values())
+
+
+def _f2b_write_toolkit_conf(jails_data):
+    """Write jails to mysterium-toolkit.conf via sudo tee."""
+    lines = ['# Mysterium Node Toolkit — fail2ban jails\n']
+    lines.append('# Managed by Mysterium Toolkit. Do not edit manually.\n')
+    lines.append('# Other jail.d files and jail.local are not touched.\n\n')
+    for jail in jails_data:
+        lines.append(f'[{jail["name"]}]\n')
+        lines.append(f'enabled  = {"true" if jail.get("enabled", True) else "false"}\n')
+        if jail.get('port'):
+            lines.append(f'port     = {jail["port"]}\n')
+        if jail.get('filter'):
+            lines.append(f'filter   = {jail["filter"]}\n')
+        if jail.get('logpath'):
+            lines.append(f'logpath  = {jail["logpath"]}\n')
+        lines.append(f'maxretry = {jail.get("maxretry", 5)}\n')
+        lines.append(f'bantime  = {jail.get("bantime", 3600)}\n')
+        lines.append(f'findtime = {jail.get("findtime", 600)}\n')
+        lines.append('\n')
+    content = ''.join(lines)
+    for prefix in [[], ['sudo', '-n']]:
+        try:
+            r = subprocess.run(
+                prefix + ['tee', TOOLKIT_JAIL_FILE],
+                input=content, capture_output=True, text=True, timeout=5
+            )
+            if r.returncode == 0:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _f2b_reload():
+    for prefix in [[], ['sudo', '-n']]:
+        try:
+            r = subprocess.run(
+                prefix + ['fail2ban-client', 'reload'],
+                capture_output=True, timeout=10, text=True
+            )
+            if r.returncode == 0:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+@app.route('/firewall/fail2ban/jails', methods=['GET'])
+@require_auth
+def fail2ban_get_jails():
+    """Return all fail2ban jails with source and editability info."""
+    try:
+        import shutil
+        if not shutil.which('fail2ban-client'):
+            return jsonify({'ok': False, 'error': 'fail2ban not installed'}), 200
+        return jsonify({'ok': True, 'jails': _f2b_all_jails()}), 200
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 200
+
+
+@app.route('/firewall/fail2ban/jails', methods=['POST'])
+@require_auth
+def fail2ban_save_jails():
+    """Save toolkit jails config and reload fail2ban."""
+    try:
+        data = request.get_json() or {}
+        jails = data.get('jails', [])
+        if not isinstance(jails, list):
+            return jsonify({'ok': False, 'error': 'jails must be a list'}), 200
+        # Validate
+        import re as _re
+        for j in jails:
+            if not _re.match(r'^[\w\-]+$', j.get('name', '')):
+                return jsonify({'ok': False, 'error': f'Invalid jail name: {j.get("name")}'}), 200
+        ok = _f2b_write_toolkit_conf(jails)
+        if not ok:
+            return jsonify({'ok': False, 'error': 'Could not write jail config — check sudo permissions'}), 200
+        _f2b_reload()
+        logger.info(f"fail2ban: saved {len(jails)} toolkit jails")
+        return jsonify({'ok': True, 'message': f'Saved {len(jails)} jails and reloaded fail2ban'}), 200
+    except Exception as e:
+        logger.error(f"fail2ban/jails save error: {e}")
+        return jsonify({'ok': False, 'error': str(e)}), 200
+
+
+@app.route('/firewall/fail2ban/reload', methods=['POST'])
+@require_auth
+def fail2ban_reload():
+    """Reload fail2ban."""
+    try:
+        ok = _f2b_reload()
+        return jsonify({'ok': ok}), 200
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 200
+
+
 
 @require_auth
 def get_live_sessions():
