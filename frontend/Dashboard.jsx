@@ -411,6 +411,26 @@ const ConsumerRow = ({ c }) => (
   </div>
 );
 
+const FirewallSection = ({ title, count, badge, badgeColor = 'slate', children }) => {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <div className="border border-slate-700/40 rounded overflow-hidden">
+      <button onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center justify-between px-3 py-2 bg-slate-900/20 hover:bg-slate-800/40 transition">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-semibold text-slate-300">{title}</span>
+          {badge && (
+            <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium bg-${badgeColor}-500/20 text-${badgeColor}-400`}>{badge}</span>
+          )}
+          <span className="text-[10px] text-slate-500">{count}</span>
+        </div>
+        <span className="text-[10px] text-slate-500">{open ? '▲' : '▶'}</span>
+      </button>
+      {open && <div className="px-3 py-3">{children}</div>}
+    </div>
+  );
+};
+
 const UpdateWaiter = ({ onBack }) => {
   const [secs, setSecs] = React.useState(10);
   React.useEffect(() => {
@@ -724,7 +744,7 @@ const MysteriumDashboard = () => {
   const [fixResults, setFixResults] = useState({});       // subsystem name → actions[]
   const [lastUpdate, setLastUpdate] = useState(null);
   const [tickCount, setTickCount] = useState(0); // 1s counter for live countdown
-  const [activePanel, setActivePanel] = useState(null); // 'services' | 'sessions' | 'firewall' | 'health' | 'data' | 'fleet' | null
+  const [activePanel, setActivePanel] = useState(null); // 'services' | 'sessions' | 'firewall' | 'fail2ban' | 'health' | 'data' | 'fleet' | null
   const [showFail2banManager, setShowFail2banManager] = useState(false);
   const [showAllUfw, setShowAllUfw] = useState(false);
   const [sessionTab, setSessionTab] = useState('live'); // 'live' | 'history'
@@ -2878,7 +2898,7 @@ const MysteriumDashboard = () => {
 
             {/* Clickable Firewall card */}
             <button
-              onClick={() => setActivePanel(activePanel === 'firewall' ? null : 'firewall')}
+              onClick={() => setActivePanel(activePanel === 'firewall' || activePanel === 'fail2ban' ? null : 'firewall')}
               className={`min-w-[140px] flex-1 text-left p-4 bg-slate-800/30 border rounded-lg backdrop-blur flex items-start gap-3 transition hover:border-emerald-500/50 ${
                 activePanel === 'firewall' ? 'border-emerald-500/50 ring-1 ring-emerald-500/20' : 'border-slate-700'
               }`}
@@ -2913,220 +2933,131 @@ const MysteriumDashboard = () => {
                     <span className="text-xs text-slate-500">{metrics.firewall.fw_type}</span>
                   )}
                 </div>
-                <button onClick={() => setActivePanel(null)} className="text-slate-500 hover:text-slate-300 text-xs">▲ collapse</button>
               </div>
 
-              {/* Legacy ports warning */}
-              {metrics.firewall.legacy_ports?.length > 0 && (
-                <div className="mb-3 px-3 py-2.5 rounded border bg-red-500/10 border-red-500/30 flex items-start justify-between gap-3">
-                  <div>
-                    <div className="text-xs font-semibold text-red-400 mb-0.5">Legacy ports detected</div>
-                    <div className="text-[10px] text-slate-400">
-                      {metrics.firewall.legacy_ports.map(p => `${p.port}/${p.proto}`).join(', ')} — opened by older toolkit setup. Not needed: Mysterium dropped OpenVPN, WireGuard uses UDP 10000-60000 via NAT hole punching only.
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => {
-                      fetch(`${getNodeAwareUrl()}/firewall/remove-legacy-ports`, {
+              <div className="px-5 py-3 space-y-2">
+                {/* Legacy ports warning */}
+                {metrics.firewall.legacy_ports?.length > 0 && (
+                  <div className="mb-3 p-3 bg-amber-500/10 border border-amber-500/30 rounded text-xs text-amber-300">
+                    <strong>Legacy ports detected:</strong>{' '}
+                    {metrics.firewall.legacy_ports.map(p => `${p.port}/${p.proto}`).join(', ')} — opened by older toolkit setup. Not needed: Mysterium dropped OpenVPN, WireGuard uses UDP 10000-60000 via NAT hole punching only.
+                    <button className="ml-2 underline hover:text-amber-200 transition"
+                      onClick={() => fetch(`${getNodeAwareUrl()}/firewall/remove-legacy-ports`, {
                         method: 'POST', headers: authHeaderRef.current || {}
-                      })
-                      .then(r => r.json())
-                      .then(d => alert(d.message || (d.error ? `Error: ${d.error}` : 'Done')))
-                      .catch(() => alert('Request failed'));
-                    }}
-                    className="text-[10px] px-2 py-1 rounded bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20 transition flex-shrink-0"
-                  >Remove</button>
-                </div>
-              )}
-              {/* iptables rules */}
-              {metrics.firewall.rule_details && metrics.firewall.rule_details.length > 0 ? (() => {
-                // Deduplicate rules for display — same chain+action+proto+source+dest+extra = one row
-                const seen = new Map();
-                const deduped = [];
-                metrics.firewall.rule_details.forEach(rule => {
-                  const key = `${rule.chain}|${rule.action}|${rule.protocol}|${rule.source}|${rule.destination}|${rule.extra}`;
-                  if (seen.has(key)) {
-                    seen.get(key).count++;
-                  } else {
-                    const r = { ...rule, count: 1 };
-                    seen.set(key, r);
-                    deduped.push(r);
-                  }
-                });
-                const dupCount = metrics.firewall.rule_details.length - deduped.length;
-                return (
-                  <div className="mb-4">
-                    {dupCount > 0 && (
-                      <div className="flex items-center justify-between mb-2 px-1">
-                        <div className="text-[10px] text-amber-400">
-                          {dupCount} duplicate FORWARD rule(s) hidden — leftover Mysterium WireGuard tunnel rules. Use Firewall Cleanup to remove them.
-                        </div>
-                        <button
-                          onClick={() => {
-                            fetch(`${getNodeAwareUrl()}/firewall/cleanup`, {
-                              method: 'POST',
-                              headers: authHeaderRef.current || {}
-                            })
-                            .then(r => r.json())
-                            .then(d => alert(d.message || (d.error ? `Error: ${d.error}` : 'Done')))
-                            .catch(() => alert('Cleanup request failed'));
-                          }}
-                          className="text-[10px] px-2 py-1 rounded bg-amber-500/10 border border-amber-500/30 text-amber-400 hover:bg-amber-500/20 transition"
-                        >
-                          Clean up
-                        </button>
-                      </div>
-                    )}
-                    <div className="space-y-1 max-h-72 overflow-y-auto overflow-x-auto">
-                      <div className="text-xs text-slate-500 font-semibold uppercase tracking-widest px-3 py-1 flex gap-3">
-                        <span className="w-16">Chain</span>
-                        <span className="w-16">Action</span>
-                        <span className="w-12">Proto</span>
-                        <span className="w-28">Source</span>
-                        <span className="w-28">Dest</span>
-                        <span className="flex-1">Details</span>
-                      </div>
-                      {deduped.map((rule, i) => (
-                        <div
-                          key={i}
-                          className={`text-xs font-mono px-3 py-1.5 rounded flex gap-3 ${
-                            rule.blocked
-                              ? 'bg-red-500/5 border border-red-500/20 text-red-300'
-                              : 'bg-slate-900/30 border border-slate-700/30 text-slate-400'
-                          }`}
-                        >
-                          <span className="w-16 text-slate-500">{rule.chain}</span>
-                          <span className={`w-16 font-semibold ${
-                            rule.action === 'ACCEPT' ? 'text-emerald-400' :
-                            rule.action === 'DROP' ? 'text-red-400' :
-                            rule.action === 'REJECT' ? 'text-amber-400' : 'text-slate-300'
-                          }`}>{rule.action}</span>
-                          <span className="w-12">{rule.protocol}</span>
-                          <span className="w-28">{rule.source}</span>
-                          <span className="w-28">{rule.destination}</span>
-                          <span className="flex-1 text-slate-500 truncate">
-                            {rule.extra}
-                            {rule.count > 1 && <span className="ml-2 text-amber-400/70">×{rule.count}</span>}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })() : (
-                <div className="text-xs text-slate-500 py-4 text-center mb-4 space-y-1">
-                  {metrics.firewall.status === 'active' ? (
-                    <>
-                      <div className="text-amber-400">No firewall rules visible</div>
-                      <div className="text-slate-500">The backend needs passwordless sudo to read firewall rules.</div>
-                      {(() => {
-                        const ft = metrics.firewall.fw_type || 'iptables';
-                        const cmds = {
-                          'ufw': 'NOPASSWD: /usr/sbin/ufw',
-                          'firewalld': 'NOPASSWD: /usr/bin/firewall-cmd',
-                          'nftables': 'NOPASSWD: /usr/sbin/nft',
-                        };
-                        const cmd = cmds[ft] || 'NOPASSWD: /sbin/iptables, /usr/sbin/iptables-legacy';
-                        return (
-                          <div className="font-mono bg-slate-900/60 px-3 py-1.5 rounded inline-block mt-1 text-left">
-                            <div className="text-slate-500 mb-0.5">sudo visudo → add:</div>
-                            <div className="text-cyan-400">{'{user}'} ALL=(ALL) {cmd}</div>
-                          </div>
-                        );
-                      })()}
-                    </>
-                  ) : (
-                    <div>Firewall not detected or inactive</div>
-                  )}
-                </div>
-              )}
-
-              {/* UFW rules if present */}
-              {metrics.firewall.ufw_rules && metrics.firewall.ufw_rules.length > 0 && (
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <h4 className="text-xs font-semibold text-slate-400">UFW Rules</h4>
-                    <button onClick={() => setShowAllUfw(v => !v)} className="text-[10px] text-slate-500 hover:text-slate-300 transition">
-                      {showAllUfw ? '▲ collapse' : `▼ show all ${metrics.firewall.ufw_rules.length} rules`}
+                      }).then(() => setActivePanel(null))}>
+                      Remove
                     </button>
                   </div>
-                  <div className="space-y-1 max-h-48 overflow-y-auto">
-                    {(showAllUfw ? metrics.firewall.ufw_rules : metrics.firewall.ufw_rules.slice(0, 5)).map((rule, i) => (
-                      <div key={i} className="text-xs font-mono px-3 py-1.5 bg-slate-900/30 border border-slate-700/30 rounded text-slate-400">
-                        {rule}
-                      </div>
-                    ))}
-                    {!showAllUfw && metrics.firewall.ufw_rules.length > 5 && (
-                      <button onClick={() => setShowAllUfw(true)} className="w-full text-[10px] text-slate-500 hover:text-slate-300 py-1 transition">
-                        + {metrics.firewall.ufw_rules.length - 5} more rules…
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )}
+                )}
 
-              {/* fail2ban section */}
-              {metrics.firewall.fail2ban?.installed ? (
-                <div className="border-t border-slate-700/40 pt-4 mt-2">
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-2">
-                      <h4 className="text-xs font-semibold text-slate-300 tracking-wide">fail2ban</h4>
-                      <span className={`text-[10px] px-2 py-0.5 rounded font-medium ${
-                        metrics.firewall.fail2ban.running
-                          ? 'bg-emerald-500/20 text-emerald-400'
-                          : 'bg-red-500/20 text-red-400'
-                      }`}>{metrics.firewall.fail2ban.running ? 'running' : 'stopped'}</span>
-                      {metrics.firewall.fail2ban.running && (
-                        <span className="text-[10px] text-slate-500">{metrics.firewall.fail2ban.jails.length} jail{metrics.firewall.fail2ban.jails.length !== 1 ? 's' : ''}</span>
-                      )}
-                    </div>
-                    <button onClick={() => setShowFail2banManager(true)}
-                      className="text-[10px] px-3 py-1.5 border border-slate-600 rounded hover:border-emerald-500/40 hover:text-emerald-400 text-slate-400 transition">
-                      ⚙ Manage
-                    </button>
-                  </div>
-                  {metrics.firewall.fail2ban.running && metrics.firewall.fail2ban.jails.length > 0 && (
-                    <div className="space-y-2">
-                      {metrics.firewall.fail2ban.jails.map(jail => (
-                        <div key={jail.name} className="bg-slate-900/30 border border-slate-700/30 rounded p-3">
-                          <div className="flex items-center justify-between mb-1.5">
-                            <span className="text-xs font-mono text-slate-300">{jail.name}</span>
-                            <div className="flex gap-3 text-[10px] text-slate-500">
-                              <span>active bans: <span className={jail.active_bans > 0 ? 'text-amber-400 font-semibold' : 'text-slate-400'}>{jail.active_bans}</span></span>
-                              <span>total: <span className="text-slate-400">{jail.total_bans}</span></span>
-                            </div>
+                {/* iptables section */}
+                <FirewallSection title="iptables" count={`${metrics.firewall.rules} rules`}>
+                  {metrics.firewall.rule_details && metrics.firewall.rule_details.length > 0 ? (() => {
+                    const deduped = [];
+                    const seen = new Set();
+                    metrics.firewall.rule_details.forEach(rule => {
+                      const key = `${rule.chain}-${rule.target}-${rule.proto}-${rule.src}-${rule.dst}-${rule.details}`;
+                      if (!seen.has(key)) { seen.add(key); deduped.push(rule); }
+                    });
+                    const dupCount = metrics.firewall.rule_details.length - deduped.length;
+                    return (
+                      <>
+                        {dupCount > 0 && (
+                          <div className="flex items-center justify-between mb-2 p-2 bg-amber-500/10 border border-amber-500/20 rounded text-xs text-amber-300">
+                            <span>{dupCount} duplicate rules detected</span>
+                            <button onClick={() => fetch(`${getNodeAwareUrl()}/firewall/cleanup`, {
+                              method: 'POST', headers: authHeaderRef.current || {}
+                            }).then(() => setActivePanel(null))}
+                              className="underline hover:text-amber-200 transition">Clean up</button>
                           </div>
-                          {jail.banned_ips.length > 0 && (
-                            <div className="space-y-1">
-                              {jail.banned_ips.map(ip => (
-                                <div key={ip} className="flex items-center justify-between">
-                                  <span className="text-[10px] font-mono text-red-400/80">{ip}</span>
-                                  <button
-                                    onClick={() => fetch(`${getNodeAwareUrl()}/firewall/fail2ban/unban`, {
-                                      method: 'POST',
-                                      headers: { ...(authHeaderRef.current || {}), 'Content-Type': 'application/json' },
-                                      body: JSON.stringify({ jail: jail.name, ip })
-                                    }).then(() => setActivePanel(null))}
-                                    className="text-[10px] text-slate-500 hover:text-emerald-400 transition px-2 py-0.5 border border-slate-700 rounded hover:border-emerald-500/40"
-                                  >unban</button>
-                                </div>
+                        )}
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-[10px] text-slate-400">
+                            <thead><tr className="border-b border-slate-700/50 text-slate-500 uppercase tracking-wider">
+                              <th className="text-left py-1 pr-3">Chain</th>
+                              <th className="text-left py-1 pr-3">Action</th>
+                              <th className="text-left py-1 pr-3">Proto</th>
+                              <th className="text-left py-1 pr-3">Source</th>
+                              <th className="text-left py-1 pr-3">Dest</th>
+                              <th className="text-left py-1">Details</th>
+                            </tr></thead>
+                            <tbody>
+                              {deduped.map((rule, i) => (
+                                <tr key={i} className="border-b border-slate-800/50 hover:bg-slate-800/20">
+                                  <td className="py-1 pr-3 font-mono">{rule.chain}</td>
+                                  <td className="py-1 pr-3 font-mono">{rule.target}</td>
+                                  <td className="py-1 pr-3">{rule.proto}</td>
+                                  <td className="py-1 pr-3 font-mono">{rule.src}</td>
+                                  <td className="py-1 pr-3 font-mono">{rule.dst}</td>
+                                  <td className="py-1 text-slate-500 font-mono">{rule.details}</td>
+                                </tr>
                               ))}
-                            </div>
-                          )}
+                            </tbody>
+                          </table>
                         </div>
+                      </>
+                    );
+                  })() : <p className="text-xs text-slate-600">No iptables rules found</p>}
+                </FirewallSection>
+
+                {/* UFW section */}
+                {metrics.firewall.ufw_rules && metrics.firewall.ufw_rules.length > 0 && (
+                  <FirewallSection title="UFW" count={`${metrics.firewall.ufw_rules.length} rules`}>
+                    <div className="space-y-1">
+                      {metrics.firewall.ufw_rules.map((rule, i) => (
+                        <div key={i} className="text-xs font-mono px-2 py-1 bg-slate-900/30 border border-slate-700/30 rounded text-slate-400">{rule}</div>
                       ))}
                     </div>
-                  )}
-                </div>
-              ) : metrics.firewall.fail2ban?.installed === false ? (
-                <div className="border-t border-slate-700/40 pt-3 mt-2">
-                  <p className="text-[10px] text-slate-600">fail2ban not installed — install it to enable brute force protection for SSH, dashboard and node services.</p>
-                </div>
-              ) : null}
+                  </FirewallSection>
+                )}
 
+                {/* fail2ban section */}
+                {metrics.firewall.fail2ban?.installed ? (
+                  <FirewallSection title="fail2ban" count={
+                    metrics.firewall.fail2ban.running
+                      ? `${metrics.firewall.fail2ban.jails.length} jails · ${metrics.firewall.fail2ban.jails.reduce((a,j) => a+j.active_bans,0)} active bans`
+                      : 'stopped'
+                  } badge={metrics.firewall.fail2ban.running ? 'running' : 'stopped'} badgeColor={metrics.firewall.fail2ban.running ? 'emerald' : 'red'}>
+                    <div className="space-y-1">
+                      {metrics.firewall.fail2ban.jails.map(jail => (
+                        <div key={jail.name} className="flex items-center justify-between text-xs px-2 py-1 bg-slate-900/30 border border-slate-700/30 rounded">
+                          <span className="font-mono text-slate-300">{jail.name}</span>
+                          <div className="flex gap-3 text-[10px] text-slate-500">
+                            <span>active: <span className={jail.active_bans > 0 ? 'text-amber-400 font-semibold' : 'text-slate-400'}>{jail.active_bans}</span></span>
+                            <span>total: <span className="text-slate-400">{jail.total_bans}</span></span>
+                          </div>
+                        </div>
+                      ))}
+                      <button onClick={() => setActivePanel('fail2ban')}
+                        className="w-full mt-2 py-2 text-xs border border-slate-600 rounded hover:border-emerald-500/40 hover:text-emerald-400 text-slate-400 transition">
+                        Manage fail2ban →
+                      </button>
+                    </div>
+                  </FirewallSection>
+                ) : metrics.firewall.fail2ban?.installed === false ? (
+                  <p className="text-[10px] text-slate-600 px-1">fail2ban not installed — run setup to enable brute force protection.</p>
+                ) : null}
+              </div>
             </div>
           )}
 
+          {/* fail2ban management panel */}
+          {activePanel === 'fail2ban' && (
+            <div className="border border-t-0 border-violet-500/30 rounded-b-lg bg-slate-800/30 backdrop-blur overflow-hidden mb-6 -mt-6 pt-2">
+              <div className="px-5 py-3 flex items-center justify-between border-b border-slate-700/50">
+                <div className="flex items-center gap-2">
+                  <span className="text-violet-400">🛡</span>
+                  <h3 className="text-sm font-semibold tracking-wide">fail2ban Manager</h3>
+                </div>
+                <button onClick={() => setActivePanel('firewall')} className="text-xs text-slate-500 hover:text-slate-300 transition">← Back to firewall</button>
+              </div>
+              <div className="px-5 py-4">
+                <Fail2banManager backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} onClose={() => setActivePanel('firewall')} />
+              </div>
+            </div>
+          )}
+
+          {/* System Metrics History Card */}
           {/* System Metrics History Card */}
           <SystemMetricsHistoryCard backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
 

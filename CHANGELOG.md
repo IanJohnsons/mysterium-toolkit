@@ -5,6 +5,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.52] - 2026-05-17
+### Changed
+- Firewall card: 3 collapsed sections (iptables ▶, UFW ▶, fail2ban ▶) — nothing open by default
+- fail2ban section: status + jail list + "Manage fail2ban →" button
+- fail2ban management opens as a panel in the same page using existing activePanel system, not a modal
+
+---
+
+## [1.1.51] - 2026-05-17
+### Fixed
+- Firewall card: fail2ban section now shows only active bans + unban buttons — jail management moved to ⚙ Manage modal as agreed
+
+---
+
 ## [1.1.50] - 2026-05-17
 ### Added
 - fail2ban Manager modal — edit jail settings (maxretry, bantime, findtime), add custom jails, enable/disable jails. Accessible via ⚙ Manage button in firewall card.
