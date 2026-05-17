@@ -7,8 +7,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [1.1.58] - 2026-05-17
 ### Fixed
-- Fleet proxy whitelist: added fail2ban/jails, fail2ban/unban, fail2ban/reload, fail2ban/install, ufw/add, ufw/delete
-- Removed duplicate FirewallSection and UpdateWaiter components causing dashboard crash after update
+- Fleet proxy whitelist: added all new security endpoints
+- Removed duplicate components causing dashboard crash
+- Fixed critical crash: React.useState replaced with named import useState throughout SecurityPage and FirewallSection — React default export was null at bundle initialization causing blank dashboard
 
 ---
 
@@ -44,8 +45,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [1.1.58] - 2026-05-17
 ### Fixed
-- Fleet proxy whitelist: added fail2ban/jails, fail2ban/unban, fail2ban/reload, fail2ban/install, ufw/add, ufw/delete
-- Removed duplicate FirewallSection and UpdateWaiter components causing dashboard crash after update
+- Fleet proxy whitelist: added all new security endpoints
+- Removed duplicate components causing dashboard crash
+- Fixed critical crash: React.useState replaced with named import useState throughout SecurityPage and FirewallSection — React default export was null at bundle initialization causing blank dashboard
 
 ---
 
@@ -107,8 +109,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [1.1.58] - 2026-05-17
 ### Fixed
-- Fleet proxy whitelist: added fail2ban/jails, fail2ban/unban, fail2ban/reload, fail2ban/install, ufw/add, ufw/delete
-- Removed duplicate FirewallSection and UpdateWaiter components causing dashboard crash after update
+- Fleet proxy whitelist: added all new security endpoints
+- Removed duplicate components causing dashboard crash
+- Fixed critical crash: React.useState replaced with named import useState throughout SecurityPage and FirewallSection — React default export was null at bundle initialization causing blank dashboard
 
 ---
 
@@ -144,8 +147,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [1.1.58] - 2026-05-17
 ### Fixed
-- Fleet proxy whitelist: added fail2ban/jails, fail2ban/unban, fail2ban/reload, fail2ban/install, ufw/add, ufw/delete
-- Removed duplicate FirewallSection and UpdateWaiter components causing dashboard crash after update
+- Fleet proxy whitelist: added all new security endpoints
+- Removed duplicate components causing dashboard crash
+- Fixed critical crash: React.useState replaced with named import useState throughout SecurityPage and FirewallSection — React default export was null at bundle initialization causing blank dashboard
 
 ---
 

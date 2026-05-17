@@ -412,22 +412,22 @@ const ConsumerRow = ({ c }) => (
 );
 
 const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
-  const [f2bJails, setF2bJails] = React.useState(null);
-  const [f2bLoading, setF2bLoading] = React.useState(false);
-  const [f2bSaving, setF2bSaving] = React.useState(false);
-  const [f2bMsg, setF2bMsg] = React.useState(null);
-  const [editJail, setEditJail] = React.useState(null);
-  const [showAddJail, setShowAddJail] = React.useState(false);
-  const [newJail, setNewJail] = React.useState({ name:'', port:'', logpath:'', filter:'', maxretry:5, bantime:3600, findtime:600, enabled:true });
-  const [ufwMsg, setUfwMsg] = React.useState(null);
-  const [ufwRules, setUfwRules] = React.useState(null);
-  const [newRule, setNewRule] = React.useState({ action:'allow', port:'', proto:'tcp' });
-  const [ufwSaving, setUfwSaving] = React.useState(false);
+  const [f2bJails, setF2bJails] = useState(null);
+  const [f2bLoading, setF2bLoading] = useState(false);
+  const [f2bSaving, setF2bSaving] = useState(false);
+  const [f2bMsg, setF2bMsg] = useState(null);
+  const [editJail, setEditJail] = useState(null);
+  const [showAddJail, setShowAddJail] = useState(false);
+  const [newJail, setNewJail] = useState({ name:'', port:'', logpath:'', filter:'', maxretry:5, bantime:3600, findtime:600, enabled:true });
+  const [ufwMsg, setUfwMsg] = useState(null);
+  const [ufwRules, setUfwRules] = useState(null);
+  const [newRule, setNewRule] = useState({ action:'allow', port:'', proto:'tcp' });
+  const [ufwSaving, setUfwSaving] = useState(false);
 
   const fmtTime = s => { s=parseInt(s); if(s>=86400) return `${Math.round(s/86400)}d`; if(s>=3600) return `${Math.round(s/3600)}h`; if(s>=60) return `${Math.round(s/60)}m`; return `${s}s`; };
 
-  const [f2bInstalled, setF2bInstalled] = React.useState(null);
-  const [installing, setInstalling] = React.useState(false);
+  const [f2bInstalled, setF2bInstalled] = useState(null);
+  const [installing, setInstalling] = useState(false);
   const loadJails = () => {
     setF2bLoading(true);
     fetch(`${backendUrl}/firewall/fail2ban/jails`, { headers: authHeaders||{} })
@@ -453,7 +453,7 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
       .then(r=>r.json()).then(d=>{ setUfwRules(d.ufw_rules||[]); })
       .catch(()=>setUfwRules([]));
   };
-  React.useEffect(()=>{ loadJails(); loadUfw(); }, []);
+  useEffect(()=>{ loadJails(); loadUfw(); }, []);
 
   const saveJails = (jails) => {
     setF2bSaving(true);
@@ -678,7 +678,7 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
 };
 
 const FirewallSection = ({ title, count, badge, badgeColor = 'slate', children }) => {
-  const [open, setOpen] = React.useState(false);
+  const [open, setOpen] = useState(false);
   const badgeCls = badge
     ? badgeColor === 'emerald' ? 'bg-emerald-500/20 text-emerald-400'
     : badgeColor === 'red' ? 'bg-red-500/20 text-red-400'
@@ -702,8 +702,8 @@ const FirewallSection = ({ title, count, badge, badgeColor = 'slate', children }
 };
 
 const UpdateWaiter = ({ onBack }) => {
-  const [secs, setSecs] = React.useState(10);
-  React.useEffect(() => {
+  const [secs, setSecs] = useState(10);
+  useEffect(() => {
     const iv = setInterval(() => {
       setSecs(s => {
         if (s <= 1) {
@@ -726,9 +726,9 @@ const UpdateWaiter = ({ onBack }) => {
 
 
 
-  const [editJail, setEditJail] = React.useState(null);
-  const [showAdd, setShowAdd] = React.useState(false);
-  const [newJail, setNewJail] = React.useState({ name: '', port: '', logpath: '', filter: '', maxretry: 5, bantime: 3600, findtime: 600, enabled: true });
+  const [editJail, setEditJail] = useState(null);
+  const [showAdd, setShowAdd] = useState(false);
+  const [newJail, setNewJail] = useState({ name: '', port: '', logpath: '', filter: '', maxretry: 5, bantime: 3600, findtime: 600, enabled: true });
 
   const load = () => {
     setLoading(true);
@@ -738,7 +738,7 @@ const UpdateWaiter = ({ onBack }) => {
       .catch(() => { setJails([]); setLoading(false); });
   };
 
-  React.useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, []);
 
   const fmtTime = (s) => {
     s = parseInt(s);
@@ -841,14 +841,14 @@ const MysteriumDashboard = () => {
   const healthToastDismissedRef = useRef(null);  // {msg, level} — degraded-state notification
 
   // Fleet Node Manager state — must be at top level to survive fetchMetrics re-renders
-  const [fleetModalOpen, setFleetModalOpen] = React.useState(false);
-  const [fleetEditNode, setFleetEditNode] = React.useState(null);
-  const [fleetForm, setFleetForm] = React.useState({ label: '', toolkit_url: '', toolkit_api_key: '' });
-  const [fleetProbing, setFleetProbing] = React.useState(false);
-  const [fleetProbeResult, setFleetProbeResult] = React.useState(null);
-  const [fleetSaving, setFleetSaving] = React.useState(false);
-  const [fleetSaveError, setFleetSaveError] = React.useState('');
-  const [fleetConfigNodes, setFleetConfigNodes] = React.useState([]);
+  const [fleetModalOpen, setFleetModalOpen] = useState(false);
+  const [fleetEditNode, setFleetEditNode] = useState(null);
+  const [fleetForm, setFleetForm] = useState({ label: '', toolkit_url: '', toolkit_api_key: '' });
+  const [fleetProbing, setFleetProbing] = useState(false);
+  const [fleetProbeResult, setFleetProbeResult] = useState(null);
+  const [fleetSaving, setFleetSaving] = useState(false);
+  const [fleetSaveError, setFleetSaveError] = useState('');
+  const [fleetConfigNodes, setFleetConfigNodes] = useState([]);
   const [healthBusy, setHealthBusy] = useState(false);   // scan in progress
   const [fixResults, setFixResults] = useState({});       // subsystem name → actions[]
   const [lastUpdate, setLastUpdate] = useState(null);
@@ -1253,7 +1253,7 @@ const MysteriumDashboard = () => {
   useEffect(() => { nodeAwareUrlRef.current = getNodeAwareUrl(); });
 
   // Fetch archive sessions from SessionDB when History tab is opened
-  const fetchArchive = React.useCallback((offset = 0, replace = true) => {
+  const fetchArchive = useCallback((offset = 0, replace = true) => {
     if (!backendUrlRef.current) return;
     setArchiveLoading(true);
     const hdrs = authHeaderRef.current || {};
@@ -3752,14 +3752,14 @@ const SERVICE_COLORS = {
 const svcColor = (t) => SERVICE_COLORS[t] || { hex: 'rgb(148,163,184)', cls: 'text-slate-400' };
 
 const ServiceSplitChart = ({ backendUrl, authHeaders }) => {
-  const [data, setData]   = React.useState([]);
-  const [days, setDays]   = React.useState(30);
-  const [open, setOpen]   = React.useState(false);
-  const [loading, setLoading] = React.useState(false);
+  const [data, setData]   = useState([]);
+  const [days, setDays]   = useState(30);
+  const [open, setOpen]   = useState(false);
+  const [loading, setLoading] = useState(false);
 
   const DAY_OPTIONS = [7, 30, 90, 365];
 
-  const load = React.useCallback(() => {
+  const load = useCallback(() => {
     if (!open) return;
     setLoading(true);
     fetch(`${backendUrl}/analytics/service-split?days=${days === 0 ? 3650 : days}`, { headers: authHeaders || {} })
@@ -3768,7 +3768,7 @@ const ServiceSplitChart = ({ backendUrl, authHeaders }) => {
       .catch(() => setLoading(false));
   }, [open, days, backendUrl, authHeaders]);
 
-  React.useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load]);
 
   // Aggregate by date → [{date, perType: {wireguard: N, scraping: N}}]
   const dates = [...new Set(data.map(r => r.date))].sort();
@@ -3857,12 +3857,12 @@ const ServiceSplitChart = ({ backendUrl, authHeaders }) => {
 
 // ---- Earnings Efficiency Chart (Feature 5) ----
 const EarningsEfficiencyChart = ({ backendUrl, authHeaders }) => {
-  const [data, setData]     = React.useState([]);
-  const [byType, setByType] = React.useState({});
-  const [days, setDays]     = React.useState(30);
-  const [open, setOpen]     = React.useState(false);
-  const [loading, setLoading] = React.useState(false);
-  const [nodePrices, setNodePrices] = React.useState({});
+  const [data, setData]     = useState([]);
+  const [byType, setByType] = useState({});
+  const [days, setDays]     = useState(30);
+  const [open, setOpen]     = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [nodePrices, setNodePrices] = useState({});
 
   const DAY_OPTIONS = [7, 30, 90, 365];
 
@@ -3874,7 +3874,7 @@ const EarningsEfficiencyChart = ({ backendUrl, authHeaders }) => {
     data_transfer: { label: 'B2B Data',      hex: 'rgb(99,102,241)'  },
   };
 
-  const load = React.useCallback(() => {
+  const load = useCallback(() => {
     if (!open) return;
     setLoading(true);
     fetch(`${backendUrl}/analytics/earnings-efficiency?days=${days === 0 ? 3650 : days}`, { headers: authHeaders || {} })
@@ -3901,7 +3901,7 @@ const EarningsEfficiencyChart = ({ backendUrl, authHeaders }) => {
       .catch(() => {});
   }, [open, days, backendUrl, authHeaders]);
 
-  React.useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load]);
 
   const W = 600; const H = 80;
 
@@ -4041,12 +4041,12 @@ const EarningsEfficiencyChart = ({ backendUrl, authHeaders }) => {
 
 // ---- Analytics Card ----
 const EarningsHistoryCard = ({ backendUrl, authHeaders }) => {
-  const [data, setData] = React.useState(null);
-  const [view, setView] = React.useState('daily');
-  const [loading, setLoading] = React.useState(false);
+  const [data, setData] = useState(null);
+  const [view, setView] = useState('daily');
+  const [loading, setLoading] = useState(false);
 
 
-  const loadChart = React.useCallback(() => {
+  const loadChart = useCallback(() => {
     if (!backendUrl) return;
     setLoading(true);
     fetch(`${backendUrl}/earnings/chart`, { headers: authHeaders || {} })
@@ -4055,7 +4055,7 @@ const EarningsHistoryCard = ({ backendUrl, authHeaders }) => {
       .catch(() => setLoading(false));
   }, [backendUrl]);
 
-  React.useEffect(() => { loadChart(); }, [loadChart]);
+  useEffect(() => { loadChart(); }, [loadChart]);
 
   if (loading) return (
     <div className="mb-6 p-4 bg-slate-800/30 border border-slate-700 rounded-lg backdrop-blur">
@@ -4269,13 +4269,13 @@ const DataTrafficCard = ({ bandwidth, backendUrl, authHeaders }) => {
   const nic = bw.vnstat_nic_name || 'NIC';
   const src = (bw.data_source || 'vnstat').toUpperCase();
 
-  const [view, setView]       = React.useState('today');
-  const [histData, setHistData] = React.useState(null);
-  const [loading, setLoading] = React.useState(false);
+  const [view, setView]       = useState('today');
+  const [histData, setHistData] = useState(null);
+  const [loading, setLoading] = useState(false);
 
 
   // Fetch history when view changes to anything other than today
-  React.useEffect(() => {
+  useEffect(() => {
     if (view === 'today') { setHistData(null); return; }
     if (!backendUrl) return;
     const rangeMap = { '7d': '7d', '30d': '30d', '90d': '90d', '1y': '1y', 'all': 'all' };
@@ -4472,9 +4472,9 @@ const AnalyticsCard = ({ sessions, backendUrl, authHeaders }) => {
   const lt = sessions?.lifetime_totals || { sessions: 0, earnings_myst: 0, data_gb: 0 };
   const hasData = sb.length > 0 || cb.length > 0;
 
-  const [dbStats, setDbStats] = React.useState(null);
-  const [showAllCountries, setShowAllCountries] = React.useState(false);
-  React.useEffect(() => {
+  const [dbStats, setDbStats] = useState(null);
+  const [showAllCountries, setShowAllCountries] = useState(false);
+  useEffect(() => {
     if (!backendUrl) return;
     fetch(`${backendUrl}/sessions/db/stats`, { headers: authHeaders || {} })
       .then(r => r.json()).then(setDbStats).catch(() => {});
@@ -4577,14 +4577,14 @@ const AnalyticsCard = ({ sessions, backendUrl, authHeaders }) => {
 
 // ============ QUALITY HISTORY SPARKLINE ============
 const QualityHistorySparkline = ({ backendUrl, authHeaders }) => {
-  const [history, setHistory]       = React.useState([]);
-  const [loading, setLoading]       = React.useState(false);
-  const [open, setOpen]             = React.useState(false);
-  const [days, setDays]             = React.useState(30);
-  const [retentionDays, setRetentionDays] = React.useState(null);
+  const [history, setHistory]       = useState([]);
+  const [loading, setLoading]       = useState(false);
+  const [open, setOpen]             = useState(false);
+  const [days, setDays]             = useState(30);
+  const [retentionDays, setRetentionDays] = useState(null);
 
   // Fetch retention config once when component first opens
-  React.useEffect(() => {
+  useEffect(() => {
     if (!open || retentionDays !== null || !backendUrl) return;
     fetch(`${backendUrl}/data/retention`, { headers: authHeaders || {} })
       .then(r => r.json())
@@ -4597,7 +4597,7 @@ const QualityHistorySparkline = ({ backendUrl, authHeaders }) => {
   const maxDays = retentionDays || 90;
   const dayOptions = DAY_MILESTONES.filter(d => d <= maxDays);
 
-  const load = React.useCallback(() => {
+  const load = useCallback(() => {
     if (!open) return;
     setLoading(true);
     const fetchDays = days === 0 ? 3650 : days;
@@ -4607,7 +4607,7 @@ const QualityHistorySparkline = ({ backendUrl, authHeaders }) => {
       .catch(() => setLoading(false));
   }, [open, days, authHeaders, backendUrl]);
 
-  React.useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load]);
 
   const Sparkline = ({ data, key1, key2, label1, label2, color1, color2, unit }) => {
     if (!data || data.length < 2) return null;
@@ -4698,14 +4698,14 @@ const QualityHistorySparkline = ({ backendUrl, authHeaders }) => {
 
 // ============ SYSTEM METRICS HISTORY CARD ============
 const SystemMetricsHistoryCard = ({ backendUrl, authHeaders }) => {
-  const [history, setHistory]             = React.useState([]);
-  const [loading, setLoading]             = React.useState(false);
-  const [open, setOpen]                   = React.useState(false);
-  const [days, setDays]                   = React.useState(7);
-  const [retentionDays, setRetentionDays] = React.useState(null);
+  const [history, setHistory]             = useState([]);
+  const [loading, setLoading]             = useState(false);
+  const [open, setOpen]                   = useState(false);
+  const [days, setDays]                   = useState(7);
+  const [retentionDays, setRetentionDays] = useState(null);
 
   // Fetch retention config once when component first opens
-  React.useEffect(() => {
+  useEffect(() => {
     if (!open || retentionDays !== null || !backendUrl) return;
     fetch(`${backendUrl}/data/retention`, { headers: authHeaders || {} })
       .then(r => r.json())
@@ -4718,7 +4718,7 @@ const SystemMetricsHistoryCard = ({ backendUrl, authHeaders }) => {
   const maxDays = retentionDays || 30;
   const dayOptions = DAY_MILESTONES.filter(d => d <= maxDays);
 
-  const load = React.useCallback(() => {
+  const load = useCallback(() => {
     if (!open) return;
     setLoading(true);
     const fetchDays = days === 0 ? 3650 : days;
@@ -4728,7 +4728,7 @@ const SystemMetricsHistoryCard = ({ backendUrl, authHeaders }) => {
       .catch(() => setLoading(false));
   }, [open, days, authHeaders, backendUrl]);
 
-  React.useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load]);
 
   const Spark = ({ data, yKey, label, colorClass, hexColor, unit = '%' }) => {
     const vals = data.map(d => d[yKey]).filter(v => v != null);
@@ -4853,8 +4853,8 @@ const NodeQualityCard = ({ nodeQuality: q, nodeStatus, backendUrl, authHeaders, 
 
   const plNet = nq.packet_loss_net;  // Discovery monitoring agent packet loss (%)
 
-  const [testResult, setTestResult] = React.useState(null);
-  const [testing, setTesting] = React.useState(false);
+  const [testResult, setTestResult] = useState(null);
+  const [testing, setTesting] = useState(false);
 
   const handleTest = async () => {
     if (!backendUrl) return;
@@ -5203,18 +5203,18 @@ const PRESETS = {
 const NodeConfigModal = ({ backendUrl, authHeaders, onClose }) => {
   const theme = (() => { try { return localStorage.getItem('myst-theme') || 'emerald'; } catch { return 'emerald'; } })();
   const modalBg = THEMES[theme]?.bg?.[0] ?? '#0a0a0a';
-  const [phase, setPhase] = React.useState(1); // 1=read, 2=edit
-  const [acknowledged, setAcknowledged] = React.useState(false);
-  const [scrolledToBottom, setScrolledToBottom] = React.useState(false);
-  const [currentValues, setCurrentValues] = React.useState({});
-  const [pendingValues, setPendingValues] = React.useState({});
-  const [loading, setLoading] = React.useState(true);
-  const [applying, setApplying] = React.useState({});
-  const [results, setResults] = React.useState({});
-  const [tomlPath, setTomlPath] = React.useState('/etc/mysterium-node/config-mainnet.toml');
-  const scrollRef = React.useRef(null);
+  const [phase, setPhase] = useState(1); // 1=read, 2=edit
+  const [acknowledged, setAcknowledged] = useState(false);
+  const [scrolledToBottom, setScrolledToBottom] = useState(false);
+  const [currentValues, setCurrentValues] = useState({});
+  const [pendingValues, setPendingValues] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [applying, setApplying] = useState({});
+  const [results, setResults] = useState({});
+  const [tomlPath, setTomlPath] = useState('/etc/mysterium-node/config-mainnet.toml');
+  const scrollRef = useRef(null);
 
-  React.useEffect(() => {
+  useEffect(() => {
     const fetchCurrent = async () => {
       setLoading(true);
       try {
@@ -5489,7 +5489,7 @@ const NodeConfigModal = ({ backendUrl, authHeaders, onClose }) => {
 
 // Small inline restart button used inside NodeConfigModal footer
 const NodeRestartButton = ({ backendUrl, authHeaders }) => {
-  const [status, setStatus] = React.useState(null);
+  const [status, setStatus] = useState(null);
   const handle = async () => {
     if (!backendUrl || !confirm('Restart the Mysterium node now? All active sessions will be dropped.')) return;
     setStatus('restarting…');
@@ -5509,8 +5509,8 @@ const NodeRestartButton = ({ backendUrl, authHeaders }) => {
 };
 
 const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, backendUrl, authHeaders, fleetNode, nodeUpdateInfo }) => {
-  const [restartStatus, setRestartStatus] = React.useState(null);
-  const [showConfig, setShowConfig] = React.useState(false);
+  const [restartStatus, setRestartStatus] = useState(null);
+  const [showConfig, setShowConfig] = useState(false);
   const status = nodeStatus?.status || 'offline';
   const uptime = nodeStatus?.uptime || '0s';
   const nodesOnline = nodeStatus?.nodes_online || 0;
@@ -5631,11 +5631,11 @@ const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, 
 };
 
 const EarningsCard = ({ earnings, backendUrl, authHeaders }) => {
-  const [settleStatus, setSettleStatus] = React.useState(null);
-  const [mystPrice, setMystPrice] = React.useState(null);
+  const [settleStatus, setSettleStatus] = useState(null);
+  const [mystPrice, setMystPrice] = useState(null);
 
   // Fetch MYST token price — refreshes every 5 minutes (matches backend cache TTL)
-  React.useEffect(() => {
+  useEffect(() => {
     if (!backendUrl) return;
     const fetchPrice = () => {
       fetch(`${backendUrl}/myst-price`, { headers: authHeaders || {} })
@@ -5794,11 +5794,11 @@ const EarningsCard = ({ earnings, backendUrl, authHeaders }) => {
 };
 
 const SettlementHistoryCard = ({ backendUrl, authHeaders }) => {
-  const [data, setData]           = React.useState(null);
-  const [loading, setLoading]     = React.useState(false);
-  const [error, setError]         = React.useState(null);
-  const [open, setOpen]           = React.useState(false);
-  const [mystPrice, setMystPrice] = React.useState(null);
+  const [data, setData]           = useState(null);
+  const [loading, setLoading]     = useState(false);
+  const [error, setError]         = useState(null);
+  const [open, setOpen]           = useState(false);
+  const [mystPrice, setMystPrice] = useState(null);
 
   const load = () => {
     if (!backendUrl || loading) return;
@@ -5810,7 +5810,7 @@ const SettlementHistoryCard = ({ backendUrl, authHeaders }) => {
       .catch(e => { setError(e.message); setLoading(false); });
   };
 
-  React.useEffect(() => {
+  useEffect(() => {
     if (backendUrl) {
       load();
       // Fetch MYST price for wallet value display
@@ -5984,12 +5984,12 @@ const SettlementHistoryCard = ({ backendUrl, authHeaders }) => {
 };
 
 const WireguardModeSelector = ({ backendUrl, authHeaders, isRunning, onChanged }) => {
-  const [mode, setMode] = React.useState(null);   // null=loading, 'open'|'verified'|'off'
-  const [busy, setBusy] = React.useState(false);
-  const [status, setStatus] = React.useState(null);
-  const [confirm, setConfirm] = React.useState(null); // mode pending confirmation
+  const [mode, setMode] = useState(null);   // null=loading, 'open'|'verified'|'off'
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState(null);
+  const [confirm, setConfirm] = useState(null); // mode pending confirmation
 
-  React.useEffect(() => {
+  useEffect(() => {
     if (!backendUrl) return;
     fetch(`${backendUrl}/services/wireguard-mode`, { headers: authHeaders || {} })
       .then(r => r.json())
@@ -6091,13 +6091,13 @@ const WireguardModeSelector = ({ backendUrl, authHeaders, isRunning, onChanged }
 
 
 const ServiceToggleRow = ({ svc, backendUrl, authHeaders, onToggled }) => {
-  const [status, setStatus]         = React.useState(null);
-  const [busy, setBusy]             = React.useState(false);
-  const [confirm, setConfirm]       = React.useState(false);
+  const [status, setStatus]         = useState(null);
+  const [busy, setBusy]             = useState(false);
+  const [confirm, setConfirm]       = useState(false);
   // Local override: after toggle, hold the new state for 30s to prevent
   // metrics refresh from flipping it back before the node has time to react
-  const [localActive, setLocalActive] = React.useState(null);
-  const localOverrideRef = React.useRef(null);
+  const [localActive, setLocalActive] = useState(null);
+  const localOverrideRef = useRef(null);
 
   const isActive = localActive !== null ? localActive : svc.is_active;
 
