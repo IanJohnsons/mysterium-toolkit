@@ -5,11 +5,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.52] - 2026-05-17
+### Added
+- Security button in bottom nav bar — opens full Security Settings page below (same pattern as Logs/Help)
+- Security page: fail2ban jail management (view all jails, edit toolkit jails, add custom jail) + UFW rule management (add/delete rules)
+### Changed
+- Firewall card fail2ban section: monitoring only (status, jail counts, active bans)
+- fail2ban management removed from firewall card inline — moved to Security page
+
+---
+
 ## [1.1.51] - 2026-05-17
 ### Changed
 - Firewall card: 3 collapsed sections (iptables ▶, UFW ▶, fail2ban ▶) — nothing open by default
 - fail2ban section: status + jail list + "Manage fail2ban →" button
 - fail2ban management opens as a panel in the same page using existing activePanel system, not a modal
+
+---
+
+## [1.1.52] - 2026-05-17
+### Added
+- Security button in bottom nav bar — opens full Security Settings page below (same pattern as Logs/Help)
+- Security page: fail2ban jail management (view all jails, edit toolkit jails, add custom jail) + UFW rule management (add/delete rules)
+### Changed
+- Firewall card fail2ban section: monitoring only (status, jail counts, active bans)
+- fail2ban management removed from firewall card inline — moved to Security page
 
 ---
 

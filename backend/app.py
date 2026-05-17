@@ -5964,6 +5964,69 @@ def fail2ban_reload():
         return jsonify({'ok': False, 'error': str(e)}), 200
 
 
+@app.route('/firewall/ufw/add', methods=['POST'])
+@require_auth
+def ufw_add_rule():
+    """Add a UFW rule. Body: {rule: 'allow 80/tcp'} or {port: '80', proto: 'tcp', action: 'allow'}"""
+    try:
+        import re as _re
+        data = request.get_json() or {}
+        rule = data.get('rule', '').strip()
+        if not rule:
+            port   = data.get('port', '').strip()
+            proto  = data.get('proto', 'tcp').strip()
+            action = data.get('action', 'allow').strip()
+            rule = f"{action} {port}/{proto}" if proto else f"{action} {port}"
+        # Validate
+        if not _re.match(r'^(allow|deny|reject|limit)\s[\w/:,\-]+$', rule):
+            return jsonify({'ok': False, 'error': f'Invalid rule: {rule}'}), 200
+        for prefix in [[], ['sudo', '-n']]:
+            try:
+                r = subprocess.run(prefix + ['ufw'] + rule.split(),
+                                   capture_output=True, timeout=10, text=True)
+                if r.returncode == 0:
+                    logger.info(f"UFW: added rule '{rule}'")
+                    return jsonify({'ok': True, 'message': f'Rule added: {rule}'}), 200
+            except Exception:
+                continue
+        return jsonify({'ok': False, 'error': 'ufw command failed — check sudo permissions'}), 200
+    except Exception as e:
+        logger.error(f"ufw/add error: {e}")
+        return jsonify({'ok': False, 'error': str(e)}), 200
+
+
+@app.route('/firewall/ufw/delete', methods=['POST'])
+@require_auth
+def ufw_delete_rule():
+    """Delete a UFW rule by number or rule string."""
+    try:
+        import re as _re
+        data = request.get_json() or {}
+        rule_num = data.get('num', '').strip()
+        rule_str = data.get('rule', '').strip()
+        if rule_num:
+            if not _re.match(r'^\d+$', rule_num):
+                return jsonify({'ok': False, 'error': 'Invalid rule number'}), 200
+            cmd = ['ufw', '--force', 'delete', rule_num]
+        elif rule_str:
+            if not _re.match(r'^(allow|deny|reject|limit)\s[\w/:,\-]+$', rule_str):
+                return jsonify({'ok': False, 'error': f'Invalid rule: {rule_str}'}), 200
+            cmd = ['ufw', '--force', 'delete'] + rule_str.split()
+        else:
+            return jsonify({'ok': False, 'error': 'rule or num required'}), 200
+        for prefix in [[], ['sudo', '-n']]:
+            try:
+                r = subprocess.run(prefix + cmd, capture_output=True, timeout=10, text=True)
+                if r.returncode == 0:
+                    logger.info(f"UFW: deleted rule '{rule_str or rule_num}'")
+                    return jsonify({'ok': True, 'message': 'Rule deleted'}), 200
+            except Exception:
+                continue
+        return jsonify({'ok': False, 'error': 'ufw delete failed'}), 200
+    except Exception as e:
+        logger.error(f"ufw/delete error: {e}")
+        return jsonify({'ok': False, 'error': str(e)}), 200
+
 
 @require_auth
 def get_live_sessions():

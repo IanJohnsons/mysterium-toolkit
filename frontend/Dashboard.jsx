@@ -411,6 +411,219 @@ const ConsumerRow = ({ c }) => (
   </div>
 );
 
+const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
+  const [f2bJails, setF2bJails] = React.useState(null);
+  const [f2bLoading, setF2bLoading] = React.useState(false);
+  const [f2bSaving, setF2bSaving] = React.useState(false);
+  const [f2bMsg, setF2bMsg] = React.useState(null);
+  const [editJail, setEditJail] = React.useState(null);
+  const [showAddJail, setShowAddJail] = React.useState(false);
+  const [newJail, setNewJail] = React.useState({ name:'', port:'', logpath:'', filter:'', maxretry:5, bantime:3600, findtime:600, enabled:true });
+  const [ufwMsg, setUfwMsg] = React.useState(null);
+  const [newRule, setNewRule] = React.useState({ action:'allow', port:'', proto:'tcp' });
+  const [ufwSaving, setUfwSaving] = React.useState(false);
+
+  const fmtTime = s => { s=parseInt(s); if(s>=86400) return `${Math.round(s/86400)}d`; if(s>=3600) return `${Math.round(s/3600)}h`; if(s>=60) return `${Math.round(s/60)}m`; return `${s}s`; };
+
+  const loadJails = () => {
+    setF2bLoading(true);
+    fetch(`${backendUrl}/firewall/fail2ban/jails`, { headers: authHeaders||{} })
+      .then(r=>r.json()).then(d=>{ setF2bJails(d.ok?d.jails:[]); setF2bLoading(false); })
+      .catch(()=>{ setF2bJails([]); setF2bLoading(false); });
+  };
+  React.useEffect(()=>{ loadJails(); }, []);
+
+  const saveJails = (jails) => {
+    setF2bSaving(true);
+    fetch(`${backendUrl}/firewall/fail2ban/jails`, {
+      method:'POST', headers:{...(authHeaders||{}),'Content-Type':'application/json'},
+      body: JSON.stringify({ jails })
+    }).then(r=>r.json()).then(d=>{
+      setF2bSaving(false);
+      setF2bMsg(d.ok?{ok:true,text:d.message}:{ok:false,text:d.error});
+      if(d.ok){ setEditJail(null); setShowAddJail(false); loadJails(); }
+    }).catch(()=>{ setF2bSaving(false); setF2bMsg({ok:false,text:'Request failed'}); });
+  };
+
+  const ufwAdd = () => {
+    if(!newRule.port) return;
+    setUfwSaving(true);
+    fetch(`${backendUrl}/firewall/ufw/add`, {
+      method:'POST', headers:{...(authHeaders||{}),'Content-Type':'application/json'},
+      body: JSON.stringify(newRule)
+    }).then(r=>r.json()).then(d=>{
+      setUfwSaving(false);
+      setUfwMsg(d.ok?{ok:true,text:d.message}:{ok:false,text:d.error});
+      if(d.ok) setNewRule({action:'allow',port:'',proto:'tcp'});
+    }).catch(()=>{ setUfwSaving(false); setUfwMsg({ok:false,text:'Failed'}); });
+  };
+
+  const ufwDelete = (rule) => {
+    setUfwSaving(true);
+    fetch(`${backendUrl}/firewall/ufw/delete`, {
+      method:'POST', headers:{...(authHeaders||{}),'Content-Type':'application/json'},
+      body: JSON.stringify({ rule })
+    }).then(r=>r.json()).then(d=>{
+      setUfwSaving(false);
+      setUfwMsg(d.ok?{ok:true,text:'Rule deleted'}:{ok:false,text:d.error});
+    }).catch(()=>{ setUfwSaving(false); setUfwMsg({ok:false,text:'Failed'}); });
+  };
+
+  const inp = 'w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-violet-500/50';
+
+  return (
+    <div className="border border-violet-500/30 rounded-lg bg-slate-800/20 backdrop-blur mb-6 overflow-hidden">
+      <div className="px-5 py-3 border-b border-slate-700/50 flex items-center gap-2">
+        <span className="text-violet-400">🛡</span>
+        <h3 className="text-sm font-semibold tracking-wide text-slate-200">Security Settings</h3>
+      </div>
+
+      <div className="p-4 space-y-6">
+        {/* ── fail2ban ── */}
+        <div>
+          <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-3">fail2ban</h4>
+          <div className="mb-2 p-3 bg-slate-900/30 border border-slate-700/30 rounded text-[10px] text-slate-500 leading-relaxed">
+            Only jails in <code className="text-slate-400">jail.d/mysterium-toolkit.conf</code> are editable here.
+            Jails from other config files are shown read-only — edit them directly in their source file to avoid conflicts.
+          </div>
+          {f2bMsg && <div className={`mb-2 p-2 rounded text-xs ${f2bMsg.ok?'bg-emerald-500/10 text-emerald-400':'bg-red-500/10 text-red-400'}`}>{f2bMsg.ok?'✓':'✗'} {f2bMsg.text}</div>}
+          {f2bLoading && <p className="text-xs text-slate-500">Loading jails…</p>}
+          <div className="space-y-2">
+            {(f2bJails||[]).map(jail => (
+              <div key={jail.name} className={`rounded border p-3 ${jail.is_toolkit?'border-slate-600 bg-slate-800/30':'border-slate-700/30 bg-slate-800/10'}`}>
+                {editJail?.name===jail.name ? (
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-mono font-semibold text-slate-200">[{jail.name}]</span>
+                      <button onClick={()=>setEditJail(null)} className="text-[10px] text-slate-500">cancel</button>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
+                      {[['Max retries','attempts before ban','maxretry',1,100],['Ban time','seconds','bantime',60,null],['Find time','window (seconds)','findtime',60,null]].map(([label,hint,key,min])=>(
+                        <div key={key}>
+                          <label className="block text-[10px] text-slate-400 mb-1">{label} <span className="text-slate-600">— {hint}</span></label>
+                          <input type="number" min={min} value={editJail[key]} onChange={e=>setEditJail({...editJail,[key]:parseInt(e.target.value)||min})} className={inp} />
+                          {key!=='maxretry'&&<p className="text-[9px] text-slate-600 mt-0.5">{fmtTime(editJail[key])}</p>}
+                        </div>
+                      ))}
+                    </div>
+                    <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer mb-3">
+                      <input type="checkbox" checked={editJail.enabled} onChange={e=>setEditJail({...editJail,enabled:e.target.checked})} className="accent-violet-500" /> Enabled
+                    </label>
+                    <div className="flex gap-2">
+                      <button onClick={()=>saveJails(f2bJails.filter(j=>j.is_toolkit).map(j=>j.name===editJail.name?editJail:j))} disabled={f2bSaving}
+                        className="flex-1 py-2 text-xs bg-violet-600 hover:bg-violet-700 text-white rounded font-semibold transition disabled:opacity-50">
+                        {f2bSaving?'Saving…':'✓ Save & reload'}
+                      </button>
+                      <button onClick={()=>{ if(confirm(`Remove [${jail.name}]?`)) saveJails(f2bJails.filter(j=>j.is_toolkit&&j.name!==jail.name)); }}
+                        className="px-3 py-2 text-xs bg-red-500/10 border border-red-500/30 hover:bg-red-500/20 text-red-400 rounded transition">Remove</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs font-mono font-semibold text-slate-200">[{jail.name}]</span>
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded ${jail.is_toolkit?'bg-violet-500/20 text-violet-400':'bg-slate-600/40 text-slate-400'}`}>{jail.is_toolkit?'toolkit':'external'}</span>
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded ${jail.enabled?'bg-emerald-500/10 text-emerald-500':'bg-slate-700 text-slate-500'}`}>{jail.enabled?'enabled':'disabled'}</span>
+                      </div>
+                      <div className="flex gap-3 mt-1 text-[10px] text-slate-500 flex-wrap">
+                        <span>retry: <span className="text-slate-400">{jail.maxretry}×</span></span>
+                        <span>ban: <span className="text-slate-400">{fmtTime(jail.bantime)}</span></span>
+                        <span>window: <span className="text-slate-400">{fmtTime(jail.findtime)}</span></span>
+                        {!jail.is_toolkit&&<span className="text-slate-600 text-[9px]">{jail.source_file?.split('/').pop()}</span>}
+                      </div>
+                    </div>
+                    {jail.is_toolkit&&<button onClick={()=>setEditJail({...jail})} className="flex-shrink-0 text-[10px] px-3 py-1.5 border border-slate-600 rounded hover:border-violet-500/40 hover:text-violet-400 text-slate-400 transition">✎ Edit</button>}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+          {showAddJail ? (
+            <div className="mt-3 border border-violet-500/30 bg-slate-800/30 rounded p-3">
+              <h5 className="text-xs font-semibold text-slate-200 mb-3">Add custom jail</h5>
+              {[['Jail name','e.g. nginx','name'],['Port','e.g. 80,443','port'],['Log path','full path to log file','logpath'],['Filter','filter name (empty = jail name)','filter']].map(([label,hint,key])=>(
+                <div key={key} className="mb-2">
+                  <label className="block text-[10px] text-slate-400 mb-1">{label} <span className="text-slate-600">— {hint}</span></label>
+                  <input type="text" value={newJail[key]} onChange={e=>setNewJail({...newJail,[key]:e.target.value})} className={inp} />
+                </div>
+              ))}
+              <div className="grid grid-cols-3 gap-3 mb-3">
+                {[['Max retries','maxretry',1],['Ban time (s)','bantime',60],['Find time (s)','findtime',60]].map(([label,key,min])=>(
+                  <div key={key}>
+                    <label className="block text-[10px] text-slate-400 mb-1">{label}</label>
+                    <input type="number" min={min} value={newJail[key]} onChange={e=>setNewJail({...newJail,[key]:parseInt(e.target.value)||min})} className={inp} />
+                  </div>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <button onClick={()=>saveJails([...(f2bJails?.filter(j=>j.is_toolkit)||[]),newJail])} disabled={f2bSaving||!newJail.name}
+                  className="flex-1 py-2 text-xs bg-violet-600 hover:bg-violet-700 text-white rounded font-semibold transition disabled:opacity-50">
+                  {f2bSaving?'Saving…':'+ Add jail'}
+                </button>
+                <button onClick={()=>setShowAddJail(false)} className="px-4 py-2 text-xs text-slate-500 hover:text-slate-300">cancel</button>
+              </div>
+            </div>
+          ) : (
+            <button onClick={()=>setShowAddJail(true)} className="w-full mt-2 py-2 text-xs border border-dashed border-slate-600 rounded hover:border-violet-500/40 hover:text-violet-400 text-slate-500 transition">
+              + Add custom jail
+            </button>
+          )}
+        </div>
+
+        {/* ── UFW ── */}
+        <div>
+          <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-3">UFW Rules</h4>
+          {ufwMsg && <div className={`mb-2 p-2 rounded text-xs ${ufwMsg.ok?'bg-emerald-500/10 text-emerald-400':'bg-red-500/10 text-red-400'}`}>{ufwMsg.ok?'✓':'✗'} {ufwMsg.text}</div>}
+          {/* Add rule */}
+          <div className="flex flex-wrap gap-2 mb-4 items-end">
+            <div>
+              <label className="block text-[10px] text-slate-400 mb-1">Action</label>
+              <select value={newRule.action} onChange={e=>setNewRule({...newRule,action:e.target.value})}
+                className="bg-slate-900 border border-slate-600 rounded px-2 py-2 text-xs text-slate-200 focus:outline-none focus:border-violet-500/50">
+                <option value="allow">allow</option>
+                <option value="deny">deny</option>
+                <option value="reject">reject</option>
+                <option value="limit">limit</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-[10px] text-slate-400 mb-1">Port</label>
+              <input type="text" placeholder="e.g. 8080" value={newRule.port} onChange={e=>setNewRule({...newRule,port:e.target.value})}
+                className="w-28 bg-slate-900 border border-slate-600 rounded px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-violet-500/50" />
+            </div>
+            <div>
+              <label className="block text-[10px] text-slate-400 mb-1">Protocol</label>
+              <select value={newRule.proto} onChange={e=>setNewRule({...newRule,proto:e.target.value})}
+                className="bg-slate-900 border border-slate-600 rounded px-2 py-2 text-xs text-slate-200 focus:outline-none focus:border-violet-500/50">
+                <option value="tcp">tcp</option>
+                <option value="udp">udp</option>
+                <option value="">any</option>
+              </select>
+            </div>
+            <button onClick={ufwAdd} disabled={ufwSaving||!newRule.port}
+              className="px-4 py-2 text-xs bg-violet-600 hover:bg-violet-700 text-white rounded font-semibold transition disabled:opacity-50">
+              {ufwSaving?'…':'+ Add rule'}
+            </button>
+          </div>
+          {/* Existing rules */}
+          <div className="space-y-1 max-h-64 overflow-y-auto">
+            {(firewallData?.ufw_rules||[]).map((rule,i)=>(
+              <div key={i} className="flex items-center justify-between px-2 py-1.5 bg-slate-900/30 border border-slate-700/30 rounded">
+                <span className="text-xs font-mono text-slate-400 flex-1 mr-2">{rule}</span>
+                <button onClick={()=>ufwDelete(rule.split(' ').slice(0,2).join(' '))}
+                  className="flex-shrink-0 text-[10px] text-slate-600 hover:text-red-400 transition px-2 py-0.5 border border-slate-700 rounded hover:border-red-500/40">
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const FirewallSection = ({ title, count, badge, badgeColor = 'slate', children }) => {
   const [open, setOpen] = React.useState(false);
   return (
@@ -745,8 +958,6 @@ const MysteriumDashboard = () => {
   const [lastUpdate, setLastUpdate] = useState(null);
   const [tickCount, setTickCount] = useState(0); // 1s counter for live countdown
   const [activePanel, setActivePanel] = useState(null); // 'services' | 'sessions' | 'firewall' | 'fail2ban' | 'health' | 'data' | 'fleet' | null
-  const [showFail2banManager, setShowFail2banManager] = useState(false);
-  const [showAllUfw, setShowAllUfw] = useState(false);
   const [sessionTab, setSessionTab] = useState('live'); // 'live' | 'history'
   const [consumerSort, setConsumerSort] = useState({ key: 'total_earnings', dir: 'desc' });
   const [historySort, setHistorySort] = useState({ key: 'started', dir: 'desc' });
@@ -824,6 +1035,7 @@ const MysteriumDashboard = () => {
   });
   const [showLogs, setShowLogs] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+  const [showSecurity, setShowSecurity] = useState(false);
   const [theme, setTheme] = useState(() => {
     try { return localStorage.getItem('myst-theme') || 'emerald'; } catch { return 'emerald'; }
   });
@@ -1850,13 +2062,7 @@ const MysteriumDashboard = () => {
 
     return (
       <div data-theme={theme} className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 text-white font-['SF_Mono',monospace] overflow-x-hidden">
-        {showFail2banManager && (
-          <Fail2banManager
-            backendUrl={getNodeAwareUrl()}
-            authHeaders={authHeaderRef.current}
-            onClose={() => setShowFail2banManager(false)}
-          />
-        )}
+
         {/* ── Degraded-state health toast ── */}
         {healthToast && (
           <div className={`fixed bottom-4 right-4 z-[100] flex items-center gap-2 px-3 py-2 rounded-lg border shadow-lg text-xs backdrop-blur cursor-pointer transition-all opacity-90 hover:opacity-100
@@ -2898,7 +3104,7 @@ const MysteriumDashboard = () => {
 
             {/* Clickable Firewall card */}
             <button
-              onClick={() => setActivePanel(activePanel === 'firewall' || activePanel === 'fail2ban' ? null : 'firewall')}
+              onClick={() => setActivePanel(activePanel === 'firewall' ? null : 'firewall')}
               className={`min-w-[140px] flex-1 text-left p-4 bg-slate-800/30 border rounded-lg backdrop-blur flex items-start gap-3 transition hover:border-emerald-500/50 ${
                 activePanel === 'firewall' ? 'border-emerald-500/50 ring-1 ring-emerald-500/20' : 'border-slate-700'
               }`}
@@ -3028,10 +3234,7 @@ const MysteriumDashboard = () => {
                           </div>
                         </div>
                       ))}
-                      <button onClick={() => setActivePanel('fail2ban')}
-                        className="w-full mt-2 py-2 text-xs border border-slate-600 rounded hover:border-emerald-500/40 hover:text-emerald-400 text-slate-400 transition">
-                        Manage fail2ban →
-                      </button>
+
                     </div>
                   </FirewallSection>
                 ) : metrics.firewall.fail2ban?.installed === false ? (
@@ -3041,21 +3244,7 @@ const MysteriumDashboard = () => {
             </div>
           )}
 
-          {/* fail2ban management panel */}
-          {activePanel === 'fail2ban' && (
-            <div className="border border-t-0 border-violet-500/30 rounded-b-lg bg-slate-800/30 backdrop-blur overflow-hidden mb-6 -mt-6 pt-2">
-              <div className="px-5 py-3 flex items-center justify-between border-b border-slate-700/50">
-                <div className="flex items-center gap-2">
-                  <span className="text-violet-400">🛡</span>
-                  <h3 className="text-sm font-semibold tracking-wide">fail2ban Manager</h3>
-                </div>
-                <button onClick={() => setActivePanel('firewall')} className="text-xs text-slate-500 hover:text-slate-300 transition">← Back to firewall</button>
-              </div>
-              <div className="px-5 py-4">
-                <Fail2banManager backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} onClose={() => setActivePanel('firewall')} />
-              </div>
-            </div>
-          )}
+
 
           {/* System Metrics History Card */}
           {/* System Metrics History Card */}
@@ -3356,6 +3545,16 @@ const MysteriumDashboard = () => {
               >
                 ? Help
               </button>
+              <button
+                onClick={() => setShowSecurity(!showSecurity)}
+                className={`px-3 py-1 text-xs rounded border transition flex items-center gap-1 ${
+                  showSecurity
+                    ? 'bg-violet-500/20 border-violet-400 text-violet-200'
+                    : 'border-slate-600 text-slate-400 hover:border-slate-500'
+                }`}
+              >
+                🛡 Security
+              </button>
               <span className="text-slate-600 mx-1">|</span>
               <span className="text-xs text-slate-500 mr-1">{THEMES[theme].name}</span>
               {THEME_KEYS.map(k => (
@@ -3596,7 +3795,15 @@ const MysteriumDashboard = () => {
             </div>
           )}
 
-          
+          {/* ═══ Security Section ═══ */}
+          {showSecurity && (
+            <SecurityPage
+              backendUrl={getNodeAwareUrl()}
+              authHeaders={authHeaderRef.current}
+              firewallData={metrics.firewall}
+            />
+          )}
+
           {/* ═══ Credit Footer ═══ */}
           <div className="mt-12 mb-6 text-center">
             <div className="inline-flex flex-col items-center gap-2 px-8 py-4 rounded-xl bg-slate-900/20 border border-slate-800/50 backdrop-blur">
