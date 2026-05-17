@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.63] - 2026-05-17
+### Fixed
+- SecurityPage: firewallData prop added to function signature
+- iptables: field names corrected (target/proto/src/dst/details)
+- fail2ban: ping uses sudo -n fallback for non-root installs
+- Fleet proxy: /firewall added to whitelist
+
+---
+
 ## [1.1.62] - 2026-05-17
 ### Fixed
 - SecurityPage: firewallData prop added to function signature — fixes ReferenceError crash on open
@@ -76,6 +85,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [1.1.54] - 2026-05-17
 ### Fixed
 - Security page: removed incorrect text about toolkit.conf restriction — all official fail2ban jails are shown and editable
+
+---
+
+## [1.1.63] - 2026-05-17
+### Fixed
+- SecurityPage: firewallData prop added to function signature
+- iptables: field names corrected (target/proto/src/dst/details)
+- fail2ban: ping uses sudo -n fallback for non-root installs
+- Fleet proxy: /firewall added to whitelist
 
 ---
 
@@ -179,6 +197,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.63] - 2026-05-17
+### Fixed
+- SecurityPage: firewallData prop added to function signature
+- iptables: field names corrected (target/proto/src/dst/details)
+- fail2ban: ping uses sudo -n fallback for non-root installs
+- Fleet proxy: /firewall added to whitelist
+
+---
+
 ## [1.1.62] - 2026-05-17
 ### Fixed
 - SecurityPage: firewallData prop added to function signature — fixes ReferenceError crash on open
@@ -250,6 +277,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [1.1.54] - 2026-05-17
 ### Fixed
 - Security page: removed incorrect text about toolkit.conf restriction — all official fail2ban jails are shown and editable
+
+---
+
+## [1.1.63] - 2026-05-17
+### Fixed
+- SecurityPage: firewallData prop added to function signature
+- iptables: field names corrected (target/proto/src/dst/details)
+- fail2ban: ping uses sudo -n fallback for non-root installs
+- Fleet proxy: /firewall added to whitelist
 
 ---
 
