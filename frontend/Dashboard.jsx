@@ -724,6 +724,8 @@ const UpdateWaiter = ({ onBack }) => {
 };
 
 
+
+
   const [editJail, setEditJail] = React.useState(null);
   const [showAdd, setShowAdd] = React.useState(false);
   const [newJail, setNewJail] = React.useState({ name: '', port: '', logpath: '', filter: '', maxretry: 5, bantime: 3600, findtime: 600, enabled: true });

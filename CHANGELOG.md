@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.57] - 2026-05-17
+### Fixed
+- Removed duplicate FirewallSection and UpdateWaiter components that caused dashboard to crash after update
+
+---
+
 ## [1.1.56] - 2026-05-17
 ### Fixed
 - Firewall card: fail2ban shows status only (running/stopped + counts) — no jail details. "🛡 Manage →" links to Security page.
@@ -25,6 +31,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [1.1.54] - 2026-05-17
 ### Fixed
 - Security page: removed incorrect text about toolkit.conf restriction — all official fail2ban jails are shown and editable
+
+---
+
+## [1.1.57] - 2026-05-17
+### Fixed
+- Removed duplicate FirewallSection and UpdateWaiter components that caused dashboard to crash after update
 
 ---
 
@@ -77,6 +89,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.57] - 2026-05-17
+### Fixed
+- Removed duplicate FirewallSection and UpdateWaiter components that caused dashboard to crash after update
+
+---
+
 ## [1.1.56] - 2026-05-17
 ### Fixed
 - Firewall card: fail2ban shows status only (running/stopped + counts) — no jail details. "🛡 Manage →" links to Security page.
@@ -97,6 +115,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [1.1.54] - 2026-05-17
 ### Fixed
 - Security page: removed incorrect text about toolkit.conf restriction — all official fail2ban jails are shown and editable
+
+---
+
+## [1.1.57] - 2026-05-17
+### Fixed
+- Removed duplicate FirewallSection and UpdateWaiter components that caused dashboard to crash after update
 
 ---
 
