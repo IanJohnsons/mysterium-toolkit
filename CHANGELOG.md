@@ -7,7 +7,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [1.1.59] - 2026-05-17
 ### Fixed
-- SecurityPage: moved all useState hooks to top of component before any other code — hooks defined after non-hook constants violated React rules of hooks causing blank dashboard
+- Root cause fix: removed 123 orphan lines (duplicate FirewallSection x2, UpdateWaiter x2, and remnants of old Fail2banManager) that were at module level — minifier combined them with component definitions causing useState to execute outside React render context → blank dashboard crash
 
 ---
 
@@ -51,7 +51,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [1.1.59] - 2026-05-17
 ### Fixed
-- SecurityPage: moved all useState hooks to top of component before any other code — hooks defined after non-hook constants violated React rules of hooks causing blank dashboard
+- Root cause fix: removed 123 orphan lines (duplicate FirewallSection x2, UpdateWaiter x2, and remnants of old Fail2banManager) that were at module level — minifier combined them with component definitions causing useState to execute outside React render context → blank dashboard crash
 
 ---
 
@@ -121,7 +121,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [1.1.59] - 2026-05-17
 ### Fixed
-- SecurityPage: moved all useState hooks to top of component before any other code — hooks defined after non-hook constants violated React rules of hooks causing blank dashboard
+- Root cause fix: removed 123 orphan lines (duplicate FirewallSection x2, UpdateWaiter x2, and remnants of old Fail2banManager) that were at module level — minifier combined them with component definitions causing useState to execute outside React render context → blank dashboard crash
 
 ---
 
@@ -165,7 +165,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [1.1.59] - 2026-05-17
 ### Fixed
-- SecurityPage: moved all useState hooks to top of component before any other code — hooks defined after non-hook constants violated React rules of hooks causing blank dashboard
+- Root cause fix: removed 123 orphan lines (duplicate FirewallSection x2, UpdateWaiter x2, and remnants of old Fail2banManager) that were at module level — minifier combined them with component definitions causing useState to execute outside React render context → blank dashboard crash
 
 ---
 
