@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.65] - 2026-05-18
+### Fixed
+- fail2ban jails: fixed exception cascade — jail list and settings fetch now have separate error handling so a settings error no longer wipes the entire jail list
+- Dashboard crash: fixed toFixed() on undefined values in earnings chart
+- Sudoers: added fail2ban-client and fail2ban config paths to NOPASSWD — fixes jail access on non-root installs (laptop)
+
+---
+
 ## [1.1.64] - 2026-05-17
 ### Fixed
 - fail2ban jails: rewritten to use fail2ban-client as primary source — works on all distros (Debian, Ubuntu, RHEL, CentOS, Fedora, Arch). Gets live maxretry/bantime/findtime per jail via fail2ban-client get
@@ -94,6 +102,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [1.1.54] - 2026-05-17
 ### Fixed
 - Security page: removed incorrect text about toolkit.conf restriction — all official fail2ban jails are shown and editable
+
+---
+
+## [1.1.65] - 2026-05-18
+### Fixed
+- fail2ban jails: fixed exception cascade — jail list and settings fetch now have separate error handling so a settings error no longer wipes the entire jail list
+- Dashboard crash: fixed toFixed() on undefined values in earnings chart
+- Sudoers: added fail2ban-client and fail2ban config paths to NOPASSWD — fixes jail access on non-root installs (laptop)
 
 ---
 
@@ -215,6 +231,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.65] - 2026-05-18
+### Fixed
+- fail2ban jails: fixed exception cascade — jail list and settings fetch now have separate error handling so a settings error no longer wipes the entire jail list
+- Dashboard crash: fixed toFixed() on undefined values in earnings chart
+- Sudoers: added fail2ban-client and fail2ban config paths to NOPASSWD — fixes jail access on non-root installs (laptop)
+
+---
+
 ## [1.1.64] - 2026-05-17
 ### Fixed
 - fail2ban jails: rewritten to use fail2ban-client as primary source — works on all distros (Debian, Ubuntu, RHEL, CentOS, Fedora, Arch). Gets live maxretry/bantime/findtime per jail via fail2ban-client get
@@ -304,6 +328,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [1.1.54] - 2026-05-17
 ### Fixed
 - Security page: removed incorrect text about toolkit.conf restriction — all official fail2ban jails are shown and editable
+
+---
+
+## [1.1.65] - 2026-05-18
+### Fixed
+- fail2ban jails: fixed exception cascade — jail list and settings fetch now have separate error handling so a settings error no longer wipes the entire jail list
+- Dashboard crash: fixed toFixed() on undefined values in earnings chart
+- Sudoers: added fail2ban-client and fail2ban config paths to NOPASSWD — fixes jail access on non-root installs (laptop)
 
 ---
 

@@ -5837,57 +5837,59 @@ def _f2b_read_conf(path):
 
 
 def _f2b_all_jails():
-    """Return all jails using fail2ban-client as primary source (works on all distros).
-    Falls back to config file reading for non-active jails.
-    """
+    """Return all jails using fail2ban-client as primary source (works on all distros)."""
     import glob as _glob, os as _os
     jails = {}
 
-    # PRIMARY: use fail2ban-client to get active jails and their live settings
-    # Works on ALL distros regardless of config file locations
-    try:
-        for pfx in [[], ['sudo', '-n']]:
-            try:
-                r = subprocess.run(pfx + ['fail2ban-client', 'status'],
-                                   capture_output=True, timeout=5, text=True)
-                if r.returncode == 0:
-                    for line in r.stdout.splitlines():
-                        if 'Jail list:' in line:
-                            names = line.split(':', 1)[1].strip()
-                            for jname in [n.strip() for n in names.split(',') if n.strip()]:
-                                maxretry, bantime, findtime = 5, 3600, 600
-                                for setting, attr in [('maxretry','maxretry'),('bantime','bantime'),('findtime','findtime')]:
-                                    try:
-                                        rs = subprocess.run(
-                                            pfx + ['fail2ban-client', 'get', jname, setting],
-                                            capture_output=True, timeout=3, text=True
-                                        )
-                                        if rs.returncode == 0:
-                                            v = int(rs.stdout.strip())
-                                            if attr == 'maxretry': maxretry = v
-                                            elif attr == 'bantime': bantime = v
-                                            elif attr == 'findtime': findtime = v
-                                    except Exception:
-                                        pass
-                                jails[jname] = {
-                                    'name': jname,
-                                    'source_file': 'active',
-                                    'is_toolkit': False,
-                                    'enabled': True,
-                                    'maxretry': maxretry,
-                                    'bantime': bantime,
-                                    'findtime': findtime,
-                                    'port': '',
-                                    'logpath': '',
-                                    'filter': jname,
-                                }
+    # PRIMARY: get active jail list from fail2ban-client
+    jail_names = []
+    used_pfx = []
+    for pfx in [[], ['sudo', '-n']]:
+        try:
+            r = subprocess.run(pfx + ['fail2ban-client', 'status'],
+                               capture_output=True, timeout=5, text=True)
+            if r.returncode == 0:
+                for line in r.stdout.splitlines():
+                    if 'Jail list:' in line:
+                        names = line.split(':', 1)[1].strip()
+                        jail_names = [n.strip() for n in names.split(',') if n.strip()]
+                        used_pfx = pfx
+                        break
+                if jail_names:
                     break
-            except Exception:
-                continue
-    except Exception:
-        pass
+        except Exception:
+            continue
 
-    # SECONDARY: read config files to find toolkit-managed jails and non-active jails
+    # Get live settings per jail (separate from status to avoid exception cascade)
+    for jname in jail_names:
+        maxretry, bantime, findtime = 5, 3600, 600
+        for setting, default, target in [('maxretry',5,'maxretry'),('bantime',3600,'bantime'),('findtime',600,'findtime')]:
+            try:
+                rs = subprocess.run(
+                    used_pfx + ['fail2ban-client', 'get', jname, setting],
+                    capture_output=True, timeout=3, text=True
+                )
+                if rs.returncode == 0:
+                    v = int(rs.stdout.strip())
+                    if target == 'maxretry': maxretry = v
+                    elif target == 'bantime': bantime = v
+                    elif target == 'findtime': findtime = v
+            except Exception:
+                pass
+        jails[jname] = {
+            'name': jname,
+            'source_file': 'active',
+            'is_toolkit': False,
+            'enabled': True,
+            'maxretry': maxretry,
+            'bantime': bantime,
+            'findtime': findtime,
+            'port': '',
+            'logpath': '',
+            'filter': jname,
+        }
+
+    # SECONDARY: read config files to mark toolkit-managed jails and find non-active ones
     config_files = (
         ['/etc/fail2ban/jail.conf']
         + sorted(_glob.glob('/etc/fail2ban/jail.d/*.conf'))
@@ -5896,7 +5898,10 @@ def _f2b_all_jails():
     for fpath in config_files:
         if not _os.path.exists(fpath):
             continue
-        data = _f2b_read_conf(fpath)
+        try:
+            data = _f2b_read_conf(fpath)
+        except Exception:
+            continue
         is_toolkit = fpath == TOOLKIT_JAIL_FILE
         for name, vals in data.items():
             if name == 'DEFAULT':
@@ -5906,19 +5911,22 @@ def _f2b_all_jails():
                     jails[name]['is_toolkit'] = True
                     jails[name]['source_file'] = fpath
             else:
-                enabled_val = vals.get('enabled', 'false')
-                jails[name] = {
-                    'name': name,
-                    'source_file': fpath,
-                    'is_toolkit': is_toolkit,
-                    'enabled': enabled_val.strip().lower() == 'true',
-                    'maxretry': int(vals.get('maxretry', 5)),
-                    'bantime': int(vals.get('bantime', 3600)),
-                    'findtime': int(vals.get('findtime', 600)),
-                    'port': vals.get('port', ''),
-                    'logpath': vals.get('logpath', ''),
-                    'filter': vals.get('filter', name),
-                }
+                try:
+                    enabled_val = vals.get('enabled', 'false')
+                    jails[name] = {
+                        'name': name,
+                        'source_file': fpath,
+                        'is_toolkit': is_toolkit,
+                        'enabled': enabled_val.strip().lower() == 'true',
+                        'maxretry': int(vals.get('maxretry', 5)),
+                        'bantime': int(vals.get('bantime', 3600)),
+                        'findtime': int(vals.get('findtime', 600)),
+                        'port': vals.get('port', ''),
+                        'logpath': vals.get('logpath', ''),
+                        'filter': vals.get('filter', name),
+                    }
+                except Exception:
+                    pass
 
     return list(jails.values())
 

@@ -4245,7 +4245,7 @@ const EarningsHistoryCard = ({ backendUrl, authHeaders }) => {
                 {/* Hover tooltip */}
                 <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 hidden group-hover:flex flex-col items-center bg-slate-900 border border-slate-700 rounded px-2 py-1 text-[10px] text-slate-200 whitespace-nowrap z-20 pointer-events-none shadow-lg">
                   <span className="text-slate-400">{d.date}{isToday ? ' (today)' : ''}</span>
-                  <span className="text-emerald-300 font-semibold">{d.earned.toFixed(4)} MYST{isToday ? ' so far' : ''}</span>
+                  <span className="text-emerald-300 font-semibold">{(d.earned||0).toFixed(4)} MYST{isToday ? ' so far' : ''}</span>
                 </div>
               </div>
             );
@@ -4564,9 +4564,9 @@ const AnalyticsCard = ({ sessions, backendUrl, authHeaders }) => {
                   <span key={i}>
                     <span className="text-slate-500">{fmtType(s.service_type)}</span>
                     <span className="text-slate-700"> — </span>
-                    <span>{s.pct_data.toFixed(1)}% data</span>
+                    <span>{(s.pct_data||0).toFixed(1)}% data</span>
                     <span className="text-slate-700"> · </span>
-                    <span>{s.pct_sessions.toFixed(1)}% sessions</span>
+                    <span>{(s.pct_sessions||0).toFixed(1)}% sessions</span>
                   </span>
                 ))}
               </div>
