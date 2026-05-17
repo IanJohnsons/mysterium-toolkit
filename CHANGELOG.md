@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.59] - 2026-05-17
+### Fixed
+- SecurityPage: moved all useState hooks to top of component before any other code — hooks defined after non-hook constants violated React rules of hooks causing blank dashboard
+
+---
+
 ## [1.1.58] - 2026-05-17
 ### Fixed
 - Fleet proxy whitelist: added all new security endpoints
@@ -40,6 +46,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [1.1.54] - 2026-05-17
 ### Fixed
 - Security page: removed incorrect text about toolkit.conf restriction — all official fail2ban jails are shown and editable
+
+---
+
+## [1.1.59] - 2026-05-17
+### Fixed
+- SecurityPage: moved all useState hooks to top of component before any other code — hooks defined after non-hook constants violated React rules of hooks causing blank dashboard
 
 ---
 
@@ -107,6 +119,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.59] - 2026-05-17
+### Fixed
+- SecurityPage: moved all useState hooks to top of component before any other code — hooks defined after non-hook constants violated React rules of hooks causing blank dashboard
+
+---
+
 ## [1.1.58] - 2026-05-17
 ### Fixed
 - Fleet proxy whitelist: added all new security endpoints
@@ -142,6 +160,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [1.1.54] - 2026-05-17
 ### Fixed
 - Security page: removed incorrect text about toolkit.conf restriction — all official fail2ban jails are shown and editable
+
+---
+
+## [1.1.59] - 2026-05-17
+### Fixed
+- SecurityPage: moved all useState hooks to top of component before any other code — hooks defined after non-hook constants violated React rules of hooks causing blank dashboard
 
 ---
 

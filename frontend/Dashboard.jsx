@@ -423,11 +423,10 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
   const [ufwRules, setUfwRules] = useState(null);
   const [newRule, setNewRule] = useState({ action:'allow', port:'', proto:'tcp' });
   const [ufwSaving, setUfwSaving] = useState(false);
-
-  const fmtTime = s => { s=parseInt(s); if(s>=86400) return `${Math.round(s/86400)}d`; if(s>=3600) return `${Math.round(s/3600)}h`; if(s>=60) return `${Math.round(s/60)}m`; return `${s}s`; };
-
   const [f2bInstalled, setF2bInstalled] = useState(null);
   const [installing, setInstalling] = useState(false);
+
+  const fmtTime = s => { s=parseInt(s); if(s>=86400) return `${Math.round(s/86400)}d`; if(s>=3600) return `${Math.round(s/3600)}h`; if(s>=60) return `${Math.round(s/60)}m`; return `${s}s`; };
   const loadJails = () => {
     setF2bLoading(true);
     fetch(`${backendUrl}/firewall/fail2ban/jails`, { headers: authHeaders||{} })
