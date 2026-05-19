@@ -6017,6 +6017,32 @@ def _f2b_write_toolkit_conf(jails_data):
             continue
     return False
 
+def _f2b_apply_live(jails_data):
+    """Apply jail settings immediately to the running fail2ban daemon.
+    Uses fail2ban-client set — no reload needed, takes effect instantly.
+    """
+    for jail in jails_data:
+        name = jail.get('name', '')
+        if not name:
+            continue
+        params = [
+            ('bantime',  str(jail.get('bantime',  3600))),
+            ('maxretry', str(jail.get('maxretry', 5))),
+            ('findtime', str(jail.get('findtime', 600))),
+        ]
+        for param, val in params:
+            for prefix in [[], ['sudo', '-n']]:
+                try:
+                    r = subprocess.run(
+                        prefix + ['fail2ban-client', 'set', name, param, val],
+                        capture_output=True, timeout=5, text=True
+                    )
+                    if r.returncode == 0:
+                        break
+                except Exception:
+                    continue
+
+
 def _f2b_reload():
     for prefix in [[], ['sudo', '-n']]:
         try:
@@ -6131,6 +6157,8 @@ def fail2ban_save_jails():
         ok = _f2b_write_toolkit_conf(jails)
         if not ok:
             return jsonify({'ok': False, 'error': 'Could not write jail config — check sudo permissions'}), 200
+        # Apply immediately to running daemon (no reload delay or reload failure risk)
+        _f2b_apply_live(jails)
         _f2b_reload()
         logger.info(f"fail2ban: saved {len(jails)} toolkit jails")
         return jsonify({'ok': True, 'message': f'Saved {len(jails)} jails and reloaded fail2ban'}), 200

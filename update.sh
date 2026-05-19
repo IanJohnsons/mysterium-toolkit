@@ -259,11 +259,23 @@ _TIMER_FILE="/etc/systemd/system/mysterium-toolkit-update.timer"
 _TIMER_SVC="/etc/systemd/system/mysterium-toolkit-update.service"
 if [ ! -f "$_TIMER_FILE" ] && command -v systemctl &>/dev/null; then
     _REAL_USER="${SUDO_USER:-$USER}"
-    printf '[Unit]\nDescription=Mysterium Toolkit auto-update\n\n[Timer]\nOnCalendar=daily\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n' \
+    # Timer: runs hourly, only updates when a new version is available
+    printf '[Unit]\nDescription=Mysterium Toolkit auto-update\n\n[Timer]\nOnCalendar=hourly\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n' \
         | $SUDO tee "$_TIMER_FILE" > /dev/null
-    printf '[Unit]\nDescription=Mysterium Toolkit auto-update\n\n[Service]\nType=oneshot\nUser=%s\nWorkingDirectory=%s\nExecStart=%s/update.sh\n' \
-        "$_REAL_USER" "$TOOLKIT_DIR" "$TOOLKIT_DIR" \
+    # Service wrapper: fetch latest version, run update.sh only if newer
+    _UPDATE_SCRIPT="$TOOLKIT_DIR/update.sh"
+    _VERSION_FILE="$TOOLKIT_DIR/VERSION"
+    _WRAPPER="/usr/local/bin/mysterium-toolkit-update-check.sh"
+    $SUDO tee "$_WRAPPER" > /dev/null << 'WRAPPER_EOF'
+#!/bin/bash
+CURRENT=$(cat "$TOOLKIT_DIR/VERSION" 2>/dev/null)
+LATEST=$(curl -sf https://raw.githubusercontent.com/IanJohnsons/mysterium-toolkit/main/VERSION 2>/dev/null)
+[ -n "$LATEST" ] && [ "$CURRENT" != "$LATEST" ] && exec "$TOOLKIT_DIR/update.sh"
+WRAPPER_EOF
+    printf '[Unit]\nDescription=Mysterium Toolkit auto-update\n\n[Service]\nType=oneshot\nUser=%s\nWorkingDirectory=%s\nExecStart=%s\n' \
+        "$_REAL_USER" "$TOOLKIT_DIR" "$_WRAPPER" \
         | $SUDO tee "$_TIMER_SVC" > /dev/null
+    $SUDO chmod +x "$_WRAPPER"
     $SUDO systemctl daemon-reload 2>/dev/null || true
     $SUDO systemctl enable mysterium-toolkit-update.timer 2>/dev/null || true
     $SUDO systemctl start mysterium-toolkit-update.timer 2>/dev/null || true

@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.2.4] - 2026-05-19
+### Fixed
+- fail2ban jail edit: writing to `jail.local` was correct but `fail2ban-client reload` did not apply the new values to the running daemon for active jails. Added `_f2b_apply_live()` which calls `fail2ban-client set <jail> bantime/maxretry/findtime <val>` after every save — takes effect immediately without relying on reload. `jail.local` write + reload retained for persistence after restart.
+- Auto-update timer: changed frequency from daily to hourly; timer now runs a version-check wrapper that fetches the latest VERSION from GitHub and only executes `update.sh` when `current != latest`. Removes unnecessary updates and catches new versions within the hour.
+
+---
+
 ## [1.2.3] - 2026-05-19
 ### Fixed
 - update.sh: `tee /etc/sudoers.d/mysterium-toolkit`, `chmod 440`, `visudo` and `rm` were not in NOPASSWD — causing a mandatory sudo password prompt every time `./update.sh` ran. When running non-interactively (fleet update button, systemd timer), the sudoers update was silently skipped because there is no TTY to type the password. This caused the sudoers to never update on non-root installs, and the version counter to fall behind. All four commands added to NOPASSWD in setup.sh (root + bin) and update.sh sudoers content.
