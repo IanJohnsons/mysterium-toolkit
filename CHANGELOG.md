@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.2.2] - 2026-05-19
+### Fixed
+- fail2ban: removed self-invented `jail.d/mysterium-toolkit.conf` — writing `.conf` files to `jail.d/` is reserved for distribution packages. The toolkit now writes exclusively to `/etc/fail2ban/jail.local`, the official user-override file supported on all distros.
+- fail2ban: toolkit-managed jails are isolated in a clearly marked block inside `jail.local` (`# --- Mysterium Toolkit managed jails ---` / `# --- End Mysterium Toolkit ---`). User content outside this block is never touched.
+- fail2ban: `_f2b_write_toolkit_conf()` rewritten to read existing `jail.local`, update only the toolkit block, and write back — preserving all user customizations outside the block.
+- fail2ban: `_f2b_all_jails()` `is_toolkit` detection now uses `_f2b_get_toolkit_jail_names()` which reads jail names from the toolkit block in `jail.local` — correct identification without relying on a fake conf file.
+- fail2ban: `fail2ban_install()` route now writes to `jail.local` via `_f2b_write_toolkit_conf()` instead of hardcoded `jail.d/` path.
+- setup.sh (root + bin): fail2ban step now appends the toolkit block to `jail.local`; old `jail.d/mysterium-toolkit.conf` is removed if present (migration).
+- update.sh: migration step removes `jail.d/mysterium-toolkit.conf` on first run; sudoers NOPASSWD updated from `tee /etc/fail2ban/jail.d/*` to `tee /etc/fail2ban/jail.local`.
+- sudoers (all): `tee /etc/fail2ban/jail.d/*` replaced by `tee /etc/fail2ban/jail.local` — more restrictive and correct.
+
+---
+
 ## [1.2.1] - 2026-05-19
 ### Fixed
 - fail2ban jail edit: port/logpath/filter disappeared after save — secondary pass in `_f2b_all_jails()` only set `is_toolkit` flag but never restored these fields from `mysterium-toolkit.conf` back into the active jail object

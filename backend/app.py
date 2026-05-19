@@ -5820,8 +5820,27 @@ def fail2ban_unban():
         return jsonify({'ok': False, 'error': str(e)}), 200
 
 
-TOOLKIT_JAIL_FILE = '/etc/fail2ban/jail.d/mysterium-toolkit.conf'
+TOOLKIT_JAIL_FILE   = '/etc/fail2ban/jail.local'
 TOOLKIT_FILTER_FILE = '/etc/fail2ban/filter.d/mysterium-dashboard.conf'
+TOOLKIT_BLOCK_START = '# --- Mysterium Toolkit managed jails ---'
+TOOLKIT_BLOCK_END   = '# --- End Mysterium Toolkit ---'
+
+
+def _f2b_get_toolkit_jail_names():
+    """Return the set of jail names managed by the toolkit in jail.local."""
+    import re as _re
+    if not os.path.exists(TOOLKIT_JAIL_FILE):
+        return set()
+    try:
+        raw = open(TOOLKIT_JAIL_FILE).read()
+    except Exception:
+        return set()
+    if TOOLKIT_BLOCK_START not in raw:
+        return set()
+    start = raw.index(TOOLKIT_BLOCK_START)
+    end   = raw.find(TOOLKIT_BLOCK_END, start)
+    block = raw[start:end] if end != -1 else raw[start:]
+    return set(_re.findall(r'^\[([^\]]+)\]', block, _re.MULTILINE))
 
 
 def _f2b_read_conf(path):
@@ -5892,6 +5911,7 @@ def _f2b_all_jails():
         }
 
     # SECONDARY: read config files to mark toolkit-managed jails and find non-active ones
+    _toolkit_names = _f2b_get_toolkit_jail_names()
     config_files = (
         ['/etc/fail2ban/jail.conf']
         + sorted(_glob.glob('/etc/fail2ban/jail.d/*.conf'))
@@ -5904,7 +5924,7 @@ def _f2b_all_jails():
             data = _f2b_read_conf(fpath)
         except Exception:
             continue
-        is_toolkit = fpath == TOOLKIT_JAIL_FILE
+        is_toolkit = fpath == TOOLKIT_JAIL_FILE and name in _toolkit_names
         for name, vals in data.items():
             if name == 'DEFAULT':
                 continue
@@ -5943,10 +5963,28 @@ def _f2b_all_jails():
 
 
 def _f2b_write_toolkit_conf(jails_data):
-    """Write jails to mysterium-toolkit.conf via sudo tee."""
-    lines = ['# Mysterium Node Toolkit — fail2ban jails\n']
-    lines.append('# Managed by Mysterium Toolkit. Do not edit manually.\n')
-    lines.append('# Other jail.d files and jail.local are not touched.\n\n')
+    """Write toolkit jails into the managed block inside jail.local."""
+    # Read existing jail.local — preserve user content outside our block
+    user_before, user_after = '', ''
+    if os.path.exists(TOOLKIT_JAIL_FILE):
+        try:
+            raw = open(TOOLKIT_JAIL_FILE).read()
+            if TOOLKIT_BLOCK_START in raw and TOOLKIT_BLOCK_END in raw:
+                bi = raw.index(TOOLKIT_BLOCK_START)
+                ei = raw.index(TOOLKIT_BLOCK_END) + len(TOOLKIT_BLOCK_END)
+                user_before = raw[:bi].rstrip('\n')
+                user_after  = raw[ei:].lstrip('\n')
+            else:
+                user_before = raw.rstrip('\n')  # no toolkit block yet
+        except Exception:
+            pass
+
+    # Build the toolkit block
+    lines = [
+        f'{TOOLKIT_BLOCK_START}\n',
+        '# Managed by Mysterium Toolkit — do not edit this block manually.\n',
+        '# To customize, add or override settings outside this block.\n\n',
+    ]
     for jail in jails_data:
         lines.append(f'[{jail["name"]}]\n')
         lines.append(f'enabled  = {"true" if jail.get("enabled", True) else "false"}\n')
@@ -5954,13 +5992,19 @@ def _f2b_write_toolkit_conf(jails_data):
             lines.append(f'port     = {jail["port"]}\n')
         filter_val = jail.get('filter') or jail['name']
         lines.append(f'filter   = {filter_val}\n')
-        if jail.get('logpath'):
+        if jail.get('logpath') and jail.get('backend_type') != 'systemd':
             lines.append(f'logpath  = {jail["logpath"]}\n')
         lines.append(f'maxretry = {jail.get("maxretry", 5)}\n')
         lines.append(f'bantime  = {jail.get("bantime", 3600)}\n')
         lines.append(f'findtime = {jail.get("findtime", 600)}\n')
         lines.append('\n')
-    content = ''.join(lines)
+    lines.append(f'{TOOLKIT_BLOCK_END}\n')
+    toolkit_block = ''.join(lines)
+
+    # Assemble full jail.local content
+    parts = [p for p in [user_before, toolkit_block, user_after] if p.strip()]
+    content = '\n\n'.join(parts) + '\n'
+
     for prefix in [[], ['sudo', '-n']]:
         try:
             r = subprocess.run(
@@ -5972,7 +6016,6 @@ def _f2b_write_toolkit_conf(jails_data):
         except Exception:
             continue
     return False
-
 
 def _f2b_reload():
     for prefix in [[], ['sudo', '-n']]:
@@ -6120,8 +6163,8 @@ def fail2ban_install():
             return jsonify({'ok': False, 'error': 'apt-get install failed — check permissions'}), 200
 
         toolkit_dir = str(Path(__file__).parent.parent)
-        f2b_conf   = '/etc/fail2ban/jail.d/mysterium-toolkit.conf'
-        f2b_filter = '/etc/fail2ban/filter.d/mysterium-dashboard.conf'
+        f2b_conf   = TOOLKIT_JAIL_FILE  # /etc/fail2ban/jail.local
+        f2b_filter = TOOLKIT_FILTER_FILE
 
         # Detect banaction/backend for this system
         banaction_line = ''
@@ -6141,44 +6184,40 @@ def fail2ban_install():
             pass
 
         sshd_extras = banaction_line + backend_line
+        # Write filter file
         filter_content = '[Definition]\nfailregex = ^.*\\[.*\\] ".*" 401\nignoreregex =\n'
-        jail_content = f"""# Mysterium Node Toolkit — fail2ban jails
-# Managed by toolkit. Edit jail.local for global defaults.
-
-[sshd]
-enabled  = true
-port     = ssh
-{sshd_extras}maxretry = 5
-bantime  = 86400
-findtime = 600
-
-[mysterium-dashboard]
-enabled  = true
-port     = 5000
-filter   = mysterium-dashboard
-logpath  = {toolkit_dir}/logs/backend.log
-maxretry = 5
-bantime  = 86400
-findtime = 600
-
-[recidive]
-enabled  = true
-logpath  = /var/log/fail2ban.log
-bantime  = 604800
-findtime = 86400
-maxretry = 5
-"""
-        for path, content in [(f2b_filter, filter_content), (f2b_conf, jail_content)]:
-            for prefix in [[], ['sudo', '-n']]:
-                try:
-                    r = subprocess.run(
-                        prefix + ['tee', path],
-                        input=content, capture_output=True, text=True, timeout=5
-                    )
-                    if r.returncode == 0:
-                        break
-                except Exception:
-                    continue
+        for prefix in [[], ['sudo', '-n']]:
+            try:
+                r = subprocess.run(
+                    prefix + ['tee', f2b_filter],
+                    input=filter_content, capture_output=True, text=True, timeout=5
+                )
+                if r.returncode == 0:
+                    break
+            except Exception:
+                continue
+        # Remove old jail.d conf if present (migration)
+        _old_jail_d = '/etc/fail2ban/jail.d/mysterium-toolkit.conf'
+        for prefix in [[], ['sudo', '-n']]:
+            try:
+                if subprocess.run(prefix + ['test', '-f', _old_jail_d], timeout=3).returncode == 0:
+                    subprocess.run(prefix + ['rm', '-f', _old_jail_d], timeout=5)
+                break
+            except Exception:
+                continue
+        # Write toolkit jails into jail.local managed block
+        _install_jails = [
+            {'name': 'sshd', 'enabled': True, 'port': 'ssh', 'filter': 'sshd',
+             'maxretry': 5, 'bantime': 86400, 'findtime': 600,
+             'logpath': '', 'backend_type': 'systemd' if backend_line else ''},
+            {'name': 'mysterium-dashboard', 'enabled': True, 'port': '5000',
+             'filter': 'mysterium-dashboard', 'logpath': f'{toolkit_dir}/logs/backend.log',
+             'maxretry': 5, 'bantime': 86400, 'findtime': 600},
+            {'name': 'recidive', 'enabled': True, 'port': '',
+             'filter': 'recidive', 'logpath': '/var/log/fail2ban.log',
+             'maxretry': 5, 'bantime': 604800, 'findtime': 86400},
+        ]
+        _f2b_write_toolkit_conf(_install_jails)
 
         for cmd in [
             ['systemctl', 'enable', 'fail2ban'],

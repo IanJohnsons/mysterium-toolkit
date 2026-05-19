@@ -1465,7 +1465,7 @@ $_REAL_USER ALL=(ALL) NOPASSWD: \
   /usr/sbin/ip6tables, /sbin/ip6tables, \
   /usr/sbin/nft, /sbin/nft, \
   /usr/bin/fail2ban-client, /usr/local/bin/fail2ban-client, /bin/fail2ban-client, \
-  /usr/bin/tee /etc/fail2ban/jail.d/*, \
+  /usr/bin/tee /etc/fail2ban/jail.local, \
   /usr/bin/tee /etc/fail2ban/filter.d/*
 SUDOERS_EOF
     sudo chmod 440 "$_SUDOERS_FILE"
@@ -1491,7 +1491,7 @@ else
     if [[ "$_f2b_answer" =~ ^[Yy]$ ]]; then
         apt-get install -y -qq fail2ban >/dev/null 2>&1 || true
         if command -v fail2ban-client &>/dev/null; then
-            _F2B_CONF="/etc/fail2ban/jail.d/mysterium-toolkit.conf"
+            _F2B_CONF="/etc/fail2ban/jail.local"
             _F2B_FILTER="/etc/fail2ban/filter.d/mysterium-dashboard.conf"
             tee "$_F2B_FILTER" > /dev/null << 'F2B_FILTER_EOF'
 [Definition]
@@ -1509,36 +1509,52 @@ F2B_FILTER_EOF
             if ! command -v rsyslog &>/dev/null && systemctl list-units --type=service 2>/dev/null | grep -q 'systemd-journald'; then
                 _F2B_BACKEND_LINE="backend  = systemd"
             fi
-            # Write jail config programmatically so optional lines are only included when set
-            {
-                echo "# Mysterium Node Toolkit — fail2ban jails"
-                echo "# This file is managed by the toolkit. Edit jail.local for global settings."
-                echo ""
-                echo "[sshd]"
-                echo "enabled  = true"
-                echo "port     = ssh"
-                [ -n "$_F2B_BACKEND_LINE"  ] && echo "$_F2B_BACKEND_LINE"
-                [ -n "$_F2B_BANACTION_LINE" ] && echo "$_F2B_BANACTION_LINE"
-                echo "maxretry = 5"
-                echo "bantime  = 86400"
-                echo "findtime = 600"
-                echo ""
-                echo "[mysterium-dashboard]"
-                echo "enabled  = true"
-                echo "port     = 5000"
-                echo "filter   = mysterium-dashboard"
-                echo "logpath  = $TOOLKIT_DIR/logs/backend.log"
-                echo "maxretry = 5"
-                echo "bantime  = 86400"
-                echo "findtime = 600"
-                echo ""
-                echo "[recidive]"
-                echo "enabled  = true"
-                echo "logpath  = /var/log/fail2ban.log"
-                echo "bantime  = 604800"
-                echo "findtime = 86400"
-                echo "maxretry = 5"
-            } | tee "$_F2B_CONF" > /dev/null
+            # Remove old jail.d conf if it exists (migration to jail.local)
+            _OLD_JAIL_D="/etc/fail2ban/jail.d/mysterium-toolkit.conf"
+            if [ -f "$_OLD_JAIL_D" ]; then
+                $SUDO rm -f "$_OLD_JAIL_D"
+                echo -e "  ${DIM}  Migrated: removed old jail.d/mysterium-toolkit.conf${NC}"
+            fi
+            # Write toolkit block into jail.local (official override file)
+            _BLOCK_START="# --- Mysterium Toolkit managed jails ---"
+            _BLOCK_END="# --- End Mysterium Toolkit ---"
+            if $SUDO grep -q "$_BLOCK_START" "$_F2B_CONF" 2>/dev/null; then
+                echo -e "  ${DIM}  Toolkit block already present in jail.local${NC}"
+            else
+                {
+                    echo ""
+                    echo "$_BLOCK_START"
+                    echo "# Managed by Mysterium Toolkit — do not edit this block manually."
+                    echo "# To customize, add or override settings outside this block."
+                    echo ""
+                    echo "[sshd]"
+                    echo "enabled  = true"
+                    echo "port     = ssh"
+                    [ -n "$_F2B_BACKEND_LINE"  ] && echo "$_F2B_BACKEND_LINE"
+                    [ -n "$_F2B_BANACTION_LINE" ] && echo "$_F2B_BANACTION_LINE"
+                    echo "maxretry = 5"
+                    echo "bantime  = 86400"
+                    echo "findtime = 600"
+                    echo ""
+                    echo "[mysterium-dashboard]"
+                    echo "enabled  = true"
+                    echo "port     = 5000"
+                    echo "filter   = mysterium-dashboard"
+                    echo "logpath  = $TOOLKIT_DIR/logs/backend.log"
+                    echo "maxretry = 5"
+                    echo "bantime  = 86400"
+                    echo "findtime = 600"
+                    echo ""
+                    echo "[recidive]"
+                    echo "enabled  = true"
+                    echo "logpath  = /var/log/fail2ban.log"
+                    echo "bantime  = 604800"
+                    echo "findtime = 86400"
+                    echo "maxretry = 5"
+                    echo ""
+                    echo "$_BLOCK_END"
+                } | $SUDO tee -a "$_F2B_CONF" > /dev/null
+            fi
 
             systemctl enable fail2ban >/dev/null 2>&1 || true
             systemctl restart fail2ban >/dev/null 2>&1 || true

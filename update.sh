@@ -68,7 +68,7 @@ echo -e "  ${GREEN}✓ Code updated${NC}"
 # Re-exec with new update.sh if the script itself changed
 _SELF_AFTER=$(md5sum "$0" 2>/dev/null | cut -d' ' -f1)
 if [ "$_SELF_BEFORE" != "$_SELF_AFTER" ]; then
-    echo -e "  ${YELLOW}update.sh changed — herstarten met nieuwe versie...${NC}"
+    echo -e "  ${YELLOW}update.sh changed — restarting with new version...${NC}"
     exec "$0" "$@"
 fi
 echo
@@ -224,12 +224,19 @@ UNIT_EOF
 
 fi
 
+# ── Migrate: remove old jail.d/mysterium-toolkit.conf ────────────────────────
+_OLD_JAIL_D="/etc/fail2ban/jail.d/mysterium-toolkit.conf"
+if [ -f "$_OLD_JAIL_D" ] || $SUDO test -f "$_OLD_JAIL_D" 2>/dev/null; then
+    $SUDO rm -f "$_OLD_JAIL_D" 2>/dev/null || true
+    echo -e "  ${GREEN}✓ Migrated: removed old jail.d/mysterium-toolkit.conf${NC}"
+fi
+
 # ── Sudoers update — always runs, regardless of autostart ─────────────────
 # Runs unconditionally so fail2ban and other new permissions reach all users
 _REAL_USER="${SUDO_USER:-$USER}"
 _SUDOERS_FILE="/etc/sudoers.d/mysterium-toolkit"
 _SUDOERS_CONTENT="# Mysterium Toolkit — passwordless sudo for specific commands only
-$_REAL_USER ALL=(ALL) NOPASSWD: $TOOLKIT_DIR/update.sh, /sbin/sysctl, /usr/sbin/sysctl, /usr/sbin/ethtool, /usr/sbin/conntrack, /usr/local/bin/mysterium-rps-watcher.sh, /usr/local/bin/mysterium-rps-setup.sh, /usr/bin/tee /etc/sysctl.d/*, /usr/bin/tee /etc/modules-load.d/*, /usr/bin/tee /sys/module/nf_conntrack/parameters/hashsize, /usr/bin/tee /usr/local/bin/*, /usr/bin/tee /etc/systemd/system/mysterium-*.service, /usr/bin/tee /etc/systemd/system/mysterium-*.timer, /usr/bin/tee /etc/mysterium-node/config.toml, /usr/bin/tee /etc/mysterium-node/config-mainnet.toml, /usr/bin/chmod +x /usr/local/bin/mysterium-*, /bin/systemctl start mysterium-*, /bin/systemctl stop mysterium-*, /bin/systemctl enable mysterium-*, /bin/systemctl disable mysterium-*, /bin/systemctl daemon-reload, /usr/sbin/iptables, /sbin/iptables, /usr/sbin/iptables-legacy, /sbin/iptables-legacy, /usr/sbin/ip6tables, /sbin/ip6tables, /usr/sbin/nft, /sbin/nft, /usr/bin/fail2ban-client, /usr/local/bin/fail2ban-client, /bin/fail2ban-client, /usr/bin/tee /etc/fail2ban/jail.d/*, /usr/bin/tee /etc/fail2ban/filter.d/*"
+$_REAL_USER ALL=(ALL) NOPASSWD: $TOOLKIT_DIR/update.sh, /sbin/sysctl, /usr/sbin/sysctl, /usr/sbin/ethtool, /usr/sbin/conntrack, /usr/local/bin/mysterium-rps-watcher.sh, /usr/local/bin/mysterium-rps-setup.sh, /usr/bin/tee /etc/sysctl.d/*, /usr/bin/tee /etc/modules-load.d/*, /usr/bin/tee /sys/module/nf_conntrack/parameters/hashsize, /usr/bin/tee /usr/local/bin/*, /usr/bin/tee /etc/systemd/system/mysterium-*.service, /usr/bin/tee /etc/systemd/system/mysterium-*.timer, /usr/bin/tee /etc/mysterium-node/config.toml, /usr/bin/tee /etc/mysterium-node/config-mainnet.toml, /usr/bin/chmod +x /usr/local/bin/mysterium-*, /bin/systemctl start mysterium-*, /bin/systemctl stop mysterium-*, /bin/systemctl enable mysterium-*, /bin/systemctl disable mysterium-*, /bin/systemctl daemon-reload, /usr/sbin/iptables, /sbin/iptables, /usr/sbin/iptables-legacy, /sbin/iptables-legacy, /usr/sbin/ip6tables, /sbin/ip6tables, /usr/sbin/nft, /sbin/nft, /usr/bin/fail2ban-client, /usr/local/bin/fail2ban-client, /bin/fail2ban-client, /usr/bin/tee /etc/fail2ban/jail.local, /usr/bin/tee /etc/fail2ban/filter.d/*"
 _SUDOERS_CURRENT=""
 if [ -f "$_SUDOERS_FILE" ]; then
     _SUDOERS_CURRENT=$(cat "$_SUDOERS_FILE" 2>/dev/null || true)
@@ -260,7 +267,7 @@ if [ ! -f "$_TIMER_FILE" ] && command -v systemctl &>/dev/null; then
     $SUDO systemctl daemon-reload 2>/dev/null || true
     $SUDO systemctl enable mysterium-toolkit-update.timer 2>/dev/null || true
     $SUDO systemctl start mysterium-toolkit-update.timer 2>/dev/null || true
-    echo -e "  ${GREEN}✓ Auto-update timer aangemaakt (dagelijks)${NC}"
+    echo -e "  ${GREEN}✓ Auto-update timer created (daily)${NC}"
 fi
 
 # ── Restart backend ───────────────────────────────────────────────────────

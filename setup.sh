@@ -1485,7 +1485,7 @@ $_REAL_USER ALL=(ALL) NOPASSWD: \
   /usr/sbin/ip6tables, /sbin/ip6tables, \
   /usr/sbin/nft, /sbin/nft, \
   /usr/bin/fail2ban-client, /usr/local/bin/fail2ban-client, /bin/fail2ban-client, \
-  /usr/bin/tee /etc/fail2ban/jail.d/*, \
+  /usr/bin/tee /etc/fail2ban/jail.local, \
   /usr/bin/tee /etc/fail2ban/filter.d/*
 SUDOERS_EOF
     $SUDO chmod 440 "$_SUDOERS_FILE"
@@ -1516,7 +1516,7 @@ else
         esac
         if command -v fail2ban-client &>/dev/null; then
             # Create toolkit jail config — only in jail.d, never touches jail.local
-            _F2B_CONF="/etc/fail2ban/jail.d/mysterium-toolkit.conf"
+            _F2B_CONF="/etc/fail2ban/jail.local"
             _F2B_FILTER="/etc/fail2ban/filter.d/mysterium-dashboard.conf"
             # Custom filter for toolkit dashboard (401 responses)
             $SUDO tee "$_F2B_FILTER" > /dev/null << 'F2B_FILTER_EOF'
@@ -1524,35 +1524,17 @@ else
 failregex = ^.*\[.*\] ".*" 401
 ignoreregex =
 F2B_FILTER_EOF
-            # Jail config
-            $SUDO tee "$_F2B_CONF" > /dev/null << F2B_EOF
-# Mysterium Node Toolkit — fail2ban jails
-# This file is managed by the toolkit. Edit jail.local for global settings.
-
-[sshd]
-enabled  = true
-port     = ssh
-logpath  = /var/log/auth.log
-maxretry = 5
-bantime  = 3600
-findtime = 600
-
-[mysterium-dashboard]
-enabled  = true
-port     = 5000
-filter   = mysterium-dashboard
-logpath  = $TOOLKIT_DIR/logs/backend.log
-maxretry = 5
-bantime  = 3600
-findtime = 600
-
-[recidive]
-enabled  = true
-logpath  = /var/log/fail2ban.log
-bantime  = 604800
-findtime = 86400
-maxretry = 5
-F2B_EOF
+            # Remove old jail.d conf (migration)
+            _OLD_JAIL_D="/etc/fail2ban/jail.d/mysterium-toolkit.conf"
+            [ -f "$_OLD_JAIL_D" ] && $SUDO rm -f "$_OLD_JAIL_D" && echo -e "  ${DIM}  Migrated: removed old jail.d/mysterium-toolkit.conf${NC}"
+            # Write toolkit block into jail.local (official override file)
+            _BLOCK_START="# --- Mysterium Toolkit managed jails ---"
+            _BLOCK_END="# --- End Mysterium Toolkit ---"
+            if $SUDO grep -q "$_BLOCK_START" "$_F2B_CONF" 2>/dev/null; then
+                echo -e "  ${DIM}  Toolkit block already present in jail.local${NC}"
+            else
+                { echo ""; echo "$_BLOCK_START"; echo "# Managed by Mysterium Toolkit — do not edit this block manually."; echo ""; echo "[sshd]"; echo "enabled  = true"; echo "port     = ssh"; echo "maxretry = 5"; echo "bantime  = 86400"; echo "findtime = 600"; echo ""; echo "[mysterium-dashboard]"; echo "enabled  = true"; echo "port     = 5000"; echo "filter   = mysterium-dashboard"; echo "logpath  = $TOOLKIT_DIR/logs/backend.log"; echo "maxretry = 5"; echo "bantime  = 86400"; echo "findtime = 600"; echo ""; echo "[recidive]"; echo "enabled  = true"; echo "logpath  = /var/log/fail2ban.log"; echo "bantime  = 604800"; echo "findtime = 86400"; echo "maxretry = 5"; echo ""; echo "$_BLOCK_END"; } | $SUDO tee -a "$_F2B_CONF" > /dev/null
+            fi
             $SUDO systemctl enable fail2ban >/dev/null 2>&1 || true
             $SUDO systemctl restart fail2ban >/dev/null 2>&1 || true
             echo -e "  ${GREEN}✓ fail2ban installed and configured${NC}"
