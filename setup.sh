@@ -1486,7 +1486,11 @@ $_REAL_USER ALL=(ALL) NOPASSWD: \
   /usr/sbin/nft, /sbin/nft, \
   /usr/bin/fail2ban-client, /usr/local/bin/fail2ban-client, /bin/fail2ban-client, \
   /usr/bin/tee /etc/fail2ban/jail.local, \
-  /usr/bin/tee /etc/fail2ban/filter.d/*
+  /usr/bin/tee /etc/fail2ban/filter.d/*, \
+  /usr/bin/tee /etc/sudoers.d/mysterium-toolkit, \
+  /usr/bin/chmod 440 /etc/sudoers.d/mysterium-toolkit, \
+  /usr/sbin/visudo -c -f /etc/sudoers.d/mysterium-toolkit, \
+  /usr/bin/rm -f /etc/sudoers.d/mysterium-toolkit
 SUDOERS_EOF
     $SUDO chmod 440 "$_SUDOERS_FILE"
     if $SUDO visudo -c -f "$_SUDOERS_FILE" >/dev/null 2>&1; then

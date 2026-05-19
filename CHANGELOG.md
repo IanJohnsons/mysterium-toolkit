@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.2.3] - 2026-05-19
+### Fixed
+- update.sh: `tee /etc/sudoers.d/mysterium-toolkit`, `chmod 440`, `visudo` and `rm` were not in NOPASSWD — causing a mandatory sudo password prompt every time `./update.sh` ran. When running non-interactively (fleet update button, systemd timer), the sudoers update was silently skipped because there is no TTY to type the password. This caused the sudoers to never update on non-root installs, and the version counter to fall behind. All four commands added to NOPASSWD in setup.sh (root + bin) and update.sh sudoers content.
+
+---
+
 ## [1.2.2] - 2026-05-19
 ### Fixed
 - fail2ban: removed self-invented `jail.d/mysterium-toolkit.conf` — writing `.conf` files to `jail.d/` is reserved for distribution packages. The toolkit now writes exclusively to `/etc/fail2ban/jail.local`, the official user-override file supported on all distros.
