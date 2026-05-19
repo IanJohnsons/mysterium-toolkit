@@ -581,12 +581,29 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
                         ))}
                       </div>
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3 mt-1">
-                        {[['Port','e.g. 22,80','port'],['Log path','full path to log','logpath'],['Filter','empty = jail name','filter']].map(([label,hint,key])=>(
-                          <div key={key}>
-                            <label className="block text-[10px] text-slate-400 mb-1">{label} <span className="text-slate-600">— {hint}</span></label>
-                            <input type="text" value={editJail[key]||''} onChange={e=>setEditJail({...editJail,[key]:e.target.value})} className={inp} />
-                          </div>
-                        ))}
+                        {/* Port field */}
+                        <div>
+                          <label className="block text-[10px] text-slate-400 mb-1">Port <span className="text-slate-600">— e.g. 22,80</span></label>
+                          <input type="text" value={editJail.port||''} onChange={e=>setEditJail({...editJail,port:e.target.value})} className={inp} />
+                        </div>
+                        {/* Logpath field — systemd backend: locked; file backend: show detected path */}
+                        <div>
+                          <label className="block text-[10px] text-slate-400 mb-1">Log path
+                            {editJail.backend_type==='systemd' && <span className="text-emerald-600 ml-1">— systemd journal</span>}
+                            {editJail.backend_type==='file' && <span className="text-slate-600 ml-1">— detected</span>}
+                            {!editJail.backend_type && <span className="text-slate-600 ml-1">— full path to log</span>}
+                          </label>
+                          {editJail.backend_type==='systemd'
+                            ? <input type="text" value="systemd journal (geen bestand nodig)" disabled className={inp+' opacity-40 cursor-not-allowed'} />
+                            : <input type="text" value={editJail.logpath||''} onChange={e=>setEditJail({...editJail,logpath:e.target.value})}
+                                placeholder={{sshd:'/var/log/auth.log','nginx-http-auth':'/var/log/nginx/error.log','nginx-botsearch':'/var/log/nginx/error.log',recidive:'/var/log/fail2ban.log','apache-auth':'/var/log/apache2/error.log'}[editJail.name]||'full path to log'}
+                                className={inp} />}
+                        </div>
+                        {/* Filter field */}
+                        <div>
+                          <label className="block text-[10px] text-slate-400 mb-1">Filter <span className="text-slate-600">— leeg = jail naam</span></label>
+                          <input type="text" value={editJail.filter||''} onChange={e=>setEditJail({...editJail,filter:e.target.value})} className={inp} />
+                        </div>
                       </div>
                       <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer mb-3">
                         <input type="checkbox" checked={editJail.enabled} onChange={e=>setEditJail({...editJail,enabled:e.target.checked})} className="accent-violet-500" /> Enabled
@@ -622,7 +639,7 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
                           </div>
                           {jail.active_bans > 0 && (
                             <div className="mt-2 space-y-1">
-                              <span className="text-[10px] text-amber-400 font-semibold">{jail.active_bans} active ban{jail.active_bans!==1?'s':''}{jail.active_bans>(jail.banned_ips||[]).length?<span className="text-slate-500 font-normal"> — showing {(jail.banned_ips||[]).length}</span>:''}</span>
+                              <span className="text-[10px] text-amber-400 font-semibold">{jail.active_bans} active ban{jail.active_bans!==1?'s':''}{jail.active_bans>(jail.banned_ips||[]).length?<span className="text-slate-500 font-normal"> — showing {(jail.banned_ips||[]).length}</span>:''}</span>{(jail.total_failed>0||jail.currently_failed>0)&&(<span className="text-[10px] text-slate-500 ml-2">{jail.currently_failed} failing now · {jail.total_failed} total</span>)}
                               {(jail.banned_ips||[]).map(ip => (
                                 <div key={ip} className="flex items-center justify-between pl-2">
                                   <span className="text-[10px] font-mono text-red-400/80">{ip}</span>

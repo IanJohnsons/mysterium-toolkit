@@ -59,11 +59,18 @@ fi
 
 # ── Pull latest code ──────────────────────────────────────────────────────
 echo -e "  Pulling latest code..."
+_SELF_BEFORE=$(md5sum "$0" 2>/dev/null | cut -d' ' -f1)
 if ! git pull; then
     echo -e "${RED}✗ git pull failed — check your network or repo access.${NC}"
     exit 1
 fi
 echo -e "  ${GREEN}✓ Code updated${NC}"
+# Re-exec with new update.sh if the script itself changed
+_SELF_AFTER=$(md5sum "$0" 2>/dev/null | cut -d' ' -f1)
+if [ "$_SELF_BEFORE" != "$_SELF_AFTER" ]; then
+    echo -e "  ${YELLOW}update.sh changed — herstarten met nieuwe versie...${NC}"
+    exec "$0" "$@"
+fi
 echo
 
 # ── Restore config if git pull removed it ────────────────────────────────
@@ -238,6 +245,22 @@ if [ "$_SUDOERS_CONTENT" != "$_SUDOERS_CURRENT" ]; then
     fi
 else
     echo -e "  ${DIM}  Sudoers unchanged${NC}"
+fi
+
+# ── Auto-update timer — create if missing ─────────────────────────────────
+_TIMER_FILE="/etc/systemd/system/mysterium-toolkit-update.timer"
+_TIMER_SVC="/etc/systemd/system/mysterium-toolkit-update.service"
+if [ ! -f "$_TIMER_FILE" ] && command -v systemctl &>/dev/null; then
+    _REAL_USER="${SUDO_USER:-$USER}"
+    printf '[Unit]\nDescription=Mysterium Toolkit auto-update\n\n[Timer]\nOnCalendar=daily\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n' \
+        | $SUDO tee "$_TIMER_FILE" > /dev/null
+    printf '[Unit]\nDescription=Mysterium Toolkit auto-update\n\n[Service]\nType=oneshot\nUser=%s\nWorkingDirectory=%s\nExecStart=%s/update.sh\n' \
+        "$_REAL_USER" "$TOOLKIT_DIR" "$TOOLKIT_DIR" \
+        | $SUDO tee "$_TIMER_SVC" > /dev/null
+    $SUDO systemctl daemon-reload 2>/dev/null || true
+    $SUDO systemctl enable mysterium-toolkit-update.timer 2>/dev/null || true
+    $SUDO systemctl start mysterium-toolkit-update.timer 2>/dev/null || true
+    echo -e "  ${GREEN}✓ Auto-update timer aangemaakt (dagelijks)${NC}"
 fi
 
 # ── Restart backend ───────────────────────────────────────────────────────

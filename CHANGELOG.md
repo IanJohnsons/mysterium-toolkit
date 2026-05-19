@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.2.1] - 2026-05-19
+### Fixed
+- fail2ban jail edit: port/logpath/filter disappeared after save — secondary pass in `_f2b_all_jails()` only set `is_toolkit` flag but never restored these fields from `mysterium-toolkit.conf` back into the active jail object
+- fail2ban health scan: `fail2ban-client status` called without sudo after successful ping — working prefix now stored and reused for all subsequent fail2ban calls in the health scan; fixes "0 jails" in system health card on non-root systems
+- fail2ban_get_jails: per-jail status now tries `sudo -n` fallback; `File list` (logpath), `Journal matches` (systemd backend), `Currently failed` and `Total failed` are now parsed from status output
+- fail2ban jail UI: logpath field now shows "systemd journal (geen bestand nodig)" and is locked when `backend_type = systemd`; shows detected file path for file-backend jails
+- fail2ban jail edit: logpath field now shows per-jail-type placeholder hints (sshd, nginx, recidive, apache)
+- fail2ban jail list: currently failing and total failed count now shown per jail
+- update.sh: now detects if its own content changed after `git pull` and re-execs with the new version — fixes silent skipping of update.sh improvements on running updates
+- update.sh: auto-update systemd timer (`mysterium-toolkit-update.timer`) now created automatically on first `./update.sh` run if missing
+
+---
+
 ## [1.2.0] - 2026-05-19
 ### Fixed
 - Laptop/desktop jails empty in Security Settings: `fail2ban-client` was not in sudoers NOPASSWD — toolkit backend could not access the fail2ban socket without a password. Added `fail2ban-client` (all common paths) and `tee /etc/fail2ban/jail.d/*` + `tee /etc/fail2ban/filter.d/*` to `setup.sh` sudoers block.

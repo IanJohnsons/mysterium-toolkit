@@ -4116,6 +4116,7 @@ class MetricsCollector:
                 fail2ban['installed'] = True
                 # Check if running
                 _ping_ok = False
+                _f2b_pfx = []
                 for _pfx in [[], ['sudo', '-n']]:
                     try:
                         r = subprocess.run(
@@ -4124,6 +4125,7 @@ class MetricsCollector:
                         )
                         if r.returncode == 0 and 'pong' in r.stdout.lower():
                             _ping_ok = True
+                            _f2b_pfx = _pfx
                             break
                     except Exception:
                         continue
@@ -4131,7 +4133,7 @@ class MetricsCollector:
                     fail2ban['running'] = True
                     # Get list of jails
                     r2 = subprocess.run(
-                        ['fail2ban-client', 'status'],
+                        _f2b_pfx + ['fail2ban-client', 'status'],
                         capture_output=True, timeout=5, text=True
                     )
                     jail_names = []
@@ -4144,7 +4146,7 @@ class MetricsCollector:
                     for jail in jail_names:
                         try:
                             r3 = subprocess.run(
-                                ['fail2ban-client', 'status', jail],
+                                _f2b_pfx + ['fail2ban-client', 'status', jail],
                                 capture_output=True, timeout=5, text=True
                             )
                             if r3.returncode == 0:
@@ -5910,6 +5912,15 @@ def _f2b_all_jails():
                 if is_toolkit:
                     jails[name]['is_toolkit'] = True
                     jails[name]['source_file'] = fpath
+                    # Restore port/logpath/filter saved in toolkit conf
+                    for _k in ('port', 'logpath', 'filter'):
+                        if vals.get(_k):
+                            jails[name][_k] = vals[_k]
+                    # Apply numeric overrides from toolkit conf
+                    for _k in ('maxretry', 'bantime', 'findtime'):
+                        if _k in vals:
+                            try: jails[name][_k] = int(vals[_k])
+                            except (ValueError, TypeError): pass
             else:
                 try:
                     enabled_val = vals.get('enabled', 'false')
@@ -6005,13 +6016,19 @@ def fail2ban_get_jails():
         for jail in jails:
             if running:
                 try:
-                    r = subprocess.run(
-                        ['fail2ban-client', 'status', jail['name']],
-                        capture_output=True, timeout=5, text=True
-                    )
-                    if r.returncode == 0:
+                    _status_out = None
+                    for _spfx in [[], ['sudo', '-n']]:
+                        rs = subprocess.run(
+                            _spfx + ['fail2ban-client', 'status', jail['name']],
+                            capture_output=True, timeout=5, text=True
+                        )
+                        if rs.returncode == 0:
+                            _status_out = rs.stdout
+                            break
+                    if _status_out:
                         active_bans, total_bans, banned_ips = 0, 0, []
-                        for line in r.stdout.splitlines():
+                        currently_failed, total_failed = 0, 0
+                        for line in _status_out.splitlines():
                             if 'Currently banned:' in line:
                                 try: active_bans = int(line.split(':', 1)[1].strip())
                                 except: pass
@@ -6021,15 +6038,34 @@ def fail2ban_get_jails():
                             elif 'Banned IP list:' in line:
                                 ips = line.split(':', 1)[1].strip()
                                 banned_ips = [ip.strip() for ip in ips.split() if ip.strip()]
+                            elif 'Currently failed:' in line:
+                                try: currently_failed = int(line.split(':', 1)[1].strip())
+                                except: pass
+                            elif 'Total failed:' in line:
+                                try: total_failed = int(line.split(':', 1)[1].strip())
+                                except: pass
+                            elif 'File list:' in line:
+                                fl = line.split(':', 1)[1].strip()
+                                if fl and not jail.get('logpath'):
+                                    jail['logpath'] = fl
+                                if not jail.get('backend_type'):
+                                    jail['backend_type'] = 'file'
+                            elif 'Journal matches:' in line:
+                                jail['backend_type'] = 'systemd'
                         jail['active_bans'] = active_bans
                         jail['total_bans'] = total_bans
                         jail['banned_ips'] = banned_ips[:50]
+                        jail['currently_failed'] = currently_failed
+                        jail['total_failed'] = total_failed
                     else:
                         jail['active_bans'] = 0; jail['total_bans'] = 0; jail['banned_ips'] = []
+                        jail['currently_failed'] = 0; jail['total_failed'] = 0
                 except Exception:
                     jail['active_bans'] = 0; jail['total_bans'] = 0; jail['banned_ips'] = []
+                    jail['currently_failed'] = 0; jail['total_failed'] = 0
             else:
                 jail['active_bans'] = 0; jail['total_bans'] = 0; jail['banned_ips'] = []
+                jail['currently_failed'] = 0; jail['total_failed'] = 0
         return jsonify({'ok': True, 'jails': jails, 'running': running}), 200
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 200
