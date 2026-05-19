@@ -452,7 +452,14 @@ fi
 pkg_install "ethtool" "ethtool" "ethtool" "ethtool" "ethtool"
 pkg_install "curl" "curl" "curl" "curl" "curl"
 pkg_install "ping" "iputils-ping" "iputils" "iputils" "iputils"
-pkg_install "sensors" "lm-sensors" "lm_sensors" "lm_sensors" "lm_sensors"
+# lm-sensors: skip on ARM — sysfs thermal fallback handles temperature there
+_ARCH=$(uname -m)
+case "$_ARCH" in
+    arm*|aarch64)
+        echo -e "  ${DIM}Skipping lm-sensors on ARM (sysfs thermal used instead)${NC}" ;;
+    *)
+        pkg_install "sensors" "lm-sensors" "lm_sensors" "lm_sensors" "lm_sensors" ;;
+esac
 pkg_install "sqlite3" "sqlite3" "sqlite" "sqlite" "sqlite"
 
 # irqbalance is a service, check differently
@@ -495,14 +502,29 @@ echo -e "${GREEN}✓ Python: $PYTHON_VERSION${NC}"
 
 if ! command -v node &> /dev/null; then
     echo -e "${YELLOW}Installing Node.js...${NC}"
-    case "$PKG_MGR" in
-        apt)    sudo apt-get update -qq >/dev/null 2>&1; sudo apt-get install -y -qq nodejs npm >/dev/null 2>&1 || true ;;
-        dnf|yum) sudo dnf install -y nodejs npm >/dev/null 2>&1 || true ;;
-        pacman) sudo pacman -S --noconfirm nodejs npm >/dev/null 2>&1 || true ;;
-        apk)    apk add nodejs npm >/dev/null 2>&1 || true ;;
+    case "$_ARCH" in
+        armv6l)
+            # Pi Zero / Pi 1 — NodeSource has no armv6l build; apt is the only option
+            echo -e "  ${YELLOW}⚠ ARMv6 detected (Pi Zero/Pi 1) — only apt-provided Node.js available${NC}"
+            sudo apt-get update -qq >/dev/null 2>&1; sudo apt-get install -y -qq nodejs npm >/dev/null 2>&1 || true ;;
+        *)
+            case "$PKG_MGR" in
+                apt)    sudo apt-get update -qq >/dev/null 2>&1; sudo apt-get install -y -qq nodejs npm >/dev/null 2>&1 || true ;;
+                dnf|yum) sudo dnf install -y nodejs npm >/dev/null 2>&1 || true ;;
+                pacman) sudo pacman -S --noconfirm nodejs npm >/dev/null 2>&1 || true ;;
+                apk)    apk add nodejs npm >/dev/null 2>&1 || true ;;
+            esac ;;
     esac
 fi
 NODE_VERSION=$(node --version 2>&1)
+# Minimum version check — need v16+
+_NODE_MAJOR=$(echo "$NODE_VERSION" | sed 's/v\([0-9]*\).*/\1/')
+if [ -n "$_NODE_MAJOR" ] && [ "$_NODE_MAJOR" -lt 16 ] 2>/dev/null; then
+    echo -e "${RED}✗ Node.js ${NODE_VERSION} is too old — need v16 or higher.${NC}"
+    echo -e "  ${YELLOW}Fix: curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs${NC}"
+    echo -e "  ${DIM}  On ARMv6 (Pi Zero/Pi 1): v16+ is not available. Use --lightweight flag for backend-only mode.${NC}"
+    exit 1
+fi
 echo -e "${GREEN}✓ Node.js: $NODE_VERSION${NC}"
 echo
 
@@ -1441,7 +1463,10 @@ $_REAL_USER ALL=(ALL) NOPASSWD: \
   /usr/sbin/iptables, /sbin/iptables, \
   /usr/sbin/iptables-legacy, /sbin/iptables-legacy, \
   /usr/sbin/ip6tables, /sbin/ip6tables, \
-  /usr/sbin/nft, /sbin/nft
+  /usr/sbin/nft, /sbin/nft, \
+  /usr/bin/fail2ban-client, /usr/local/bin/fail2ban-client, /bin/fail2ban-client, \
+  /usr/bin/tee /etc/fail2ban/jail.d/*, \
+  /usr/bin/tee /etc/fail2ban/filter.d/*
 SUDOERS_EOF
     sudo chmod 440 "$_SUDOERS_FILE"
     if sudo visudo -c -f "$_SUDOERS_FILE" >/dev/null 2>&1; then
@@ -1473,34 +1498,48 @@ else
 failregex = ^.*\[.*\] ".*" 401
 ignoreregex =
 F2B_FILTER_EOF
-            tee "$_F2B_CONF" > /dev/null << F2B_EOF
-# Mysterium Node Toolkit — fail2ban jails
-# This file is managed by the toolkit. Edit jail.local for global settings.
+            # Detect correct banaction and backend for this system
+            _F2B_BANACTION_LINE=""
+            _F2B_BACKEND_LINE=""
+            if grep -q 'banaction.*nftables' /etc/fail2ban/jail.d/defaults-debian.conf 2>/dev/null; then
+                : # nftables inherited from defaults-debian.conf — no override needed
+            elif command -v nft &>/dev/null && ! command -v iptables &>/dev/null; then
+                _F2B_BANACTION_LINE="banaction = nftables"
+            fi
+            if ! command -v rsyslog &>/dev/null && systemctl list-units --type=service 2>/dev/null | grep -q 'systemd-journald'; then
+                _F2B_BACKEND_LINE="backend  = systemd"
+            fi
+            # Write jail config programmatically so optional lines are only included when set
+            {
+                echo "# Mysterium Node Toolkit — fail2ban jails"
+                echo "# This file is managed by the toolkit. Edit jail.local for global settings."
+                echo ""
+                echo "[sshd]"
+                echo "enabled  = true"
+                echo "port     = ssh"
+                [ -n "$_F2B_BACKEND_LINE"  ] && echo "$_F2B_BACKEND_LINE"
+                [ -n "$_F2B_BANACTION_LINE" ] && echo "$_F2B_BANACTION_LINE"
+                echo "maxretry = 5"
+                echo "bantime  = 86400"
+                echo "findtime = 600"
+                echo ""
+                echo "[mysterium-dashboard]"
+                echo "enabled  = true"
+                echo "port     = 5000"
+                echo "filter   = mysterium-dashboard"
+                echo "logpath  = $TOOLKIT_DIR/logs/backend.log"
+                echo "maxretry = 5"
+                echo "bantime  = 86400"
+                echo "findtime = 600"
+                echo ""
+                echo "[recidive]"
+                echo "enabled  = true"
+                echo "logpath  = /var/log/fail2ban.log"
+                echo "bantime  = 604800"
+                echo "findtime = 86400"
+                echo "maxretry = 5"
+            } | tee "$_F2B_CONF" > /dev/null
 
-[sshd]
-enabled  = true
-port     = ssh
-logpath  = /var/log/auth.log
-maxretry = 5
-bantime  = 3600
-findtime = 600
-
-[mysterium-dashboard]
-enabled  = true
-port     = 5000
-filter   = mysterium-dashboard
-logpath  = $TOOLKIT_DIR/logs/backend.log
-maxretry = 5
-bantime  = 3600
-findtime = 600
-
-[recidive]
-enabled  = true
-logpath  = /var/log/fail2ban.log
-bantime  = 604800
-findtime = 86400
-maxretry = 5
-F2B_EOF
             systemctl enable fail2ban >/dev/null 2>&1 || true
             systemctl restart fail2ban >/dev/null 2>&1 || true
             echo -e "  ${GREEN}✓ fail2ban installed and configured${NC}"

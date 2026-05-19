@@ -6084,17 +6084,36 @@ def fail2ban_install():
             return jsonify({'ok': False, 'error': 'apt-get install failed — check permissions'}), 200
 
         toolkit_dir = str(Path(__file__).parent.parent)
-        f2b_conf = '/etc/fail2ban/jail.d/mysterium-toolkit.conf'
+        f2b_conf   = '/etc/fail2ban/jail.d/mysterium-toolkit.conf'
         f2b_filter = '/etc/fail2ban/filter.d/mysterium-dashboard.conf'
 
+        # Detect banaction/backend for this system
+        banaction_line = ''
+        backend_line   = ''
+        try:
+            deb_conf = '/etc/fail2ban/jail.d/defaults-debian.conf'
+            if os.path.exists(deb_conf) and 'nftables' in open(deb_conf).read():
+                pass  # inherited from defaults-debian.conf
+            elif subprocess.run(['which', 'nft'], capture_output=True).returncode == 0                     and subprocess.run(['which', 'iptables'], capture_output=True).returncode != 0:
+                banaction_line = 'banaction = nftables\n'
+        except Exception:
+            pass
+        try:
+            if subprocess.run(['which', 'rsyslog'], capture_output=True).returncode != 0:
+                backend_line = 'backend  = systemd\n'
+        except Exception:
+            pass
+
+        sshd_extras = banaction_line + backend_line
         filter_content = '[Definition]\nfailregex = ^.*\\[.*\\] ".*" 401\nignoreregex =\n'
         jail_content = f"""# Mysterium Node Toolkit — fail2ban jails
+# Managed by toolkit. Edit jail.local for global defaults.
+
 [sshd]
 enabled  = true
 port     = ssh
-logpath  = /var/log/auth.log
-maxretry = 5
-bantime  = 3600
+{sshd_extras}maxretry = 5
+bantime  = 86400
 findtime = 600
 
 [mysterium-dashboard]
@@ -6103,7 +6122,7 @@ port     = 5000
 filter   = mysterium-dashboard
 logpath  = {toolkit_dir}/logs/backend.log
 maxretry = 5
-bantime  = 3600
+bantime  = 86400
 findtime = 600
 
 [recidive]

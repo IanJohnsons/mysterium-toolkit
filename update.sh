@@ -215,21 +215,29 @@ UNIT_EOF
     $SUDO systemctl daemon-reload
     echo -e "  ${GREEN}✓ Systemd service updated${NC}"
 
-    # Update sudoers — only write if content changed (avoids sudo password prompt when unchanged)
-    _SUDOERS_FILE="/etc/sudoers.d/mysterium-toolkit"
-    _SUDOERS_CONTENT="# Mysterium Toolkit — passwordless sudo for specific commands only
+fi
+
+# ── Sudoers update — always runs, regardless of autostart ─────────────────
+# Runs unconditionally so fail2ban and other new permissions reach all users
+_REAL_USER="${SUDO_USER:-$USER}"
+_SUDOERS_FILE="/etc/sudoers.d/mysterium-toolkit"
+_SUDOERS_CONTENT="# Mysterium Toolkit — passwordless sudo for specific commands only
 $_REAL_USER ALL=(ALL) NOPASSWD: $TOOLKIT_DIR/update.sh, /sbin/sysctl, /usr/sbin/sysctl, /usr/sbin/ethtool, /usr/sbin/conntrack, /usr/local/bin/mysterium-rps-watcher.sh, /usr/local/bin/mysterium-rps-setup.sh, /usr/bin/tee /etc/sysctl.d/*, /usr/bin/tee /etc/modules-load.d/*, /usr/bin/tee /sys/module/nf_conntrack/parameters/hashsize, /usr/bin/tee /usr/local/bin/*, /usr/bin/tee /etc/systemd/system/mysterium-*.service, /usr/bin/tee /etc/systemd/system/mysterium-*.timer, /usr/bin/tee /etc/mysterium-node/config.toml, /usr/bin/tee /etc/mysterium-node/config-mainnet.toml, /usr/bin/chmod +x /usr/local/bin/mysterium-*, /bin/systemctl start mysterium-*, /bin/systemctl stop mysterium-*, /bin/systemctl enable mysterium-*, /bin/systemctl disable mysterium-*, /bin/systemctl daemon-reload, /usr/sbin/iptables, /sbin/iptables, /usr/sbin/iptables-legacy, /sbin/iptables-legacy, /usr/sbin/ip6tables, /sbin/ip6tables, /usr/sbin/nft, /sbin/nft, /usr/bin/fail2ban-client, /usr/local/bin/fail2ban-client, /bin/fail2ban-client, /usr/bin/tee /etc/fail2ban/jail.d/*, /usr/bin/tee /etc/fail2ban/filter.d/*"
-    _SUDOERS_CURRENT=""
-    if [ -f "$_SUDOERS_FILE" ]; then
-        _SUDOERS_CURRENT=$(cat "$_SUDOERS_FILE" 2>/dev/null || true)
-    fi
-    if [ "$_SUDOERS_CONTENT" != "$_SUDOERS_CURRENT" ]; then
-        printf '%s\n' "$_SUDOERS_CONTENT" | $SUDO tee "$_SUDOERS_FILE" > /dev/null
-        $SUDO chmod 440 "$_SUDOERS_FILE"
-        echo -e "  ${GREEN}✓ Sudoers updated${NC}"
+_SUDOERS_CURRENT=""
+if [ -f "$_SUDOERS_FILE" ]; then
+    _SUDOERS_CURRENT=$(cat "$_SUDOERS_FILE" 2>/dev/null || true)
+fi
+if [ "$_SUDOERS_CONTENT" != "$_SUDOERS_CURRENT" ]; then
+    printf '%s\n' "$_SUDOERS_CONTENT" | $SUDO tee "$_SUDOERS_FILE" > /dev/null
+    $SUDO chmod 440 "$_SUDOERS_FILE"
+    if $SUDO visudo -c -f "$_SUDOERS_FILE" >/dev/null 2>&1; then
+        echo -e "  ${GREEN}✓ Sudoers updated — fail2ban and firewall access enabled${NC}"
     else
-        echo -e "  ${DIM}  Sudoers unchanged — skipped${NC}"
+        $SUDO rm -f "$_SUDOERS_FILE"
+        echo -e "  ${YELLOW}⚠ Sudoers validation failed — skipped${NC}"
     fi
+else
+    echo -e "  ${DIM}  Sudoers unchanged${NC}"
 fi
 
 # ── Restart backend ───────────────────────────────────────────────────────

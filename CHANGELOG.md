@@ -5,6 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.2.0] - 2026-05-19
+### Fixed
+- Laptop/desktop jails empty in Security Settings: `fail2ban-client` was not in sudoers NOPASSWD — toolkit backend could not access the fail2ban socket without a password. Added `fail2ban-client` (all common paths) and `tee /etc/fail2ban/jail.d/*` + `tee /etc/fail2ban/filter.d/*` to `setup.sh` sudoers block.
+- fail2ban install (dashboard + setup.sh): jail config now detects system firewall type — writes `banaction = nftables` on nftables-only systems and `backend = systemd` on systems without rsyslog. Fixes fail2ban on Parrot OS, Debian Bookworm, and Raspberry Pi OS Bookworm out of the box.
+- fail2ban install: default bantime raised from 1h to 24h for sshd and dashboard jails.
+- Raspberry Pi setup: `lm-sensors` install now skipped on ARM architectures — sysfs thermal fallback handles temperature on Pi hardware; lm-sensors is unavailable on ARM and caused confusing install output.
+- Raspberry Pi setup: `setup.sh` now checks Node.js version after install and exits with a clear error if version < 16, with a fix command shown. Previously setup continued silently with v12, failing later during Vite build with a cryptic error.
+- Raspberry Pi setup: architecture detection (`uname -m`) added for Node.js install — on `armv6l` (Pi Zero / Pi 1) NodeSource is unavailable; script warns and falls back to apt with a note about backend-only mode.
+
+---
+
 ## [1.1.66] - 2026-05-19
 ### Fixed
 - Dashboard crash: `c.earnings_myst` undefined on fleet nodes — fleet country_breakdown used `total_earnings` key instead of `earnings_myst`; no frontend fallback guard (Bug 17)
