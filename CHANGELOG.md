@@ -5,6 +5,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.1.66] - 2026-05-19
+### Fixed
+- Dashboard crash: `c.earnings_myst` undefined on fleet nodes — fleet country_breakdown used `total_earnings` key instead of `earnings_myst`; no frontend fallback guard (Bug 17)
+- Dashboard crash: `t.value.toFixed(0)` on temperature sensor entries with null/undefined value — added `?? 0` guard in all four render locations (Bug 18)
+- Dashboard crash: `eff/GB` called `.toFixed()` on undefined `earnings_myst` — added `|| 0` guard (Bug 19)
+- Security routing: `loadJails()` empty `[]` deps — SecurityPage never reloaded jails or UFW on node switch; dep changed to `[backendUrl]` (Bugs 1+2)
+- fail2ban ✕ button: shown on external jails instead of toolkit-managed ones — condition was `!is_toolkit`, now `is_toolkit` (Bug 3)
+- fail2ban Remove in edit form: shown for all jails — now guarded with `jail.is_toolkit` (Bug 5)
+- fail2ban bantime/findtime: min hardcoded to 60, blocking permanent ban (−1) — mins changed; `parseInt||min` replaced with `isNaN` guard (Bugs 6+7)
+- fail2ban edit form: port, logpath, filter fields missing — all three added (Bug 8)
+- fail2ban add form: no enabled toggle — checkbox added (Bug 9)
+- fail2ban add form: empty filter field caused jail load failure — backend defaults filter to jail name (Bug 10)
+- fail2ban bans: IP list capped at 20 with no indicator — cap raised to 50, UI shows truncation count (Bug 11)
+- UFW delete: sent `"22/tcp ALLOW"` (tokens reversed) — backend requires `"allow 22/tcp"`; fixed in ✕ button and edit-save flow (Bugs 13+14)
+- UFW edit parse: `parts[0]` as port broke `Anywhere DENY IN x.x.x.x/24` and `(v6)` rules — parser rewritten with `isFromRule` detection (Bug 12)
+- UFW add form: no From IP/CIDR field — added for subnet block rules (Bug 15)
+- UFW backend: regex blocked `from IP` syntax — updated for both add and delete routes (Bug 16)
+- fmtTime: negative bantime showed as negative seconds — now shows `perm` for values < 0
+
+---
+
 ## [1.1.65] - 2026-05-18
 ### Fixed
 - fail2ban jails: fixed exception cascade — jail list and settings fetch now have separate error handling so a settings error no longer wipes the entire jail list

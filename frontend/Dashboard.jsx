@@ -425,11 +425,11 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
   const [newJail, setNewJail] = useState({ name:'', port:'', logpath:'', filter:'', maxretry:5, bantime:3600, findtime:600, enabled:true });
   const [ufwMsg, setUfwMsg] = useState(null);
   const [ufwRules, setUfwRules] = useState(null);
-  const [newRule, setNewRule] = useState({ action:'allow', port:'', proto:'tcp' });
+  const [newRule, setNewRule] = useState({ action:'allow', port:'', proto:'tcp', from:'' });
   const [ufwSaving, setUfwSaving] = useState(false);
   const [editUfwRule, setEditUfwRule] = useState(null); // {index, original, action, port, proto}
 
-  const fmtTime = s => { s=parseInt(s); if(s>=86400) return `${Math.round(s/86400)}d`; if(s>=3600) return `${Math.round(s/3600)}h`; if(s>=60) return `${Math.round(s/60)}m`; return `${s}s`; };
+  const fmtTime = s => { s=parseInt(s); if(s<0) return 'perm'; if(s>=86400) return `${Math.round(s/86400)}d`; if(s>=3600) return `${Math.round(s/3600)}h`; if(s>=60) return `${Math.round(s/60)}m`; return `${s}s`; };
 
   const loadJails = () => {
     setF2bLoading(true);
@@ -448,7 +448,7 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
       .then(r=>r.json()).then(d=>setUfwRules(d.ufw_rules||[]))
       .catch(()=>setUfwRules([]));
   };
-  useEffect(()=>{ loadJails(); }, []);
+  useEffect(()=>{ loadJails(); loadUfw(); }, [backendUrl]);
   useEffect(()=>{ if(firewallData?.ufw_rules) setUfwRules(firewallData.ufw_rules); }, [firewallData]);
 
   const installF2b = () => {
@@ -486,7 +486,7 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
   };
 
   const ufwAdd = () => {
-    if(!newRule.port) return;
+    if(!newRule.port && !newRule.from) return;
     setUfwSaving(true);
     fetch(`${backendUrl}/firewall/ufw/add`, {
       method:'POST', headers:{...(authHeaders||{}),'Content-Type':'application/json'},
@@ -494,15 +494,16 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
     }).then(r=>r.json()).then(d=>{
       setUfwSaving(false);
       setUfwMsg(d.ok?{ok:true,text:d.message}:{ok:false,text:d.error});
-      if(d.ok){ setNewRule({action:'allow',port:'',proto:'tcp'}); loadUfw(); }
+      if(d.ok){ setNewRule({action:'allow',port:'',proto:'tcp',from:''}); loadUfw(); }
     }).catch(()=>{ setUfwSaving(false); setUfwMsg({ok:false,text:'Failed'}); });
   };
 
-  const ufwDelete = (rule) => {
+  const ufwDelete = (rule, fromAction, fromIp) => {
     setUfwSaving(true);
+    const body = fromIp ? { action: fromAction||'deny', from: fromIp } : { rule };
     fetch(`${backendUrl}/firewall/ufw/delete`, {
       method:'POST', headers:{...(authHeaders||{}),'Content-Type':'application/json'},
-      body: JSON.stringify({ rule })
+      body: JSON.stringify(body)
     }).then(r=>r.json()).then(d=>{
       setUfwSaving(false);
       setUfwMsg(d.ok?{ok:true,text:'Rule deleted'}:{ok:false,text:d.error});
@@ -569,13 +570,21 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
                         <button onClick={()=>setEditJail(null)} className="text-[10px] text-slate-500 hover:text-slate-300">cancel</button>
                       </div>
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
-                        {[['Max retries','attempts before ban','maxretry',1],['Ban time','seconds','bantime',60],['Find time','window (s)','findtime',60]].map(([label,hint,key,min])=>(
+                        {[['Max retries','attempts before ban','maxretry',1],['Ban time','seconds (−1 = permanent)','bantime',-1],['Find time','window (s)','findtime',1]].map(([label,hint,key,min])=>(
                           <div key={key}>
                             <label className="block text-[10px] text-slate-400 mb-1">{label} <span className="text-slate-600">— {hint}</span></label>
                             <input type="number" min={min} value={editJail[key]}
-                              onChange={e=>setEditJail({...editJail,[key]:parseInt(e.target.value)||min})}
+                              onChange={e=>{const v=parseInt(e.target.value);setEditJail({...editJail,[key]:isNaN(v)?min:v});}}
                               className={inp} />
                             {key!=='maxretry' && <p className="text-[9px] text-slate-600 mt-0.5">{fmtTime(editJail[key])}</p>}
+                          </div>
+                        ))}
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3 mt-1">
+                        {[['Port','e.g. 22,80','port'],['Log path','full path to log','logpath'],['Filter','empty = jail name','filter']].map(([label,hint,key])=>(
+                          <div key={key}>
+                            <label className="block text-[10px] text-slate-400 mb-1">{label} <span className="text-slate-600">— {hint}</span></label>
+                            <input type="text" value={editJail[key]||''} onChange={e=>setEditJail({...editJail,[key]:e.target.value})} className={inp} />
                           </div>
                         ))}
                       </div>
@@ -592,8 +601,8 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
                           className="flex-1 py-2 text-xs bg-violet-600 hover:bg-violet-700 text-white rounded font-semibold transition disabled:opacity-50">
                           {f2bSaving?'Saving…':'✓ Save & reload'}
                         </button>
-                        <button onClick={()=>{ if(confirm(`Remove [${jail.name}]?`)) saveJails((f2bJails||[]).filter(j=>j.is_toolkit&&j.name!==jail.name)); }}
-                          className="px-3 py-2 text-xs bg-red-500/10 border border-red-500/30 hover:bg-red-500/20 text-red-400 rounded transition">Remove</button>
+                        {jail.is_toolkit && <button onClick={()=>{ if(confirm(`Remove [${jail.name}]?`)) saveJails((f2bJails||[]).filter(j=>j.is_toolkit&&j.name!==jail.name)); }}
+                          className="px-3 py-2 text-xs bg-red-500/10 border border-red-500/30 hover:bg-red-500/20 text-red-400 rounded transition">Remove</button>}
                       </div>
                     </div>
                   ) : (
@@ -613,7 +622,7 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
                           </div>
                           {jail.active_bans > 0 && (
                             <div className="mt-2 space-y-1">
-                              <span className="text-[10px] text-amber-400 font-semibold">{jail.active_bans} active ban{jail.active_bans!==1?'s':''}</span>
+                              <span className="text-[10px] text-amber-400 font-semibold">{jail.active_bans} active ban{jail.active_bans!==1?'s':''}{jail.active_bans>(jail.banned_ips||[]).length?<span className="text-slate-500 font-normal"> — showing {(jail.banned_ips||[]).length}</span>:''}</span>
                               {(jail.banned_ips||[]).map(ip => (
                                 <div key={ip} className="flex items-center justify-between pl-2">
                                   <span className="text-[10px] font-mono text-red-400/80">{ip}</span>
@@ -626,7 +635,7 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
                         </div>
                         <div className="flex gap-1 flex-shrink-0">
                           <button onClick={()=>setEditJail({...jail})} className="text-[10px] px-2 py-1.5 border border-slate-600 rounded hover:border-violet-500/40 hover:text-violet-400 text-slate-400 transition">✎</button>
-                          {!jail.is_toolkit && <button onClick={()=>{ if(confirm(`Remove [${jail.name}]?`)) saveJails((f2bJails||[]).filter(j=>j.is_toolkit&&j.name!==jail.name)); }} className="text-[10px] px-2 py-1.5 border border-slate-700 rounded hover:border-red-500/40 hover:text-red-400 text-slate-600 transition" title="Only toolkit-added jails can be removed">✕</button>}
+                          {jail.is_toolkit && <button onClick={()=>{ if(confirm(`Remove [${jail.name}]?`)) saveJails((f2bJails||[]).filter(j=>j.is_toolkit&&j.name!==jail.name)); }} className="text-[10px] px-2 py-1.5 border border-slate-700 rounded hover:border-red-500/40 hover:text-red-400 text-slate-600 transition" title="Remove toolkit-managed jail">✕</button>}
                         </div>
                       </div>
                     </div>
@@ -644,13 +653,16 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
                     </div>
                   ))}
                   <div className="grid grid-cols-3 gap-3 mb-3">
-                    {[['Max retries','maxretry',1],['Ban time (s)','bantime',60],['Find time (s)','findtime',60]].map(([label,key,min])=>(
+                    {[['Max retries','maxretry',1],['Ban time (s)','bantime',-1],['Find time (s)','findtime',1]].map(([label,key,min])=>(
                       <div key={key}>
-                        <label className="block text-[10px] text-slate-400 mb-1">{label}</label>
-                        <input type="number" min={min} value={newJail[key]} onChange={e=>setNewJail({...newJail,[key]:parseInt(e.target.value)||min})} className={inp} />
+                        <label className="block text-[10px] text-slate-400 mb-1">{label}{key==='bantime'&&<span className="text-slate-600"> (−1=perm)</span>}</label>
+                        <input type="number" min={min} value={newJail[key]} onChange={e=>{const v=parseInt(e.target.value);setNewJail({...newJail,[key]:isNaN(v)?min:v});}} className={inp} />
                       </div>
                     ))}
                   </div>
+                  <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer mb-3">
+                    <input type="checkbox" checked={newJail.enabled} onChange={e=>setNewJail({...newJail,enabled:e.target.checked})} className="accent-violet-500" /> Enabled
+                  </label>
                   <div className="flex gap-2">
                     <button onClick={()=>saveJails([...(f2bJails?.filter(j=>j.is_toolkit)||[]),newJail])} disabled={f2bSaving||!newJail.name}
                       className="flex-1 py-2 text-xs bg-violet-600 hover:bg-violet-700 text-white rounded font-semibold transition disabled:opacity-50">
@@ -698,7 +710,12 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
                 <option value="">any</option>
               </select>
             </div>
-            <button onClick={ufwAdd} disabled={ufwSaving||!newRule.port}
+            <div>
+              <label className="block text-[10px] text-slate-400 mb-1">From IP/CIDR <span className="text-slate-600">— optional block</span></label>
+              <input type="text" placeholder="e.g. 2.57.122.0/24" value={newRule.from||''} onChange={e=>setNewRule({...newRule,from:e.target.value})}
+                className="w-36 bg-slate-900 border border-slate-600 rounded px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-violet-500/50" />
+            </div>
+            <button onClick={ufwAdd} disabled={ufwSaving||(!newRule.port&&!newRule.from)}
               className="px-4 py-2 text-xs bg-violet-600 hover:bg-violet-700 text-white rounded font-semibold transition disabled:opacity-50">
               {ufwSaving?'…':'+ Add rule'}
             </button>
@@ -739,9 +756,11 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
                     <div className="flex gap-2">
                       <button onClick={()=>{
                         setUfwSaving(true);
-                        // Delete old rule then add new
-                        fetch(`${backendUrl}/firewall/ufw/delete`,{method:'POST',headers:{...(authHeaders||{}),'Content-Type':'application/json'},body:JSON.stringify({rule:editUfwRule.original.split(' ').slice(0,2).join(' ')})})
-                          .then(()=>fetch(`${backendUrl}/firewall/ufw/add`,{method:'POST',headers:{...(authHeaders||{}),'Content-Type':'application/json'},body:JSON.stringify({action:editUfwRule.action,port:editUfwRule.port,proto:editUfwRule.proto})}))
+                        const pp=editUfwRule.proto?`${editUfwRule.port}/${editUfwRule.proto}`:editUfwRule.port;
+                        const delBody=editUfwRule.isFromRule?{action:editUfwRule.action,from:editUfwRule.port}:{rule:`${editUfwRule.action} ${pp}`};
+                        const addBody=editUfwRule.isFromRule?{action:editUfwRule.action,from:editUfwRule.port}:{action:editUfwRule.action,port:editUfwRule.port,proto:editUfwRule.proto};
+                        fetch(`${backendUrl}/firewall/ufw/delete`,{method:'POST',headers:{...(authHeaders||{}),'Content-Type':'application/json'},body:JSON.stringify(delBody)})
+                          .then(()=>fetch(`${backendUrl}/firewall/ufw/add`,{method:'POST',headers:{...(authHeaders||{}),'Content-Type':'application/json'},body:JSON.stringify(addBody)}))
                           .then(r=>r.json()).then(d=>{ setUfwSaving(false); setEditUfwRule(null); if(d.ok) loadUfw(); else setUfwMsg({ok:false,text:d.error}); })
                           .catch(()=>{ setUfwSaving(false); });
                       }} disabled={ufwSaving||!editUfwRule.port}
@@ -756,13 +775,32 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
                     <span className="text-xs font-mono text-slate-400 flex-1 mr-2">{rule}</span>
                     <div className="flex gap-1">
                       <button onClick={()=>{
-                        const parts = rule.split(' ');
-                        const action = parts.find(p=>['ALLOW','DENY','REJECT','LIMIT'].includes(p.toUpperCase()))?.toLowerCase()||'allow';
-                        const portProto = parts[0]||'';
-                        const [port,proto] = portProto.includes('/') ? portProto.split('/') : [portProto,'tcp'];
-                        setEditUfwRule({index:i,original:rule,action,port,proto:proto||'tcp'});
+                        // Parse UFW rule: handle standard port/proto AND 'Anywhere DENY IN x.x.x.x/24' blocks
+                        const pts=rule.replace(/\(v6\)/gi,'').trim().split(/\s+/);
+                        const act=pts.find(p=>['ALLOW','DENY','REJECT','LIMIT'].includes(p.toUpperCase()))?.toLowerCase()||'allow';
+                        const first=pts[0]||'';
+                        const isFrom=first.toLowerCase()==='anywhere';
+                        let port,proto;
+                        if(isFrom){
+                          // 'Anywhere DENY IN 2.57.122.0/24' — IP is last token, no proto field
+                          port=pts[pts.length-1]||''; proto='';
+                        } else {
+                          const pp=first.split('/');
+                          port=pp[0]||''; proto=pp[1]||'tcp';
+                        }
+                        setEditUfwRule({index:i,original:rule,action:act,port,proto,isFromRule:isFrom});
                       }} className="text-[10px] text-slate-600 hover:text-violet-400 transition px-2 py-0.5 border border-slate-700 rounded hover:border-violet-500/40">✎</button>
-                      <button onClick={()=>ufwDelete(rule.split(' ').slice(0,2).join(' '))}
+                      <button onClick={()=>{
+                        // Build correct delete string: 'allow 22/tcp' or 'deny from 2.57.122.0/24'
+                        const dpts=rule.replace(/\(v6\)/gi,'').trim().split(/\s+/);
+                        const dact=dpts.find(p=>['ALLOW','DENY','REJECT','LIMIT'].includes(p.toUpperCase()))?.toLowerCase()||'deny';
+                        const dfirst=dpts[0]||'';
+                        if(dfirst.toLowerCase()==='anywhere'){
+                          ufwDelete(null,dact,dpts[dpts.length-1]);
+                        } else {
+                          ufwDelete(`${dact} ${dfirst}`);
+                        }
+                      }}
                         className="text-[10px] text-slate-600 hover:text-red-400 transition px-2 py-0.5 border border-slate-700 rounded hover:border-red-500/40">✕</button>
                     </div>
                   </div>
@@ -2749,7 +2787,7 @@ const MysteriumDashboard = () => {
                                 : '—'}
                               {session.is_paid && session.data_total > 5 && (
                                 <div className="text-[9px] text-slate-500 font-normal" title="Total earnings per GB transferred (includes time-based component — not a pure data price)">
-                                  {(session.earnings_myst / (session.data_total / 1024)).toFixed(4)} eff/GB
+                                  {((session.earnings_myst||0) / (session.data_total / 1024)).toFixed(4)} eff/GB
                                 </div>
                               )}
                             </div>
@@ -2842,7 +2880,7 @@ const MysteriumDashboard = () => {
                                     {s.is_paid ? (s.earnings_myst || 0).toFixed(6) : '—'}
                                     {s.is_paid && s.data_total > 5 && (
                                       <div className="text-[9px] text-slate-500 font-normal" title="Total earnings per GB transferred (includes time-based component — not a pure data price)">
-                                        {(s.earnings_myst / (s.data_total / 1024)).toFixed(4)} eff/GB
+                                        {((s.earnings_myst||0) / (s.data_total / 1024)).toFixed(4)} eff/GB
                                       </div>
                                     )}
                                   </div>
@@ -2982,21 +3020,21 @@ const MysteriumDashboard = () => {
                       if (isCpu) {
                         return (
                           <div key={i} className="flex items-center justify-between gap-3 mt-1">
-                            <span className={`text-xs font-medium ${tc}`}>CPU: {t.value.toFixed(0)}°C</span>
+                            <span className={`text-xs font-medium ${tc}`}>CPU: {(t.value ?? 0).toFixed(0)}°C</span>
                             <span className={`text-xs font-medium ${cpuPctColor(safeNum(metrics.resources.cpu))}`}>CPU: {cpuPct}%</span>
                           </div>
                         );
                       } else if (isRam) {
                         return (
                           <div key={i} className="flex items-center justify-between gap-3 mt-1">
-                            <span className={`text-xs font-medium ${tc}`}>RAM: {t.value.toFixed(0)}°C</span>
+                            <span className={`text-xs font-medium ${tc}`}>RAM: {(t.value ?? 0).toFixed(0)}°C</span>
                             <span className={`text-xs font-medium ${cpuPctColor(safeNum(metrics.resources.ram))}`}>RAM: {ramPct}%</span>
                           </div>
                         );
                       } else {
                         // Ambient or other — full-width, temp only
                         return (
-                          <div key={i} className={`text-xs font-medium mt-1 ${tc}`}>{lbl}: {t.value.toFixed(0)}°C</div>
+                          <div key={i} className={`text-xs font-medium mt-1 ${tc}`}>{lbl}: {(t.value ?? 0).toFixed(0)}°C</div>
                         );
                       }
                     });
@@ -4591,7 +4629,7 @@ const AnalyticsCard = ({ sessions, backendUrl, authHeaders }) => {
                     key={i}
                     label={c.country === '—' ? 'Unknown' : c.country}
                     pct={c.pct_sessions}
-                    value={`${c.sessions} · ${c.earnings_myst.toFixed(4)} MYST`}
+                    value={`${c.sessions} · ${(c.earnings_myst || 0).toFixed(4)} MYST`}
                     color={i === 0 ? 'bg-amber-500' : i < 3 ? 'bg-amber-400/70' : 'bg-slate-600'}
                   />
                 ))}
@@ -5612,7 +5650,7 @@ const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, 
             const tc = t.value < 60 ? 'text-emerald-300' : t.value < 80 ? 'text-amber-300' : 'text-red-400';
             return (
               <span key={i} className={`text-xs font-semibold ${tc}`} title={`${t.sensor}: ${t.label}`}>
-                {t.label}: {t.value.toFixed(0)}°C
+                {t.label}: {(t.value ?? 0).toFixed(0)}°C
               </span>
             );
           })}

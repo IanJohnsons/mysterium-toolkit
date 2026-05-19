@@ -4163,7 +4163,7 @@ class MetricsCollector:
                                     'name': jail,
                                     'active_bans': active_bans,
                                     'total_bans': total_bans,
-                                    'banned_ips': banned_ips[:20],
+                                    'banned_ips': banned_ips[:50],
                                 })
                         except Exception:
                             fail2ban['jails'].append({'name': jail, 'active_bans': 0, 'total_bans': 0, 'banned_ips': []})
@@ -4905,9 +4905,9 @@ def _collect_single_node(node_entry):
                     # Country breakdown
                     if cc:
                         if cc not in country_map:
-                            country_map[cc] = {'country': cc, 'sessions': 0, 'total_earnings': 0.0, 'total_data_mb': 0.0}
+                            country_map[cc] = {'country': cc, 'sessions': 0, 'earnings_myst': 0.0, 'total_data_mb': 0.0}
                         country_map[cc]['sessions']      += 1
-                        country_map[cc]['total_earnings'] += myst_val
+                        country_map[cc]['earnings_myst'] += myst_val
                         country_map[cc]['total_data_mb']  += data_mb
                     item = {
                         'id':               s.get('id', ''),
@@ -5941,8 +5941,8 @@ def _f2b_write_toolkit_conf(jails_data):
         lines.append(f'enabled  = {"true" if jail.get("enabled", True) else "false"}\n')
         if jail.get('port'):
             lines.append(f'port     = {jail["port"]}\n')
-        if jail.get('filter'):
-            lines.append(f'filter   = {jail["filter"]}\n')
+        filter_val = jail.get('filter') or jail['name']
+        lines.append(f'filter   = {filter_val}\n')
         if jail.get('logpath'):
             lines.append(f'logpath  = {jail["logpath"]}\n')
         lines.append(f'maxretry = {jail.get("maxretry", 5)}\n')
@@ -6023,7 +6023,7 @@ def fail2ban_get_jails():
                                 banned_ips = [ip.strip() for ip in ips.split() if ip.strip()]
                         jail['active_bans'] = active_bans
                         jail['total_bans'] = total_bans
-                        jail['banned_ips'] = banned_ips[:20]
+                        jail['banned_ips'] = banned_ips[:50]
                     else:
                         jail['active_bans'] = 0; jail['total_bans'] = 0; jail['banned_ips'] = []
                 except Exception:
@@ -6204,18 +6204,22 @@ def fail2ban_stop():
 @app.route('/firewall/ufw/add', methods=['POST'])
 @require_auth
 def ufw_add_rule():
-    """Add a UFW rule. Body: {rule: 'allow 80/tcp'} or {port: '80', proto: 'tcp', action: 'allow'}"""
+    """Add a UFW rule. Body: {rule: 'allow 80/tcp'} or {port: '80', proto: 'tcp', action: 'allow'} or {action: 'deny', from: '2.57.122.0/24'}"""
     try:
         import re as _re
         data = request.get_json() or {}
         rule = data.get('rule', '').strip()
         if not rule:
-            port   = data.get('port', '').strip()
-            proto  = data.get('proto', 'tcp').strip()
-            action = data.get('action', 'allow').strip()
-            rule = f"{action} {port}/{proto}" if proto else f"{action} {port}"
-        # Validate
-        if not _re.match(r'^(allow|deny|reject|limit)\s[\w/:,\-]+$', rule):
+            port    = data.get('port', '').strip()
+            proto   = data.get('proto', 'tcp').strip()
+            action  = data.get('action', 'allow').strip()
+            from_ip = data.get('from', '').strip()
+            if from_ip:
+                rule = f"{action} from {from_ip}"
+            else:
+                rule = f"{action} {port}/{proto}" if proto else f"{action} {port}"
+        # Validate — allow optional 'from <ip/cidr>' suffix
+        if not _re.match(r'^(allow|deny|reject|limit)\s(from\s)?[\w/:,\.\-]+$', rule):
             return jsonify({'ok': False, 'error': f'Invalid rule: {rule}'}), 200
         for prefix in [[], ['sudo', '-n']]:
             try:
@@ -6235,18 +6239,25 @@ def ufw_add_rule():
 @app.route('/firewall/ufw/delete', methods=['POST'])
 @require_auth
 def ufw_delete_rule():
-    """Delete a UFW rule by number or rule string."""
+    """Delete a UFW rule by number, rule string, or from-IP block."""
     try:
         import re as _re
         data = request.get_json() or {}
         rule_num = data.get('num', '').strip()
         rule_str = data.get('rule', '').strip()
+        from_ip  = data.get('from', '').strip()
+        action   = data.get('action', 'deny').strip()
         if rule_num:
             if not _re.match(r'^\d+$', rule_num):
                 return jsonify({'ok': False, 'error': 'Invalid rule number'}), 200
             cmd = ['ufw', '--force', 'delete', rule_num]
+        elif from_ip:
+            if not _re.match(r'^[\d\.a-fA-F:/]+$', from_ip):
+                return jsonify({'ok': False, 'error': f'Invalid from IP: {from_ip}'}), 200
+            rule_str = f"{action} from {from_ip}"
+            cmd = ['ufw', '--force', 'delete'] + rule_str.split()
         elif rule_str:
-            if not _re.match(r'^(allow|deny|reject|limit)\s[\w/:,\-]+$', rule_str):
+            if not _re.match(r'^(allow|deny|reject|limit)\s(from\s)?[\w/:,\.\-]+$', rule_str):
                 return jsonify({'ok': False, 'error': f'Invalid rule: {rule_str}'}), 200
             cmd = ['ufw', '--force', 'delete'] + rule_str.split()
         else:
