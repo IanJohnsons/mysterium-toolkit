@@ -1451,6 +1451,16 @@ $_REAL_USER ALL=(ALL) NOPASSWD: \
   /bin/systemctl enable irqbalance, \
   /bin/systemctl start irqbalance, \
   /bin/systemctl daemon-reload, \
+  /bin/systemctl reset-failed mysterium-toolkit, \
+  /usr/bin/systemctl start mysterium-*, \
+  /usr/bin/systemctl stop mysterium-*, \
+  /usr/bin/systemctl restart mysterium-*, \
+  /usr/bin/systemctl enable mysterium-*, \
+  /usr/bin/systemctl disable mysterium-*, \
+  /usr/bin/systemctl enable irqbalance, \
+  /usr/bin/systemctl start irqbalance, \
+  /usr/bin/systemctl daemon-reload, \
+  /usr/bin/systemctl reset-failed mysterium-toolkit, \
   /usr/bin/cpupower frequency-set, \
   /usr/bin/update-alternatives --set iptables *, \
   /usr/bin/update-alternatives --set ip6tables *, \

@@ -5,7 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.2.6] - 2026-05-23
+## [1.2.7] - 2026-05-23
+### Fixed
+- **Sudoers: missing `/usr/bin/systemctl` paths (Parrot OS / security-hardened distros):** sudoers only listed `/bin/systemctl` for all systemctl commands. On Parrot OS and other security-hardened Debian-based distros, `sudo` matches strictly on the resolved binary path. Since `/bin` is a symlink to `/usr/bin`, sudo resolves the real path to `/usr/bin/systemctl` and rejects the `/bin/systemctl` NOPASSWD rule — prompting for a password in a non-interactive context (systemd timer, auto-update) and causing the update to fail silently. Fixed by adding `/usr/bin/systemctl` variants for all existing `/bin/systemctl` entries in both `update.sh` and `bin/setup.sh` sudoers content.
+- **Sudoers: `systemctl reset-failed mysterium-toolkit` not in NOPASSWD:** added to both `update.sh` and `bin/setup.sh` so the backend restart sequence in update.sh runs fully without a password prompt on any distro.
+- **Sudoers: `systemctl restart mysterium-*` missing from `update.sh`:** was present in `bin/setup.sh` but not in `update.sh`. Added for consistency.
+
+---
+
+
 ### Fixed
 - **Auto-update timer broken on all installs:** the wrapper script `/usr/local/bin/mysterium-toolkit-update-check.sh` was written with `<< 'WRAPPER_EOF'` (single-quoted heredoc) which blocked variable expansion at write time. `$TOOLKIT_DIR` was left as a literal undefined variable — at runtime it resolved to an empty string, making `exec "/update.sh"` fail silently. The auto-update timer never triggered an actual update. Fixed by switching to an unquoted heredoc with proper escaping of runtime variables (`\$CURRENT`, `\$LATEST`) while expanding `$TOOLKIT_DIR` at write time to the hardcoded install path.
 - **Wrapper never repaired on existing installs:** the timer creation block was guarded by `if [ ! -f "$_TIMER_FILE" ]`, so a broken wrapper from an older install was never rewritten. Fixed by splitting wrapper rewrite (runs on every `update.sh` invocation) from timer/service creation (still first-time only). Existing installs with a broken wrapper will be fixed automatically on the first manual `./update.sh` run.
