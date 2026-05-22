@@ -5,7 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.2.4] - 2026-05-19
+## [1.2.5] - 2026-05-22
+### Fixed
+- **Docker compatibility — README:** corrected the Docker command in the "Mysterium Node in Docker" section. Removed the incorrect `-p 4050:4050` flag (no such port in standard Docker installs). Documented that TequilAPI is on port 4449, that the Node UI password must be entered during wizard setup, and clarified which features are unavailable when the node runs in a container (Live Connections, VPN Traffic, process-based checks).
+- **Docker compatibility — setup wizard:** Easy mode "node not found" hint now includes Docker-specific commands (`docker ps | grep myst`, `docker start myst`, port mapping reminder). Password prompt in Easy mode is now Docker-aware: when a `myst` container is detected the hint explicitly states the password was set during Node UI onboarding and is not `mystberry`. Advanced mode connection-failed hint corrected from port 4050 to 4449; added Docker port-mapping reminder.
+- **Docker compatibility — ServiceWatchdog:** when `myst` process is not visible via psutil (node runs in a Docker container), the watchdog now checks `docker ps` before declaring the service critical. If a running `myst` container is found the status is reported as OK with label `Running in Docker (container_name)` instead of a false critical alarm.
+- **Docker compatibility — Live Connections:** when psutil sees no VPN tunnel interfaces (Docker install), the connected-clients counter now falls back to active sessions from the TequilAPI sessions cache instead of forcing 0.
+- **Docker compatibility — VPN Traffic:** when no VPN interfaces are visible via psutil and vnstat has no myst* data (Docker install), the bandwidth card now falls back to cumulative bytes from TequilAPI sessions. `data_source` is set to `sessions_api` so the frontend can label the data appropriately.
+- **Docker compatibility — Node Restart:** when Docker CLI is not accessible (missing socket mount), the restart endpoint now returns a specific hint explaining how to mount `/var/run/docker.sock` and how to restart manually, instead of a generic sudo-permission error.
+- **Docker compatibility — System Health:** the `/system-health` endpoint now includes a `docker_note` field when `RUNTIME_ENV` detects `docker_host`, informing the user that kernel tuning results reflect the host system, not the Mysterium container.
+
+---
+
+
 ### Fixed
 - fail2ban jail edit: writing to `jail.local` was correct but `fail2ban-client reload` did not apply the new values to the running daemon for active jails. Added `_f2b_apply_live()` which calls `fail2ban-client set <jail> bantime/maxretry/findtime <val>` after every save — takes effect immediately without relying on reload. `jail.local` write + reload retained for persistence after restart.
 - Auto-update timer: changed frequency from daily to hourly; timer now runs a version-check wrapper that fetches the latest VERSION from GitHub and only executes `update.sh` when `current != latest`. Removes unnecessary updates and catches new versions within the hour.

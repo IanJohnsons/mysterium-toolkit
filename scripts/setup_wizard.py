@@ -251,10 +251,20 @@ def _run_easy_wizard() -> bool:
         print_success(f"Node found on port {found_port}  (version {found_version})")
         config['node_host'] = 'localhost'
         config['node_port'] = found_port
+
+        # Check if this node is a Docker container — affects password hint
+        _docker_found, _docker_port, _docker_name = detect_docker_myst()
+        _is_docker = _docker_found and (_docker_port == found_port or _docker_port is None)
+        if _is_docker:
+            config['docker_mode'] = True
+            config['docker_container'] = _docker_name
     else:
         print_warning("Node not found on localhost. Is it running?")
-        print_info("  Check: sudo systemctl status mysterium-node")
-        print_info("  Start: sudo systemctl start mysterium-node")
+        print_info("  Bare metal / LXC:  sudo systemctl status mysterium-node")
+        print_info("  Bare metal / LXC:  sudo systemctl start mysterium-node")
+        print_info("  Docker:            docker ps | grep myst")
+        print_info("  Docker start:      docker start myst")
+        print_info("  Docker (no port):  restart with -p 4449:4449 to expose TequilAPI")
         print_info("")
         retry = input_choice("Try again or switch to Custom mode?",
                              ["Switch to Custom mode", "Exit setup"])
@@ -265,8 +275,13 @@ def _run_easy_wizard() -> bool:
     # Ask just the node password
     print_info("")
     print_info(f"Your node's TequilAPI is on port {found_port}.")
-    print_info("Enter the password you set in the Node UI (http://localhost:4449).")
-    print_info("If you never set one, try leaving it blank or use 'mystberry'.")
+    if _is_docker:
+        print_info(f"Docker container detected: {_docker_name}")
+        print_info("Enter the password you set during Node UI onboarding (http://localhost:4449/ui).")
+        print_info("This is NOT 'mystberry' — Docker nodes always have a password set during first-time setup.")
+    else:
+        print_info("Enter the password you set in the Node UI (http://localhost:4449).")
+        print_info("If you never set one, try leaving it blank.")
     print_info("")
 
     password = input_text("Node UI password (press Enter if none)", "")
@@ -523,7 +538,8 @@ def _run_advanced_wizard() -> bool:
         print_warning("  1. Is Mysterium Node running?")
         print_warning("  2. Is the host/port correct?")
         print_warning("  3. Is the username/password correct?")
-        print_warning("  4. If on LAN, check firewall allows port 4050")
+        print_warning("  4. LAN/VPS: check firewall allows port 4449")
+        print_warning("  5. Docker: make sure the container was started with -p 4449:4449")
 
         retry = input_choice(
             "Try different settings?",

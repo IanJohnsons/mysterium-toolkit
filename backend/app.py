@@ -2429,13 +2429,28 @@ class MetricsCollector:
                 month_rx = vnstat['vpn_month_rx']
                 month_tx = vnstat['vpn_month_tx']
                 data_source = 'vnstat'
-            else:
+            elif vpn_rx > 0 or vpn_tx > 0:
                 # Fallback: psutil counters (only valid since last service start)
                 today_rx = vpn_rx
                 today_tx = vpn_tx
                 month_rx = vpn_rx  # same — can't distinguish without vnstat
                 month_tx = vpn_tx
                 data_source = 'psutil'
+            else:
+                # No VPN interfaces visible — node likely runs in Docker.
+                # Use cumulative bytes from TequilaCache sessions as best-effort.
+                # These are lifetime totals from the node's own records.
+                sess_rx, sess_tx = 0, 0
+                for _s in TequilaCache.get_all_sessions():
+                    if _s.get('service_type', '').lower() in MetricsCollector.INTERNAL_SERVICE_TYPES:
+                        continue
+                    sess_rx += int(_s.get('bytes_received', 0))
+                    sess_tx += int(_s.get('bytes_sent', 0))
+                today_rx = sess_rx
+                today_tx = sess_tx
+                month_rx = sess_rx
+                month_tx = sess_tx
+                data_source = 'sessions_api'
 
             # ---- Paid session traffic from TequilaCache (no HTTP calls) ----
             paid_in = 0
@@ -3048,7 +3063,9 @@ class MetricsCollector:
     @staticmethod
     def get_clients():
         """Get connected client count — uses VPN tunnel count as ground truth.
-        TequilAPI connection_count is unreliable (often 0), so we use psutil."""
+        TequilAPI connection_count is unreliable (often 0), so we use psutil.
+        Docker fallback: when psutil sees no VPN interfaces (node runs in Docker),
+        fall back to active sessions count from cache as best-effort estimate."""
         try:
             svc_connections = 0
 
@@ -3060,22 +3077,27 @@ class MetricsCollector:
             # Ground truth: VPN tunnel count from psutil
             vpn_tunnels = MetricsCollector._count_vpn_tunnels()
 
-            # Use the higher of the two — psutil is authoritative
-            connected = max(svc_connections, vpn_tunnels)
-
-            global peak_clients
-            if connected > peak_clients:
-                peak_clients = connected
-
             # active_sessions: read from cached medium-cycle data if available
             # This is the number of sessions with is_active=True (may be > vpn_tunnels
             # because each physical client can have multiple service sessions).
             cached_sessions = data_cache.get('sessions', {}) if 'data_cache' in dir() else {}
-            active_sessions = cached_sessions.get('active', connected)
+            active_sessions = cached_sessions.get('active', 0)
 
             # unique_consumers: distinct consumer IDs from active sessions
-            cached_sessions2 = data_cache.get('sessions', {}) if 'data_cache' in dir() else {}
-            unique_consumers = cached_sessions2.get('unique_consumers', 0)
+            unique_consumers = cached_sessions.get('unique_consumers', 0)
+
+            if vpn_tunnels > 0:
+                # psutil can see VPN interfaces — authoritative path (bare metal / LXC)
+                connected = max(svc_connections, vpn_tunnels)
+            else:
+                # psutil sees no VPN interfaces — node likely runs in Docker.
+                # Use active_sessions from TequilAPI sessions cache as fallback.
+                # This is less precise (sessions lag behind reality) but better than 0.
+                connected = max(svc_connections, active_sessions)
+
+            global peak_clients
+            if connected > peak_clients:
+                peak_clients = connected
 
             return {
                 'connected': connected,
@@ -8402,7 +8424,13 @@ def get_system_health():
     """System health scan results"""
     with metrics_lock:
         data = copy.deepcopy(metrics_cache)
-    return jsonify(data.get('systemHealth', {'overall': 'unknown', 'subsystems': []})), 200
+    health = data.get('systemHealth', {'overall': 'unknown', 'subsystems': []})
+    # When the toolkit detects a Docker host (Docker daemon reachable), add a context note
+    # so users know kernel tuning applies to the host, not the Mysterium container.
+    if RUNTIME_ENV.get('type') == 'docker_host':
+        health['docker_note'] = ('Mysterium node runs in Docker. Kernel tuning, conntrack and '
+                                 'CPU governor results reflect the host system, not the container.')
+    return jsonify(health), 200
 
 
 @app.route('/system-health/fix', methods=['POST'])
@@ -8560,7 +8588,8 @@ def restart_node():
                             _invalidate_metric_cache()
                             return jsonify({'success': True, 'method': 'docker', 'actions': actions}), 200
         except FileNotFoundError:
-            pass  # Docker not installed
+            # Docker CLI not available — note it so the final error is informative
+            actions.append('docker_unavailable')
 
         # Strategy 4: docker-compose
         for compose_cmd in (['docker-compose', 'restart'], ['docker', 'compose', 'restart']):
@@ -8587,16 +8616,25 @@ def restart_node():
             except Exception:
                 pass
 
-        if actions:
+        if actions and 'docker_unavailable' not in actions:
             return jsonify({'success': True, 'method': 'tequilapi', 'actions': actions}), 200
+
+        docker_hint = ''
+        if 'docker_unavailable' in actions:
+            docker_hint = ('Docker node detected but docker CLI is not accessible.\n'
+                           'Fix: mount the Docker socket — add -v /var/run/docker.sock:/var/run/docker.sock '
+                           'when starting the toolkit container.\n'
+                           'Or restart manually: docker restart myst\n')
+        clean_actions = [a for a in actions if a != 'docker_unavailable']
 
         return jsonify({
             'success': False,
             'error': 'Could not restart — sudo permission required',
-            'actions': actions,
-            'hint': 'Fix: run "sudo visudo" and add: your_user ALL=(ALL) NOPASSWD: /bin/systemctl restart mysterium-node\n'
-                    'Or manually: sudo systemctl restart mysterium-node\n'
-                    'For Docker: docker restart myst | docker-compose restart'
+            'actions': clean_actions,
+            'hint': (docker_hint +
+                     'Fix: run "sudo visudo" and add: your_user ALL=(ALL) NOPASSWD: /bin/systemctl restart mysterium-node\n'
+                     'Or manually: sudo systemctl restart mysterium-node\n'
+                     'For Docker: docker restart myst | docker-compose restart')
         }), 500
 
     except Exception as e:

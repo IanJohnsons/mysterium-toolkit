@@ -1,6 +1,6 @@
 # Mysterium Node Toolkit
 
-![Version](https://img.shields.io/badge/version-1.2.4-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Version](https://img.shields.io/badge/version-1.2.5-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 
 A professional monitoring and management dashboard for [Mysterium Network](https://mysterium.network) VPN node operators. Runs fully local on your node machine — no cloud account, no third-party service, no data leaving your server.
 
@@ -900,18 +900,27 @@ Then: `ansible all -m shell -a "bash {{ toolkit_path }}/update.sh"`
 
 ### Mysterium Node in Docker — Reading Stats
 
-If your **Mysterium node** runs in Docker (not the toolkit), the toolkit can still read all stats as long as the container exposes the correct ports:
+If your **Mysterium node** runs in Docker (not the toolkit itself), the toolkit connects to it via TequilAPI. Use the official Mysterium Docker command:
 
 ```bash
-docker run --cap-add NET_ADMIN -d --name myst --restart=unless-stopped \
-    -p 4449:4449 \
-    -p 4050:4050 \
+docker run --cap-add NET_ADMIN -d -p 4449:4449 \
+    --name myst --restart unless-stopped \
     -v myst-data:/var/lib/mysterium-node \
     mysteriumnetwork/myst:latest \
     service --agreed-terms-and-conditions
 ```
 
-The toolkit then connects to `localhost:4449` (MystNodes UI) and `localhost:4050` (TequilAPI) as normal. No special configuration needed — the setup wizard auto-detects Docker containers named `myst` and reads the port automatically.
+TequilAPI is on **port 4449**. The `-p 4449:4449` flag exposes it to the host — this is required. There is no separate port 4050 in a standard Docker install.
+
+**Setup wizard:** run `python3 scripts/setup_wizard.py` (or re-run `setup.sh`). The wizard auto-detects running `myst` containers and reads the mapped port. When asked for the password, enter the password you set during the **Node UI onboarding** at `http://localhost:4449/ui` — this is not `mystberry`.
+
+**What the toolkit reads from Docker nodes via TequilAPI (full support):**
+- Earnings, sessions, session archive, node quality, services, settlement, MYST price
+
+**What is not available when the node runs in Docker (expected behaviour, not a bug):**
+- Live Connections counter and VPN Traffic card rely on network interface and process inspection on the host. When the node runs inside a container, these interfaces and the `myst` process are not visible from the host. The cards will show `0` or `N/A` — this is normal.
+- System Health subsystems (conntrack, CPU governor, kernel tuning) apply to the host, not the container. They still run against the host system.
+- Node restart via the dashboard requires the Docker socket to be accessible. If restart fails, run `docker restart myst` manually.
 
 ---
 

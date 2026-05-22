@@ -790,6 +790,30 @@ class ServiceWatchdog:
     MIN_UPTIME_WARN = 300
 
     @staticmethod
+    def _docker_myst_running():
+        """Check if myst is running in a Docker container. Returns (found, container_name)."""
+        try:
+            import subprocess as _sp
+            r = _sp.run(
+                ['docker', 'ps', '--format', '{{.Names}}\t{{.Image}}\t{{.Status}}'],
+                capture_output=True, timeout=5, text=True
+            )
+            if r.returncode != 0:
+                return False, None
+            for line in r.stdout.strip().split('\n'):
+                parts = line.split('\t')
+                if len(parts) < 2:
+                    continue
+                name, image = parts[0], parts[1]
+                if 'myst' in image.lower() or 'myst' in name.lower():
+                    status = parts[2] if len(parts) > 2 else ''
+                    if 'up' in status.lower():
+                        return True, name
+        except (FileNotFoundError, Exception):
+            pass
+        return False, None
+
+    @staticmethod
     def scan():
         result = {
             'name': 'service',
@@ -814,14 +838,30 @@ class ServiceWatchdog:
                 pass
 
         if not myst_procs:
-            result['status'] = 'critical'
-            result['checks'].append({
-                'name': 'Process',
-                'status': 'critical',
-                'detail': 'Not found',
-            })
-            result['recommendations'].append('sudo systemctl start mysterium-node')
-            return result
+            # Process not visible via psutil — check if it's running inside Docker
+            docker_up, docker_name = ServiceWatchdog._docker_myst_running()
+            if docker_up:
+                result['checks'].append({
+                    'name': 'Process',
+                    'status': 'ok',
+                    'detail': f'Running in Docker ({docker_name})',
+                })
+                result['checks'].append({
+                    'name': 'systemd',
+                    'status': 'ok',
+                    'detail': 'docker',
+                })
+                return result
+            else:
+                result['status'] = 'critical'
+                result['checks'].append({
+                    'name': 'Process',
+                    'status': 'critical',
+                    'detail': 'Not found',
+                })
+                result['recommendations'].append('sudo systemctl start mysterium-node')
+                result['recommendations'].append('Docker: docker start myst')
+                return result
 
         # Get system boot time to cross-check against process uptime.
         # If the system itself just booted, a short process uptime is expected — not a warning.
