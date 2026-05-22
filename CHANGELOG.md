@@ -5,7 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.2.5] - 2026-05-22
+## [1.2.6] - 2026-05-23
+### Fixed
+- **Auto-update timer broken on all installs:** the wrapper script `/usr/local/bin/mysterium-toolkit-update-check.sh` was written with `<< 'WRAPPER_EOF'` (single-quoted heredoc) which blocked variable expansion at write time. `$TOOLKIT_DIR` was left as a literal undefined variable — at runtime it resolved to an empty string, making `exec "/update.sh"` fail silently. The auto-update timer never triggered an actual update. Fixed by switching to an unquoted heredoc with proper escaping of runtime variables (`\$CURRENT`, `\$LATEST`) while expanding `$TOOLKIT_DIR` at write time to the hardcoded install path.
+- **Wrapper never repaired on existing installs:** the timer creation block was guarded by `if [ ! -f "$_TIMER_FILE" ]`, so a broken wrapper from an older install was never rewritten. Fixed by splitting wrapper rewrite (runs on every `update.sh` invocation) from timer/service creation (still first-time only). Existing installs with a broken wrapper will be fixed automatically on the first manual `./update.sh` run.
+- **Security: `is_local_request()` trusted entire RFC1918 on VPS installs:** on a shared datacenter network (Hetzner, OVH, Contabo) other servers on the same `10.x` or `172.x` subnet bypassed dashboard authentication entirely. Fixed: when `toolkit_mode = 'remote'` (set automatically by the wizard for non-localhost installs including all VPS and Type 3 slaves), only `127.0.0.1` and `::1` are treated as trusted. RFC1918 still trusted on `toolkit_mode = 'local'` (home/LAN installs) — no behaviour change for those users.
+
+---
+
+
 ### Fixed
 - **Docker compatibility — README:** corrected the Docker command in the "Mysterium Node in Docker" section. Removed the incorrect `-p 4050:4050` flag (no such port in standard Docker installs). Documented that TequilAPI is on port 4449, that the Node UI password must be entered during wizard setup, and clarified which features are unavailable when the node runs in a container (Live Connections, VPN Traffic, process-based checks).
 - **Docker compatibility — setup wizard:** Easy mode "node not found" hint now includes Docker-specific commands (`docker ps | grep myst`, `docker start myst`, port mapping reminder). Password prompt in Easy mode is now Docker-aware: when a `myst` container is detected the hint explicitly states the password was set during Node UI onboarding and is not `mystberry`. Advanced mode connection-failed hint corrected from port 4050 to 4449; added Docker port-mapping reminder.

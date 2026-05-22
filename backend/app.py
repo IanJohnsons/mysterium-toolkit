@@ -707,6 +707,12 @@ def is_local_request():
     (the proxy itself). We check X-Forwarded-For for the real client IP so that
     remote browsers accessing via the Vite proxy are correctly identified as non-local
     and require authentication.
+
+    Security: on remote/VPS installs (toolkit_mode = 'remote') RFC1918 addresses are
+    NOT treated as trusted. On datacenter networks multiple servers share the same
+    10.x or 172.x subnet — treating those as local would bypass auth for any neighbour
+    on the same internal network. Only 127.0.0.1 and ::1 are trusted in remote mode.
+    On local installs (toolkit_mode = 'local', default) RFC1918 is trusted as before.
     """
     # Real client IP from Vite proxy (set by vite.config.js configure hook)
     forwarded_for = request.headers.get('X-Forwarded-For', '').split(',')[0].strip()
@@ -716,6 +722,12 @@ def is_local_request():
     # If proxy forwarded a real remote IP, use that for the check
     check_addr = forwarded_for if forwarded_for else remote_addr
 
+    # Remote/VPS mode: only loopback is trusted — RFC1918 requires auth
+    _toolkit_mode = setup_config.get('toolkit_mode', 'local')
+    if _toolkit_mode == 'remote':
+        return check_addr in ('127.0.0.1', '::1', 'localhost')
+
+    # Local mode: full RFC1918 is trusted (home LAN, local network)
     def _is_local(addr):
         return (addr in ('127.0.0.1', '::1', 'localhost') or
                 addr.startswith('192.168.') or
