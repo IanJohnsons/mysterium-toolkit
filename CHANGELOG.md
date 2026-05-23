@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.2.8] - 2026-05-23
+### Fixed
+- **Sudoers: missing `ufw`, `iptables-nft`, `cpufreq scaling_governor` and `cpupower` on non-root installs:** on Type 1 (laptop/desktop) installs the sudoers NOPASSWD list was missing four commands used at runtime by the toolkit backend. `ufw` (firewall status polling every 2 minutes), `/usr/sbin/iptables-nft` (iptables backend detection), `/usr/bin/tee /sys/devices/system/cpu/*/cpufreq/scaling_governor` (CPU governor write), and `/usr/bin/cpupower` (frequency-set) all failed silently with "a password is required" in a non-interactive systemd context. Fixed in `setup.sh`, `bin/setup.sh`, and `update.sh` — the update.sh fix ensures all existing installs receive the corrected sudoers on their next update.
+
+---
+
 ## [1.2.7] - 2026-05-23
 ### Fixed
 - **Sudoers: missing `/usr/bin/systemctl` paths (Parrot OS / security-hardened distros):** sudoers only listed `/bin/systemctl` for all systemctl commands. On Parrot OS and other security-hardened Debian-based distros, `sudo` matches strictly on the resolved binary path. Since `/bin` is a symlink to `/usr/bin`, sudo resolves the real path to `/usr/bin/systemctl` and rejects the `/bin/systemctl` NOPASSWD rule — prompting for a password in a non-interactive context (systemd timer, auto-update) and causing the update to fail silently. Fixed by adding `/usr/bin/systemctl` variants for all existing `/bin/systemctl` entries in both `update.sh` and `bin/setup.sh` sudoers content.
@@ -13,7 +19,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-
+## [1.2.6] - 2026-05-22
 ### Fixed
 - **Auto-update timer broken on all installs:** the wrapper script `/usr/local/bin/mysterium-toolkit-update-check.sh` was written with `<< 'WRAPPER_EOF'` (single-quoted heredoc) which blocked variable expansion at write time. `$TOOLKIT_DIR` was left as a literal undefined variable — at runtime it resolved to an empty string, making `exec "/update.sh"` fail silently. The auto-update timer never triggered an actual update. Fixed by switching to an unquoted heredoc with proper escaping of runtime variables (`\$CURRENT`, `\$LATEST`) while expanding `$TOOLKIT_DIR` at write time to the hardcoded install path.
 - **Wrapper never repaired on existing installs:** the timer creation block was guarded by `if [ ! -f "$_TIMER_FILE" ]`, so a broken wrapper from an older install was never rewritten. Fixed by splitting wrapper rewrite (runs on every `update.sh` invocation) from timer/service creation (still first-time only). Existing installs with a broken wrapper will be fixed automatically on the first manual `./update.sh` run.
@@ -21,7 +27,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-
+## [1.2.5] - 2026-05-21
 ### Fixed
 - **Docker compatibility — README:** corrected the Docker command in the "Mysterium Node in Docker" section. Removed the incorrect `-p 4050:4050` flag (no such port in standard Docker installs). Documented that TequilAPI is on port 4449, that the Node UI password must be entered during wizard setup, and clarified which features are unavailable when the node runs in a container (Live Connections, VPN Traffic, process-based checks).
 - **Docker compatibility — setup wizard:** Easy mode "node not found" hint now includes Docker-specific commands (`docker ps | grep myst`, `docker start myst`, port mapping reminder). Password prompt in Easy mode is now Docker-aware: when a `myst` container is detected the hint explicitly states the password was set during Node UI onboarding and is not `mystberry`. Advanced mode connection-failed hint corrected from port 4050 to 4449; added Docker port-mapping reminder.
@@ -33,7 +39,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-
+## [1.2.4] - 2026-05-20
 ### Fixed
 - fail2ban jail edit: writing to `jail.local` was correct but `fail2ban-client reload` did not apply the new values to the running daemon for active jails. Added `_f2b_apply_live()` which calls `fail2ban-client set <jail> bantime/maxretry/findtime <val>` after every save — takes effect immediately without relying on reload. `jail.local` write + reload retained for persistence after restart.
 - Auto-update timer: changed frequency from daily to hourly; timer now runs a version-check wrapper that fetches the latest VERSION from GitHub and only executes `update.sh` when `current != latest`. Removes unnecessary updates and catches new versions within the hour.
@@ -204,108 +210,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [1.1.65] - 2026-05-18
-### Fixed
-- fail2ban jails: fixed exception cascade — jail list and settings fetch now have separate error handling so a settings error no longer wipes the entire jail list
-- Dashboard crash: fixed toFixed() on undefined values in earnings chart
-- Sudoers: added fail2ban-client and fail2ban config paths to NOPASSWD — fixes jail access on non-root installs (laptop)
-
----
-
-## [1.1.64] - 2026-05-17
-### Fixed
-- fail2ban jails: rewritten to use fail2ban-client as primary source — works on all distros (Debian, Ubuntu, RHEL, CentOS, Fedora, Arch). Gets live maxretry/bantime/findtime per jail via fail2ban-client get
-- Security page: UFW rules now have edit button (✎) — opens inline form to change action/port/protocol
-- Security page: loadUfw function restored for refresh after edit
-- No duplicate components, no orphan code
-
----
-
-## [1.1.63] - 2026-05-17
-### Fixed
-- SecurityPage: firewallData prop added to function signature
-- iptables: field names corrected (target/proto/src/dst/details)
-- fail2ban: ping uses sudo -n fallback for non-root installs
-- Fleet proxy: /firewall added to whitelist
-
----
-
-## [1.1.62] - 2026-05-17
-### Fixed
-- SecurityPage: firewallData prop added to function signature — fixes ReferenceError crash on open
-- iptables: field names corrected (target/proto/src/dst/details) — columns now show correctly
-- fail2ban: ping uses sudo -n fallback for non-root installs — fixes "stopped" on laptop
-
----
-
-## [1.1.61] - 2026-05-17
-### Fixed
-- Fleet proxy: added /firewall to whitelist — UFW rules now load correctly for fleet nodes
-- Security page: UFW rules loaded from firewallData prop instead of extra fetch
-- Security page: all jails editable — external jails get saved as override to mysterium-toolkit.conf
-- Firewall card: "+X more" banned IPs is now a toggle button to show/hide all IPs
-
----
-
-## [1.1.60] - 2026-05-17
-### Changed
-- Security page: complete rewrite — full fail2ban management (start/stop, jails list, edit/add/delete per jail, unban IPs, install button), UFW rules (add/delete)
-- Security page: jails loaded from config files regardless of fail2ban running state
-- Firewall card: fail2ban shows status + banned IPs only, all management via 🛡 Security → button
-- 🛡 Security → button scrolls to Security section automatically
-### Added
-- Backend: /firewall/fail2ban/start and /firewall/fail2ban/stop endpoints
-- Backend: /firewall/fail2ban/reload endpoint
-- Backend: jails endpoint returns running state and only fetches live ban data when running
-
----
-
-## [1.1.59] - 2026-05-17
-### Fixed
-- Root cause fix: removed 123 orphan lines (duplicate FirewallSection x2, UpdateWaiter x2, and remnants of old Fail2banManager) that were at module level — minifier combined them with component definitions causing useState to execute outside React render context → blank dashboard crash
-
----
-
-## [1.1.58] - 2026-05-17
-### Fixed
-- Fleet proxy whitelist: added all new security endpoints
-- Removed duplicate components causing dashboard crash
-- Fixed critical crash: React.useState replaced with named import useState throughout SecurityPage and FirewallSection — React default export was null at bundle initialization causing blank dashboard
-
----
-
-## [1.1.57] - 2026-05-17
-### Fixed
-- Removed duplicate FirewallSection and UpdateWaiter components that caused dashboard to crash after update
-- Fleet proxy whitelist: added all new security endpoints (fail2ban/jails, fail2ban/unban, fail2ban/reload, fail2ban/install, ufw/add, ufw/delete)
-
----
-
-## [1.1.56] - 2026-05-17
-### Fixed
-- Firewall card: fail2ban shows status only (running/stopped + counts) — no jail details. "🛡 Manage →" links to Security page.
-
----
-
-## [1.1.55] - 2026-05-17
-### Added
-- Security page: Install fail2ban button when not installed — no setup.sh needed
-- Security page: active bans + unban buttons visible per jail
-- Backend: /system/fail2ban/install endpoint
-- Backend: /firewall/fail2ban/jails now includes active ban count and banned IPs
-### Fixed
-- Fail2banManager modal component fully removed — Security page is now the only fail2ban management interface
-
----
-
-## [1.1.54] - 2026-05-17
-### Fixed
-- Security page: removed incorrect jail restriction message
-- Security page: UFW rules now fetched by SecurityPage itself — no longer depends on firewall card being open first
-- Security page: jail delete button directly visible per jail (✕), no longer hidden in edit mode
-
----
-
 ## [1.1.53] - 2026-05-17
 ### Fixed
 - FirewallSection badge: replaced dynamic Tailwind classes with static conditionals — dynamic classes are not included in production builds
@@ -327,230 +231,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Firewall card: 3 collapsed sections (iptables ▶, UFW ▶, fail2ban ▶) — nothing open by default
 - fail2ban section: status + jail list + "Manage fail2ban →" button
 - fail2ban management opens as a panel in the same page using existing activePanel system, not a modal
-
----
-
-## [1.1.65] - 2026-05-18
-### Fixed
-- fail2ban jails: fixed exception cascade — jail list and settings fetch now have separate error handling so a settings error no longer wipes the entire jail list
-- Dashboard crash: fixed toFixed() on undefined values in earnings chart
-- Sudoers: added fail2ban-client and fail2ban config paths to NOPASSWD — fixes jail access on non-root installs (laptop)
-
----
-
-## [1.1.64] - 2026-05-17
-### Fixed
-- fail2ban jails: rewritten to use fail2ban-client as primary source — works on all distros (Debian, Ubuntu, RHEL, CentOS, Fedora, Arch). Gets live maxretry/bantime/findtime per jail via fail2ban-client get
-- Security page: UFW rules now have edit button (✎) — opens inline form to change action/port/protocol
-- Security page: loadUfw function restored for refresh after edit
-- No duplicate components, no orphan code
-
----
-
-## [1.1.63] - 2026-05-17
-### Fixed
-- SecurityPage: firewallData prop added to function signature
-- iptables: field names corrected (target/proto/src/dst/details)
-- fail2ban: ping uses sudo -n fallback for non-root installs
-- Fleet proxy: /firewall added to whitelist
-
----
-
-## [1.1.62] - 2026-05-17
-### Fixed
-- SecurityPage: firewallData prop added to function signature — fixes ReferenceError crash on open
-- iptables: field names corrected (target/proto/src/dst/details) — columns now show correctly
-- fail2ban: ping uses sudo -n fallback for non-root installs — fixes "stopped" on laptop
-
----
-
-## [1.1.61] - 2026-05-17
-### Fixed
-- Fleet proxy: added /firewall to whitelist — UFW rules now load correctly for fleet nodes
-- Security page: UFW rules loaded from firewallData prop instead of extra fetch
-- Security page: all jails editable — external jails get saved as override to mysterium-toolkit.conf
-- Firewall card: "+X more" banned IPs is now a toggle button to show/hide all IPs
-
----
-
-## [1.1.60] - 2026-05-17
-### Changed
-- Security page: complete rewrite — full fail2ban management (start/stop, jails list, edit/add/delete per jail, unban IPs, install button), UFW rules (add/delete)
-- Security page: jails loaded from config files regardless of fail2ban running state
-- Firewall card: fail2ban shows status + banned IPs only, all management via 🛡 Security → button
-- 🛡 Security → button scrolls to Security section automatically
-### Added
-- Backend: /firewall/fail2ban/start and /firewall/fail2ban/stop endpoints
-- Backend: /firewall/fail2ban/reload endpoint
-- Backend: jails endpoint returns running state and only fetches live ban data when running
-
----
-
-## [1.1.59] - 2026-05-17
-### Fixed
-- Root cause fix: removed 123 orphan lines (duplicate FirewallSection x2, UpdateWaiter x2, and remnants of old Fail2banManager) that were at module level — minifier combined them with component definitions causing useState to execute outside React render context → blank dashboard crash
-
----
-
-## [1.1.58] - 2026-05-17
-### Fixed
-- Fleet proxy whitelist: added all new security endpoints
-- Removed duplicate components causing dashboard crash
-- Fixed critical crash: React.useState replaced with named import useState throughout SecurityPage and FirewallSection — React default export was null at bundle initialization causing blank dashboard
-
----
-
-## [1.1.57] - 2026-05-17
-### Fixed
-- Removed duplicate FirewallSection and UpdateWaiter components that caused dashboard to crash after update
-- Fleet proxy whitelist: added all new security endpoints (fail2ban/jails, fail2ban/unban, fail2ban/reload, fail2ban/install, ufw/add, ufw/delete)
-
----
-
-## [1.1.56] - 2026-05-17
-### Fixed
-- Firewall card: fail2ban shows status only (running/stopped + counts) — no jail details. "🛡 Manage →" links to Security page.
-
----
-
-## [1.1.55] - 2026-05-17
-### Added
-- Security page: Install fail2ban button when not installed — no setup.sh needed
-- Security page: active bans + unban buttons visible per jail
-- Backend: /system/fail2ban/install endpoint
-- Backend: /firewall/fail2ban/jails now includes active ban count and banned IPs
-### Fixed
-- Fail2banManager modal component fully removed — Security page is now the only fail2ban management interface
-
----
-
-## [1.1.54] - 2026-05-17
-### Fixed
-- Security page: removed incorrect text about toolkit.conf restriction — all official fail2ban jails are shown and editable
-
----
-
-## [1.1.65] - 2026-05-18
-### Fixed
-- fail2ban jails: fixed exception cascade — jail list and settings fetch now have separate error handling so a settings error no longer wipes the entire jail list
-- Dashboard crash: fixed toFixed() on undefined values in earnings chart
-- Sudoers: added fail2ban-client and fail2ban config paths to NOPASSWD — fixes jail access on non-root installs (laptop)
-
----
-
-## [1.1.64] - 2026-05-17
-### Fixed
-- fail2ban jails: rewritten to use fail2ban-client as primary source — works on all distros (Debian, Ubuntu, RHEL, CentOS, Fedora, Arch). Gets live maxretry/bantime/findtime per jail via fail2ban-client get
-- Security page: UFW rules now have edit button (✎) — opens inline form to change action/port/protocol
-- Security page: loadUfw function restored for refresh after edit
-- No duplicate components, no orphan code
-
----
-
-## [1.1.63] - 2026-05-17
-### Fixed
-- SecurityPage: firewallData prop added to function signature
-- iptables: field names corrected (target/proto/src/dst/details)
-- fail2ban: ping uses sudo -n fallback for non-root installs
-- Fleet proxy: /firewall added to whitelist
-
----
-
-## [1.1.62] - 2026-05-17
-### Fixed
-- SecurityPage: firewallData prop added to function signature — fixes ReferenceError crash on open
-- iptables: field names corrected (target/proto/src/dst/details) — columns now show correctly
-- fail2ban: ping uses sudo -n fallback for non-root installs — fixes "stopped" on laptop
-
----
-
-## [1.1.61] - 2026-05-17
-### Fixed
-- Fleet proxy: added /firewall to whitelist — UFW rules now load correctly for fleet nodes
-- Security page: UFW rules loaded from firewallData prop instead of extra fetch
-- Security page: all jails editable — external jails get saved as override to mysterium-toolkit.conf
-- Firewall card: "+X more" banned IPs is now a toggle button to show/hide all IPs
-
----
-
-## [1.1.60] - 2026-05-17
-### Changed
-- Security page: complete rewrite — full fail2ban management (start/stop, jails list, edit/add/delete per jail, unban IPs, install button), UFW rules (add/delete)
-- Security page: jails loaded from config files regardless of fail2ban running state
-- Firewall card: fail2ban shows status + banned IPs only, all management via 🛡 Security → button
-- 🛡 Security → button scrolls to Security section automatically
-### Added
-- Backend: /firewall/fail2ban/start and /firewall/fail2ban/stop endpoints
-- Backend: /firewall/fail2ban/reload endpoint
-- Backend: jails endpoint returns running state and only fetches live ban data when running
-
----
-
-## [1.1.59] - 2026-05-17
-### Fixed
-- Root cause fix: removed 123 orphan lines (duplicate FirewallSection x2, UpdateWaiter x2, and remnants of old Fail2banManager) that were at module level — minifier combined them with component definitions causing useState to execute outside React render context → blank dashboard crash
-
----
-
-## [1.1.58] - 2026-05-17
-### Fixed
-- Fleet proxy whitelist: added all new security endpoints
-- Removed duplicate components causing dashboard crash
-- Fixed critical crash: React.useState replaced with named import useState throughout SecurityPage and FirewallSection — React default export was null at bundle initialization causing blank dashboard
-
----
-
-## [1.1.57] - 2026-05-17
-### Fixed
-- Removed duplicate FirewallSection and UpdateWaiter components that caused dashboard to crash after update
-- Fleet proxy whitelist: added all new security endpoints (fail2ban/jails, fail2ban/unban, fail2ban/reload, fail2ban/install, ufw/add, ufw/delete)
-
----
-
-## [1.1.56] - 2026-05-17
-### Fixed
-- Firewall card: fail2ban shows status only (running/stopped + counts) — no jail details. "🛡 Manage →" links to Security page.
-
----
-
-## [1.1.55] - 2026-05-17
-### Added
-- Security page: Install fail2ban button when not installed — no setup.sh needed
-- Security page: active bans + unban buttons visible per jail
-- Backend: /system/fail2ban/install endpoint
-- Backend: /firewall/fail2ban/jails now includes active ban count and banned IPs
-### Fixed
-- Fail2banManager modal component fully removed — Security page is now the only fail2ban management interface
-
----
-
-## [1.1.54] - 2026-05-17
-### Fixed
-- Security page: removed incorrect jail restriction message
-- Security page: UFW rules now fetched by SecurityPage itself — no longer depends on firewall card being open first
-- Security page: jail delete button directly visible per jail (✕), no longer hidden in edit mode
-
----
-
-## [1.1.53] - 2026-05-17
-### Fixed
-- FirewallSection badge: replaced dynamic Tailwind classes with static conditionals — dynamic classes are not included in production builds
-
----
-
-## [1.1.52] - 2026-05-17
-### Added
-- Security button in bottom nav bar — opens full Security Settings page below (same pattern as Logs/Help)
-- Security page: fail2ban jail management (view all jails, edit toolkit jails, add custom jail) + UFW rule management (add/delete rules)
-### Changed
-- Firewall card fail2ban section: monitoring only (status, jail counts, active bans)
-- fail2ban management removed from firewall card inline — moved to Security page
-
----
-
-## [1.1.51] - 2026-05-17
-### Fixed
-- Firewall card: fail2ban section now shows only active bans + unban buttons — jail management moved to ⚙ Manage modal as agreed
 
 ---
 
@@ -777,7 +457,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-
+## [1.1.19] - 2026-05-10
 ### Fixed
 - `update.sh` auto-detects root-owned `.git/objects` and fixes ownership before `git pull` — protects users who previously ran `sudo ./update.sh`
 ### Added
@@ -785,7 +465,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-
+## [1.1.18] - 2026-05-10
 ### Fixed
 - `update.sh` no longer requires outer sudo — runs as current user, uses `$SUDO` internally for privileged commands. `git pull` now runs as the real user with their SSH key (fixes SSH permission denied on laptop/desktop installs)
 - Fleet update button now calls `./update.sh` for all install types — includes frontend rebuild, pip deps, and service restart (was: git pull + systemctl stop/start only, no frontend rebuild)

@@ -1490,10 +1490,13 @@ $_REAL_USER ALL=(ALL) NOPASSWD: \
   /sbin/mkswap *, /usr/sbin/mkswap *, \
   /sbin/swapon *, /usr/bin/swapon *, \
   /bin/rm /swapfile, /usr/bin/rm /swapfile, \
+  /usr/sbin/ufw, \
   /usr/sbin/iptables, /sbin/iptables, \
   /usr/sbin/iptables-legacy, /sbin/iptables-legacy, \
+  /usr/sbin/iptables-nft, \
   /usr/sbin/ip6tables, /sbin/ip6tables, \
   /usr/sbin/nft, /sbin/nft, \
+  /usr/bin/tee /sys/devices/system/cpu/*/cpufreq/scaling_governor, \
   /usr/bin/fail2ban-client, /usr/local/bin/fail2ban-client, /bin/fail2ban-client, \
   /usr/bin/tee /etc/fail2ban/jail.local, \
   /usr/bin/tee /etc/fail2ban/filter.d/*, \
