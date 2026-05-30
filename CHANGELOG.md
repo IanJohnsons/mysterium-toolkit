@@ -4,6 +4,12 @@ All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
+## [1.2.10] - 2026-05-30
+### Fixed
+- **Globe icon missing in History and Consumers detail views:** the `🌐` icon for wireguard (Public) sessions without a country was only applied to 4 of 8 locations in v1.2.9. Fixed the remaining 4 placements: History tab mobile card, History tab desktop table, Consumers detail mobile view, Consumers detail desktop view. All session and consumer views now consistently show `🌐` for Public sessions instead of `—`.
+
+---
+
 ## [1.2.9] - 2026-05-30
 ### Fixed
 - **Probe detection falsely flagging wireguard (Public) consumers as network probes:** the `is_probe` heuristic (≥5 sessions, zero earnings, avg data <2 MB/session) incorrectly matched real Public consumers whose Hermes promises had not yet settled. Wireguard consumers always have `earnings=0` in the session DB until settlement completes, and `consumer_country` is always empty by design in the Mysterium node source (`SessionDTO` — the field is never populated for wireguard sessions). Fix: consumers with wireguard sessions totalling >50 MB are now explicitly excluded from probe detection regardless of earnings status.
