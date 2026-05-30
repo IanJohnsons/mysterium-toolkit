@@ -1532,7 +1532,7 @@ class PortReachability:
     """Check if Mysterium's required ports are reachable.
 
     Mysterium needs specific ports open for VPN consumers to connect.
-    Default ports: 4449 (TequilAPI), plus the service ports shown in
+    Default ports: 4050 (TequilAPI), plus the service ports shown in
     the node's /services endpoint.
 
     SAFETY:
@@ -1540,9 +1540,9 @@ class PortReachability:
     - Fix only restarts node (which re-registers ports)
     """
 
-    TEQUILAPI_PORT = 4449
+    TEQUILAPI_PORT = 4050  # TequilAPI port (4449 is the NodeUI, not the API)
     # Common Mysterium service port ranges
-    CHECK_PORTS = [4449]
+    CHECK_PORTS = [4050]
 
     @staticmethod
     def _check_port_listening(port):

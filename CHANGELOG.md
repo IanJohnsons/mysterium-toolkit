@@ -4,6 +4,14 @@ All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
+## [1.2.13] - 2026-05-30
+### Fixed
+- **Port 4449 vs 4050 in PortReachability health check:** `system_health.py` was checking port 4449 (the NodeUI/MystNodes web interface) instead of port 4050 (TequilAPI — the actual API the toolkit communicates with). This caused false positives where the health check reported the API as reachable when in fact TequilAPI was down but the UI was still running. Fixed `TEQUILAPI_PORT = 4050` and updated the docstring.
+- **Removed three deprecated delete endpoints:** `/earnings/snapshots/delete`, `/traffic/delete`, and `/sessions/delete` were leftover from before DataManager existed. They deleted data without syncing in-memory caches, without node_id filtering, and only covered 3 of 7 data types. All data management now goes through `/data/delete` (DataManager) which handles all 7 types, filters by node_id, and syncs EarningsDeltaTracker + SessionStore + tier caches automatically.
+- **Incorrect success message after data delete:** DataManager showed "Restart the backend to clear in-memory caches" after a delete — but `/data/delete` already syncs all in-memory state immediately. Message corrected to reflect actual behavior.
+
+---
+
 ## [1.2.12] - 2026-05-30
 ### Fixed
 - **Manual and timer-based updates require password on Parrot OS (and any distro with `Defaults use_pty`):** Parrot OS enforces `Defaults use_pty` in `/etc/sudoers`, which requires sudo to allocate a pseudo-terminal even for NOPASSWD commands. When `update.sh` writes the sudoers file via a heredoc pipe (`printf | sudo tee`) or when the systemd auto-update timer runs without a TTY, sudo cannot allocate a PTY and falls back to prompting for a password. Fixed by adding `Defaults:$_REAL_USER !use_pty` as the first line of the generated `/etc/sudoers.d/mysterium-toolkit` file, overriding the global setting for the toolkit user only. Applied to `update.sh`, `setup.sh`, and `bin/setup.sh`.

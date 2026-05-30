@@ -271,8 +271,7 @@ const DataManagerInner = ({ nodeId, isFleetMode = false, authHeaders = {} }) => 
       {/* Delete done notice */}
       {deleteDone && (
         <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-lg text-xs text-emerald-400">
-          ✓ Data deleted. <span className="text-slate-400">Restart the backend (menu option 5 → 1) to clear in-memory caches and update all charts.</span>
-          <div className="text-slate-600 mt-1 text-[10px]">Session analytics reflects what the Mysterium node has in memory — unaffected by DB deletes until node restarts.</div>
+          ✓ Data deleted successfully. Charts and analytics will update on the next refresh cycle.
         </div>
       )}
 

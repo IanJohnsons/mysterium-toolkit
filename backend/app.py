@@ -7046,72 +7046,6 @@ def get_history():
     return jsonify({'history': history}), 200
 
 
-@app.route('/earnings/snapshots/delete', methods=['POST'])
-@require_auth
-def delete_earnings_snapshots():
-    """Delete earnings snapshots.
-
-    Body options:
-      {"keep_last_days": N}                          — keep last N days, delete everything older
-      {"period": "all"}                              — delete everything
-      {"period": "before", "before_date": "YYYY-MM-DD"} — delete before specific date
-    """
-    body = request.get_json(silent=True) or {}
-
-    EarningsDB.init()
-    try:
-        # Primary: keep_last_days — delete everything older than N days from now
-        keep_last_days = body.get('keep_last_days')
-        if keep_last_days is not None:
-            try:
-                keep_last_days = int(keep_last_days)
-            except (ValueError, TypeError):
-                return jsonify({'error': 'keep_last_days must be an integer'}), 400
-            cutoff = (datetime.now(timezone.utc) - timedelta(days=keep_last_days)).isoformat()
-            conn = EarningsDB._conn()
-            cur = conn.execute("DELETE FROM earnings_snapshots WHERE time < ?", (cutoff,))
-            deleted = cur.rowcount
-            remaining = conn.execute("SELECT COUNT(*) FROM earnings_snapshots").fetchone()[0]
-            conn.commit()
-            conn.close()
-            EarningsDeltaTracker._loaded = False
-            logger.info(f"earnings/snapshots/delete: keep_last={keep_last_days}d deleted={deleted} remaining={remaining}")
-            return jsonify({
-                'deleted': deleted, 'remaining': remaining,
-                'message': f'Deleted {deleted} snapshots older than {keep_last_days} days. {remaining} remain.',
-            }), 200
-
-        period = body.get('period', '')
-        if not period:
-            return jsonify({'error': 'keep_last_days or period required'}), 400
-        if period not in ('all', 'before'):
-            return jsonify({'error': 'Use keep_last_days, period=all, or period=before with before_date'}), 400
-        if period == 'before' and not body.get('before_date', ''):
-            return jsonify({'error': 'before_date required for period=before'}), 400
-
-        conn = EarningsDB._conn()
-        if period == 'all':
-            cur = conn.execute("DELETE FROM earnings_snapshots")
-            deleted = cur.rowcount
-        else:
-            cur = conn.execute("DELETE FROM earnings_snapshots WHERE time < ?", (body['before_date'],))
-            deleted = cur.rowcount
-
-        remaining = conn.execute("SELECT COUNT(*) FROM earnings_snapshots").fetchone()[0]
-        conn.commit()
-        conn.close()
-        EarningsDeltaTracker._loaded = False
-        logger.info(f"earnings/snapshots/delete: period={period} deleted={deleted} remaining={remaining}")
-        return jsonify({
-            'deleted': deleted, 'remaining': remaining, 'period': period,
-            'message': f'Deleted {deleted} snapshots. {remaining} remain.',
-        }), 200
-
-    except Exception as e:
-        logger.error(f'earnings/snapshots/delete error: {e}')
-        return jsonify({'error': str(e)}), 500
-
-
 @app.route('/earnings/snapshots/info', methods=['GET'])
 @require_auth
 def earnings_snapshots_info():
@@ -7284,46 +7218,6 @@ def get_earnings_chart():
     except Exception as e:
         logger.warning(f'earnings/chart error: {e}')
         return jsonify({'daily': [], 'snapshots': [], 'days': 0, 'error': str(e)}), 200
-
-
-@app.route('/traffic/delete', methods=['POST'])
-@require_auth
-def delete_traffic_history():
-    """Delete traffic history rows.
-
-    Body options:
-      {"keep_last_days": N}   — keep last N days, delete everything older
-      {"period": "all"}       — delete everything
-    """
-    body = request.get_json(silent=True) or {}
-    TrafficDB.init()
-    try:
-        keep_last_days = body.get('keep_last_days')
-        if keep_last_days is not None:
-            keep_last_days = int(keep_last_days)
-            from datetime import date as _date
-            cutoff = (_date.today() - timedelta(days=keep_last_days)).isoformat()
-            conn = TrafficDB._conn()
-            cur = conn.execute("DELETE FROM daily_traffic WHERE date < ?", (cutoff,))
-            deleted = cur.rowcount
-            remaining = conn.execute("SELECT COUNT(*) FROM daily_traffic").fetchone()[0]
-            conn.commit(); conn.close()
-            logger.info(f"traffic/delete: keep_last={keep_last_days}d deleted={deleted} remaining={remaining}")
-            return jsonify({'deleted': deleted, 'remaining': remaining,
-                'message': f'Deleted {deleted} traffic days older than {keep_last_days} days. {remaining} remain.'}), 200
-
-        if body.get('period') == 'all':
-            conn = TrafficDB._conn()
-            cur = conn.execute("DELETE FROM daily_traffic")
-            deleted = cur.rowcount
-            conn.commit(); conn.close()
-            logger.info(f"traffic/delete: all deleted={deleted}")
-            return jsonify({'deleted': deleted, 'remaining': 0,
-                'message': f'Deleted all {deleted} traffic history rows.'}), 200
-
-        return jsonify({'error': 'keep_last_days or period=all required'}), 400
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/traffic/info', methods=['GET'])
@@ -7566,45 +7460,6 @@ def get_session_db_stats():
         return jsonify(stats), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 200
-
-
-@app.route('/sessions/delete', methods=['POST'])
-@require_auth
-def delete_sessions():
-    """Delete session archive rows.
-
-    Body options:
-      {"keep_last_days": N}   — keep sessions started in last N days
-      {"period": "all"}       — delete everything
-    """
-    body = request.get_json(silent=True) or {}
-    SessionDB.init()
-    try:
-        keep_last_days = body.get('keep_last_days')
-        if keep_last_days is not None:
-            keep_last_days = int(keep_last_days)
-            cutoff = (datetime.now(timezone.utc) - timedelta(days=keep_last_days)).isoformat()
-            conn = SessionDB._conn()
-            cur = conn.execute("DELETE FROM sessions WHERE started_at < ? AND started_at != ''", (cutoff,))
-            deleted = cur.rowcount
-            remaining = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
-            conn.commit(); conn.close()
-            logger.info(f"sessions/delete: keep_last={keep_last_days}d deleted={deleted} remaining={remaining}")
-            return jsonify({'deleted': deleted, 'remaining': remaining,
-                'message': f'Deleted {deleted} sessions older than {keep_last_days} days. {remaining} remain.'}), 200
-
-        if body.get('period') == 'all':
-            conn = SessionDB._conn()
-            cur = conn.execute("DELETE FROM sessions")
-            deleted = cur.rowcount
-            conn.commit(); conn.close()
-            logger.info(f"sessions/delete: all deleted={deleted}")
-            return jsonify({'deleted': deleted, 'remaining': 0,
-                'message': f'Deleted all {deleted} sessions from archive.'}), 200
-
-        return jsonify({'error': 'keep_last_days or period=all required'}), 400
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
 
 
 def _update_node_active_services(node_url, headers, service_type, enable):
