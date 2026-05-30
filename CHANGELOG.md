@@ -4,6 +4,14 @@ All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
+## [1.2.9] - 2026-05-30
+### Fixed
+- **Probe detection falsely flagging wireguard (Public) consumers as network probes:** the `is_probe` heuristic (≥5 sessions, zero earnings, avg data <2 MB/session) incorrectly matched real Public consumers whose Hermes promises had not yet settled. Wireguard consumers always have `earnings=0` in the session DB until settlement completes, and `consumer_country` is always empty by design in the Mysterium node source (`SessionDTO` — the field is never populated for wireguard sessions). Fix: consumers with wireguard sessions totalling >50 MB are now explicitly excluded from probe detection regardless of earnings status.
+- **UI: wireguard consumers shown as `—` in country column:** replaced the empty dash with a `🌐` globe icon (tooltip: "Public consumer — location not shared by design") in the Connections, History, and Consumers views. Probes retain the `🔧` icon. Consumers with a known country still show the flag.
+- **Code comment: `noop` service incorrectly described:** `noop` uses `access_policies: []` (public, not mysterium-restricted). Comment corrected in `backend/app.py`.
+
+---
+
 
 ## [1.2.8] - 2026-05-23
 ### Fixed

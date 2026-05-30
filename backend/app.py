@@ -2200,8 +2200,8 @@ class MetricsCollector:
             return 0.0
 
     # Service types that are internal/infrastructure — excluded from analytics
-    # monitoring = Mysterium network probes (0 MYST, infrastructure quality checks)
-    # noop       = manual test service, no real consumer traffic
+    # monitoring = Mysterium network probes (0 MYST, infrastructure quality checks, access_policies=[mysterium])
+    # noop       = test/registration service (0 MYST, access_policies=[] — public but no real tunnel traffic)
     # NOTE: wireguard = the "Public" service (NodeUI maps Public → wireguard type).
     #       Wireguard sessions ARE real consumer sessions with real MYST earnings.
     #       They must NOT be excluded from analytics.
@@ -2873,11 +2873,27 @@ class MetricsCollector:
             # Detect Mysterium network probes — infrastructure quality bots that test
             # node reachability. They never pay and make many short low-traffic sessions.
             # Criteria: ≥5 sessions, zero earnings, avg data < 2 MB/session.
+            #
+            # IMPORTANT exclusions from probe detection:
+            # - wireguard (Public) consumers: consumer_country is always empty by design
+            #   (Mysterium node never populates it for wireguard sessions — see SessionDTO).
+            #   Wireguard consumers with significant data (>50 MB total) are real paying
+            #   consumers even when earnings show 0 (Hermes promises settle after session).
+            # - noop: access_policies=[], no real tunnel traffic — correctly never meets
+            #   the session threshold for probe detection.
             probe_ids = set()
             for c in top_consumers:
                 avg_mb = c['total_data_mb'] / c['sessions'] if c['sessions'] > 0 else 0
+                service_types = set(c.get('service_types', []))
+                # Never mark as probe if consumer has wireguard sessions with meaningful data
+                # (wireguard earnings are always 0 until Hermes settlement completes)
+                has_wireguard_traffic = (
+                    'wireguard' in service_types
+                    and c['total_data_mb'] > 50.0
+                )
                 c['is_probe'] = (
-                    c['sessions'] >= 5
+                    not has_wireguard_traffic
+                    and c['sessions'] >= 5
                     and c['total_earnings'] == 0
                     and avg_mb < 2.0
                 )
