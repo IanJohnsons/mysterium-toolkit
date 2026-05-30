@@ -4,6 +4,12 @@ All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
+## [1.2.12] - 2026-05-30
+### Fixed
+- **Manual and timer-based updates require password on Parrot OS (and any distro with `Defaults use_pty`):** Parrot OS enforces `Defaults use_pty` in `/etc/sudoers`, which requires sudo to allocate a pseudo-terminal even for NOPASSWD commands. When `update.sh` writes the sudoers file via a heredoc pipe (`printf | sudo tee`) or when the systemd auto-update timer runs without a TTY, sudo cannot allocate a PTY and falls back to prompting for a password. Fixed by adding `Defaults:$_REAL_USER !use_pty` as the first line of the generated `/etc/sudoers.d/mysterium-toolkit` file, overriding the global setting for the toolkit user only. Applied to `update.sh`, `setup.sh`, and `bin/setup.sh`.
+
+---
+
 ## [1.2.11] - 2026-05-30
 ### Fixed
 - **Auto-update timer not triggering on existing installs (laptop):** the timer service file was only written when it did not yet exist. If the toolkit was installed before the timer feature was added, the service file contained a stale `User`, `WorkingDirectory`, or `ExecStart` path and the timer fired but silently did nothing. Fixed: `update.sh` now always rewrites both the timer and service files on every run, ensuring the correct user and path are always current. The timer is only restarted if it was not already active.
