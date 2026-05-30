@@ -271,20 +271,24 @@ WRAPPER_EOF
     $SUDO chmod +x "$_WRAPPER"
 fi
 
-# ── Auto-update timer — create if missing ─────────────────────────────────
+# ── Auto-update timer — always rewrite service file so User/path stay correct ──
 _TIMER_FILE="/etc/systemd/system/mysterium-toolkit-update.timer"
 _TIMER_SVC="/etc/systemd/system/mysterium-toolkit-update.service"
-if [ ! -f "$_TIMER_FILE" ] && command -v systemctl &>/dev/null; then
+if command -v systemctl &>/dev/null; then
     _REAL_USER="${SUDO_USER:-$USER}"
+    # Always rewrite the timer file
     printf '[Unit]\nDescription=Mysterium Toolkit auto-update\n\n[Timer]\nOnCalendar=hourly\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n' \
         | $SUDO tee "$_TIMER_FILE" > /dev/null
+    # Always rewrite the service file — ensures User, WorkingDirectory and ExecStart are current
     printf '[Unit]\nDescription=Mysterium Toolkit auto-update\n\n[Service]\nType=oneshot\nUser=%s\nWorkingDirectory=%s\nExecStart=%s\n' \
         "$_REAL_USER" "$TOOLKIT_DIR" "$_WRAPPER" \
         | $SUDO tee "$_TIMER_SVC" > /dev/null
     $SUDO systemctl daemon-reload 2>/dev/null || true
     $SUDO systemctl enable mysterium-toolkit-update.timer 2>/dev/null || true
-    $SUDO systemctl start mysterium-toolkit-update.timer 2>/dev/null || true
-    echo -e "  ${GREEN}✓ Auto-update timer created${NC}"
+    # Start only if not already active
+    systemctl is-active --quiet mysterium-toolkit-update.timer 2>/dev/null \
+        || $SUDO systemctl start mysterium-toolkit-update.timer 2>/dev/null || true
+    echo -e "  ${GREEN}✓ Auto-update timer refreshed${NC}"
 fi
 
 # ── Restart backend ───────────────────────────────────────────────────────

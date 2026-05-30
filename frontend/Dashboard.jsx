@@ -386,7 +386,7 @@ const ConsumerCard = ({ c }) => (
       </span>
     </div>
     <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-400">
-      <span>{c.is_probe ? '🔧' : (countryFlag(c.consumer_country) || ((c.service_types||[]).includes('wireguard') ? <span title="Public consumer — location not shared by design">🌐</span> : '—'))}</span>
+      <span>{c.is_probe ? '🔧' : (countryFlag(c.consumer_country) || '—')}</span>
       {(c.service_types || []).map(st => <span key={st} className="text-slate-300">{fmtType(st)}</span>)}
       <span>{c.sessions}{c.active_sessions > 0 ? ` (${c.active_sessions} live)` : ''}</span>
       <span>{formatDataSize(c.total_data_mb)}</span>
@@ -398,7 +398,7 @@ const ConsumerCard = ({ c }) => (
 const ConsumerRow = ({ c }) => (
   <div className={`grid grid-cols-12 gap-2 text-xs px-3 py-2 rounded border transition ${c.active_sessions > 0 ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-slate-900/30 border-slate-700/30'}`}>
     <div className="col-span-3 min-w-0"><CopyableId id={c.consumer_id} /></div>
-    <div className="col-span-1 text-sm">{c.is_probe ? '🔧' : (countryFlag(c.consumer_country) || ((c.service_types||[]).includes('wireguard') ? <span title="Public consumer — location not shared by design">🌐</span> : '—'))}</div>
+    <div className="col-span-1 text-sm">{c.is_probe ? '🔧' : (countryFlag(c.consumer_country) || '—')}</div>
     <div className="col-span-2 text-slate-300 text-xs truncate">{(c.service_types || []).map(t => fmtType(t)).join(', ') || '—'}</div>
     <div className="col-span-1 text-slate-300">{c.sessions}{c.active_sessions > 0 ? ` (${c.active_sessions} live)` : ''}</div>
     <div className="col-span-2 text-slate-300">{formatDataSize(c.total_data_mb)}</div>
@@ -2673,7 +2673,7 @@ const MysteriumDashboard = () => {
                                 </span>
                               </div>
                               <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-400">
-                                <span>{s.is_probe ? <span title="Mysterium network probe">🔧</span> : (countryFlag(s.consumer_country) || (s.service_type === 'wireguard' ? <span title="Public consumer — location not shared by design">🌐</span> : '—'))}</span>
+                                <span>{s.is_probe ? <span title="Mysterium network probe">🔧</span> : (countryFlag(s.consumer_country) || '—')}</span>
                                 <span className="text-slate-300">{fmtType(s.service_type) || '—'}</span>
                                 <span>{s.duration}</span>
                                 <span>↑{s.bytes_pending ? <span className="text-slate-600 italic">—</span> : formatDataSize(s.data_out)}</span>
@@ -2698,7 +2698,7 @@ const MysteriumDashboard = () => {
                             <div key={s.id || i} className="grid grid-cols-12 gap-2 text-xs px-3 py-2.5 rounded border bg-emerald-500/5 border-emerald-500/20">
                               <div className="col-span-1"><div className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse mt-0.5" /></div>
                               <div className="col-span-3 min-w-0"><CopyableId id={s.consumer_id} /></div>
-                              <div className="col-span-1 text-sm">{s.is_probe ? <span title="Mysterium network probe">🔧</span> : (countryFlag(s.consumer_country) || (s.service_type === 'wireguard' ? <span title="Public consumer — location not shared by design">🌐</span> : '—'))}</div>
+                              <div className="col-span-1 text-sm">{s.is_probe ? <span title="Mysterium network probe">🔧</span> : (countryFlag(s.consumer_country) || '—')}</div>
                               <div className="col-span-1 text-slate-300 text-xs truncate">{fmtType(s.service_type) || '—'}</div>
                               <div className="col-span-1 text-slate-300">{s.duration}</div>
                               <div className="col-span-2 text-emerald-300">
@@ -2757,7 +2757,7 @@ const MysteriumDashboard = () => {
                               </span>
                             </div>
                             <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-400">
-                              <span>{countryFlag(s.consumer_country) || (s.service_type === 'wireguard' ? <span title="Public consumer — location not shared by design">🌐</span> : '—')}</span>
+                              <span>{countryFlag(s.consumer_country) || '—'}</span>
                               <span className="text-slate-300">{fmtType(s.service_type)}</span>
                               <span className="font-mono">{s.duration}</span>
                               <span>{formatDataSize(s.data_total)}</span>
@@ -2791,7 +2791,7 @@ const MysteriumDashboard = () => {
                               <div className={`w-2 h-2 rounded-full ${session.is_active ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
                             </div>
                             <div className="col-span-2 min-w-0"><CopyableId id={session.consumer_id} /></div>
-                            <div className="col-span-1 text-sm">{countryFlag(session.consumer_country) || (session.service_type === 'wireguard' ? <span title="Public consumer — location not shared by design">🌐</span> : '—')}</div>
+                            <div className="col-span-1 text-sm">{countryFlag(session.consumer_country) || '—'}</div>
                             <div className="col-span-2 text-slate-300 text-xs truncate">{fmtType(session.service_type)}</div>
                             <div className="col-span-1 text-slate-400 font-mono">{session.duration}</div>
                             <div className="col-span-2 text-slate-400 text-xs">{session.started_fmt || '—'}</div>
@@ -2873,7 +2873,7 @@ const MysteriumDashboard = () => {
                                     </span>
                                   </div>
                                   <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-400">
-                                    <span>{countryFlag(s.consumer_country) || (s.service_type === 'wireguard' ? <span title="Public consumer — location not shared by design">🌐</span> : '—')}</span>
+                                    <span>{countryFlag(s.consumer_country) || '—'}</span>
                                     <span className="text-slate-300">{fmtType(s.service_type)}</span>
                                     <span className="font-mono">{s.duration}</span>
                                     <span>{formatDataSize(s.data_total)}</span>
@@ -2888,7 +2888,7 @@ const MysteriumDashboard = () => {
                                 <div key={s.id || i} className="grid grid-cols-12 gap-2 text-xs px-3 py-1.5 rounded border bg-slate-900/30 border-slate-700/20 opacity-80 hover:opacity-100 transition">
                                   <div className="col-span-1 flex items-center"><div className="w-2 h-2 rounded-full bg-slate-600" /></div>
                                   <div className="col-span-2 min-w-0"><CopyableId id={s.consumer_id} /></div>
-                                  <div className="col-span-1 text-sm">{countryFlag(s.consumer_country) || (s.service_type === 'wireguard' ? <span title="Public consumer — location not shared by design">🌐</span> : '—')}</div>
+                                  <div className="col-span-1 text-sm">{countryFlag(s.consumer_country) || '—'}</div>
                                   <div className="col-span-2 text-slate-400 text-xs truncate">{fmtType(s.service_type)}</div>
                                   <div className="col-span-1 text-slate-500 font-mono">{s.duration}</div>
                                   <div className="col-span-2 text-slate-500 text-xs">{s.started_fmt || '—'}</div>

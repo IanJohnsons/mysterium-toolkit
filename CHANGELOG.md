@@ -4,6 +4,13 @@ All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
+## [1.2.11] - 2026-05-30
+### Fixed
+- **Auto-update timer not triggering on existing installs (laptop):** the timer service file was only written when it did not yet exist. If the toolkit was installed before the timer feature was added, the service file contained a stale `User`, `WorkingDirectory`, or `ExecStart` path and the timer fired but silently did nothing. Fixed: `update.sh` now always rewrites both the timer and service files on every run, ensuring the correct user and path are always current. The timer is only restarted if it was not already active.
+- **Reverted: globe icon for wireguard sessions (v1.2.9/v1.2.10):** the `🌐` icon was based on the incorrect assumption that wireguard sessions never carry a `consumer_country`. In reality, `ConsumerCountry` is populated from the consumer's `LocationInfo` in the P2P session handshake and is available once the session is fully established. The `—` shown for active sessions is temporary. The revert restores the original `—` fallback.
+
+---
+
 ## [1.2.10] - 2026-05-30
 ### Fixed
 - **Globe icon missing in History and Consumers detail views:** the `🌐` icon for wireguard (Public) sessions without a country was only applied to 4 of 8 locations in v1.2.9. Fixed the remaining 4 placements: History tab mobile card, History tab desktop table, Consumers detail mobile view, Consumers detail desktop view. All session and consumer views now consistently show `🌐` for Public sessions instead of `—`.
