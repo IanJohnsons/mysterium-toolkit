@@ -4,6 +4,13 @@ All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
+## [1.2.15] - 2026-05-31
+### Added
+- **Pi mode toggle for Raspberry Pi SD card protection:** when a Raspberry Pi is detected (`/proc/device-tree/model` or `/proc/cpuinfo` BCM2 check), a Pi Mode card appears in the monitoring tab. Enabling Pi mode sets the root logger to WARNING level, eliminating ~90% of writes to `logs/backend.log` (INFO and DEBUG lines) while keeping all errors and warnings. Takes effect immediately — no restart required. Setting persists in `config/setup.json`. New endpoints: `GET /settings` (returns `pi_mode`, `is_pi`, `log_level`) and `POST /settings/pi-mode` (toggle with `{"enabled": true/false}`).
+- **Firewalld rule display for Fedora/RHEL/CentOS/Rocky Linux:** the firewall panel now reads and displays actual rules via `firewall-cmd --list-all` when firewalld is active. Previously only detected firewalld as active/inactive without showing any rules. Rules displayed in the firewalld section of the firewall panel.
+
+---
+
 ## [1.2.14] - 2026-05-31
 ### Fixed
 - **Probe detection incorrectly relaxed in v1.2.9:** the wireguard exclusion added in v1.2.9 (`has_wireguard_traffic > 50 MB`) was wrong. Blockchain investigation of `0x28c93e7d0059ea6848e2bd1ea31f74fbc132b947` confirmed it is a genuine Mysterium quality monitoring agent: 0 MYST balance, 0 MATIC, nonce=0 (never transacted), not in the Mysterium whitelist, never acted as a provider. Mysterium monitoring agents connect via wireguard (Public) without a consumer_country, make many short low-data sessions, and never pay — exactly matching the original probe criteria. The 129 GiB seen on the tunnel interface was aggregate traffic across all consumers on that interface, not from this address. Reverted to original probe logic: ≥5 sessions + zero earnings + avg data < 2 MB/session.

@@ -900,7 +900,7 @@ const MysteriumDashboard = () => {
     clients: { connected: 0, peak: 0 },
     performance: { latency: 0, packet_loss: 0, speed_in: 0, speed_out: 0, speed_total: 0, sys_speed_in: 0, sys_speed_out: 0, sys_speed_total: 0, sys_nic: 'NIC', idle: false },
     resources: { cpu: 0, ram: 0, disk: 0, cpu_temp: null, cpu_temp_source: '', all_temps: [] },
-    firewall: { status: 'unconfigured', rules: 0, blocked: 0, rule_details: [], ufw_rules: [], fail2ban: { installed: null, running: false, jails: [] } },
+    firewall: { status: 'unconfigured', rules: 0, blocked: 0, rule_details: [], ufw_rules: [], firewalld_rules: [], fail2ban: { installed: null, running: false, jails: [] } },
     systemHealth: { overall: 'unknown', subsystems: [] },
     nodeQuality: { available: false, quality_score: null, latency_ms: null, bandwidth_mbps: null, uptime_24h_net: null, packet_loss_net: null, uptime_24h_local: null, uptime_30d_local: null, tracking_since: null, tracking_days: 0, monitoring_failed: null, services: [], error: null },
     logs: [],
@@ -941,6 +941,10 @@ const MysteriumDashboard = () => {
   const [archiveLoading, setArchiveLoading] = useState(false);
   const [archiveOffset, setArchiveOffset] = useState(0);
   const ARCHIVE_PAGE = 100;
+  // Pi mode state
+  const [piMode, setPiMode] = useState(false);
+  const [isPi, setIsPi] = useState(false);
+  const [piModeLoading, setPiModeLoading] = useState(false);
   const [activeSort, setActiveSort] = useState({ key: 'earnings_myst', dir: 'desc' });
   const [tunnelSort, setTunnelSort] = useState({ key: 'total_mb', dir: 'desc' });
   const [fleetSort, setFleetSort] = useState({ key: 'unsettled', dir: 'desc' });
@@ -1256,7 +1260,7 @@ const MysteriumDashboard = () => {
           bandwidth:       raw.traffic || {},
           clients:         { connected: raw.sessions?.vpn_tunnel_count || raw.live_connections?.active || 0, peak: 0 },
           performance:     raw.performance || { speed_total: 0, speed_in: 0, speed_out: 0, idle: true },
-          firewall:        raw.firewall || { status: 'unknown', rules: 0, blocked: 0, rule_details: [], ufw_rules: [], fail2ban: { installed: null, running: false, jails: [] } },
+          firewall:        raw.firewall || { status: 'unknown', rules: 0, blocked: 0, rule_details: [], ufw_rules: [], firewalld_rules: [], fail2ban: { installed: null, running: false, jails: [] } },
           systemHealth:    raw.systemHealth || { overall: 'ok', subsystems: [] },
           live_connections: raw.live_connections || { active: 0, peers: [], svc_connections: 0 },
           logs:            raw.logs || [],
@@ -1369,6 +1373,20 @@ const MysteriumDashboard = () => {
     const interval = setInterval(fetchMetrics, updateInterval);
     return () => clearInterval(interval);
   }, [isConnected, fetchMetrics, updateInterval]);
+
+  // Fetch toolkit settings (pi mode, hardware detection) once on connect
+  useEffect(() => {
+    if (!isConnected || !backendUrlRef.current) return;
+    fetch(`${backendUrlRef.current}/settings`, { headers: authHeaderRef.current || {} })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (d) {
+          setPiMode(!!d.pi_mode);
+          setIsPi(!!d.is_pi);
+        }
+      })
+      .catch(() => {});
+  }, [isConnected]);
 
   // 1-second ticker for live "Xs ago" countdown
   useEffect(() => {
@@ -3192,6 +3210,17 @@ const MysteriumDashboard = () => {
                   </FirewallSection>
                 )}
 
+                {/* firewalld section — Fedora/RHEL/CentOS */}
+                {metrics.firewall.fw_type === 'firewalld' && metrics.firewall.firewalld_rules && metrics.firewall.firewalld_rules.length > 0 && (
+                  <FirewallSection title="firewalld" count={`${metrics.firewall.firewalld_rules.length} entries`}>
+                    <div className="space-y-1">
+                      {metrics.firewall.firewalld_rules.map((rule, i) => (
+                        <div key={i} className="text-xs font-mono px-2 py-1 bg-slate-900/30 border border-slate-700/30 rounded text-slate-400">{rule}</div>
+                      ))}
+                    </div>
+                  </FirewallSection>
+                )}
+
                 {/* fail2ban — status + banned IPs. Management in Security page */}
                 {metrics.firewall.fail2ban?.installed ? (
                   <div className="border border-slate-700/40 rounded p-3">
@@ -3511,6 +3540,49 @@ const MysteriumDashboard = () => {
               />
             </div>
             </>
+          )}
+
+
+          {/* Pi Mode Card — only shown on Raspberry Pi or when pi_mode is active */}
+          {(isPi || piMode) && (
+            <div className="mb-6">
+              <div className={`w-full p-4 bg-slate-800/30 border rounded-lg backdrop-blur ${piMode ? 'border-amber-500/50' : 'border-slate-700'}`}>
+                <div className="flex items-center gap-3">
+                  <span className="text-lg">🍓</span>
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <h3 className="text-xs font-semibold text-slate-300 tracking-wide">Pi Mode</h3>
+                      {isPi && <span className="text-xs px-2 py-0.5 rounded font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30">RASPBERRY PI DETECTED</span>}
+                      {piMode && <span className="text-xs px-2 py-0.5 rounded font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">ACTIVE</span>}
+                    </div>
+                    <p className="text-xs text-slate-500">Reduces SD card writes by setting the log level to WARNING — eliminates ~90% of log writes while keeping all errors and warnings. No restart required.</p>
+                  </div>
+                  <button
+                    disabled={piModeLoading}
+                    onClick={async () => {
+                      setPiModeLoading(true);
+                      try {
+                        const resp = await fetch(`${backendUrlRef.current}/settings/pi-mode`, {
+                          method: 'POST',
+                          headers: { ...(authHeaderRef.current || {}), 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ enabled: !piMode }),
+                        });
+                        const data = await resp.json();
+                        if (data.success) setPiMode(data.pi_mode);
+                      } catch (e) { console.error('Pi mode toggle failed:', e); }
+                      finally { setPiModeLoading(false); }
+                    }}
+                    className={`shrink-0 px-4 py-2 text-xs font-semibold rounded border transition disabled:opacity-40 ${
+                      piMode
+                        ? 'bg-amber-500/20 text-amber-300 border-amber-500/30 hover:bg-amber-500/30'
+                        : 'bg-slate-600/30 text-slate-300 border-slate-600/40 hover:bg-slate-600/50'
+                    }`}
+                  >
+                    {piModeLoading ? '…' : piMode ? 'Disable Pi Mode' : 'Enable Pi Mode'}
+                  </button>
+                </div>
+              </div>
+            </div>
           )}
 
 

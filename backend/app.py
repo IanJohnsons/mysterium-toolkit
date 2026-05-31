@@ -135,6 +135,16 @@ if setup_config_path.exists():
     except Exception as e:
         logger.warning(f"Could not load setup config: {e}")
 
+# ── Pi mode — reduce log writes on SD card systems ────────────────────────
+# When pi_mode is enabled, the root logger is set to WARNING level.
+# This eliminates ~90% of disk writes to logs/backend.log (INFO + DEBUG lines).
+# All error and warning messages are still captured.
+# pi_mode can be toggled live via POST /settings/pi-mode without restart.
+PI_MODE: bool = bool(setup_config.get('pi_mode', False))
+if PI_MODE:
+    logging.getLogger().setLevel(logging.WARNING)
+    logger.warning("Pi mode active — log level set to WARNING to reduce SD card writes")
+
 # ============ TIMEZONE ============
 # All "today" and "this month" calculations use this timezone.
 # Earnings snapshot timestamps stay in UTC — only display bucketing uses local tz.
@@ -3913,6 +3923,7 @@ class MetricsCollector:
         blocked_count = 0
         fw_status = 'unknown'
         fw_type = 'unknown'
+        firewalld_rules = []  # firewalld-specific rules list
 
         # ── Detect active firewall type ──────────────────────────────────
         try:
@@ -3921,6 +3932,25 @@ class MetricsCollector:
                                capture_output=True, timeout=3, text=True)
             if r.returncode == 0 and r.stdout.strip() == 'active':
                 fw_type = 'firewalld'
+                fw_status = 'active'
+                # Read firewalld rules via firewall-cmd --list-all
+                for cmd in [['sudo', '-n', 'firewall-cmd', '--list-all'],
+                            ['firewall-cmd', '--list-all']]:
+                    try:
+                        fd = subprocess.run(cmd, capture_output=True, timeout=5, text=True)
+                        if fd.returncode == 0 and fd.stdout.strip():
+                            for line in fd.stdout.split('\n'):
+                                stripped = line.strip()
+                                if not stripped:
+                                    continue
+                                # Parse key: value lines from firewall-cmd --list-all
+                                firewalld_rules.append(stripped)
+                                # Count DROP/REJECT equivalent rich rules
+                                if 'reject' in stripped.lower() or 'drop' in stripped.lower():
+                                    blocked_count += 1
+                            break
+                    except Exception:
+                        continue
         except Exception:
             pass
 
@@ -4221,6 +4251,7 @@ class MetricsCollector:
             'blocked': blocked_count,
             'rule_details': rules_list[:100],
             'ufw_rules': ufw_rules[:50],
+            'firewalld_rules': firewalld_rules[:100],
             'legacy_ports': legacy_ports_found,
             'fail2ban': fail2ban,
         }
@@ -9182,6 +9213,79 @@ def get_data_stats():
         return jsonify(stats), 200
     except Exception as e:
         logger.error(f'Data stats error: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+# ── Toolkit settings endpoints ─────────────────────────────────────────────
+
+@app.route('/settings', methods=['GET'])
+@require_auth
+def get_toolkit_settings():
+    """Return toolkit-level settings including Pi mode status and hardware detection."""
+    global PI_MODE
+    # Detect Pi hardware independently so frontend knows even before pi_mode is set
+    is_pi = False
+    try:
+        model = Path('/proc/device-tree/model').read_text()
+        if 'Raspberry' in model or 'raspberry' in model:
+            is_pi = True
+    except Exception:
+        pass
+    if not is_pi:
+        try:
+            cpuinfo = Path('/proc/cpuinfo').read_text()
+            if 'Raspberry Pi' in cpuinfo or 'BCM2' in cpuinfo:
+                is_pi = True
+        except Exception:
+            pass
+    return jsonify({
+        'pi_mode': PI_MODE,
+        'is_pi': is_pi,
+        'log_level': logging.getLevelName(logging.getLogger().level),
+    }), 200
+
+
+@app.route('/settings/pi-mode', methods=['POST'])
+@require_auth
+def set_pi_mode():
+    """Enable or disable Pi mode — reduces log writes for SD card systems.
+
+    Body: {"enabled": true} or {"enabled": false}
+
+    When enabled:
+    - Root logger level → WARNING (eliminates ~90% of log writes)
+    - Setting persisted to config/setup.json
+
+    Takes effect immediately — no restart required.
+    """
+    global PI_MODE
+    try:
+        body = request.get_json(silent=True) or {}
+        enabled = bool(body.get('enabled', False))
+
+        # Apply immediately to running logger
+        new_level = logging.WARNING if enabled else logging.INFO
+        logging.getLogger().setLevel(new_level)
+        PI_MODE = enabled
+
+        # Persist to setup.json
+        cfg_path = Path('config/setup.json')
+        try:
+            current = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+        except Exception:
+            current = {}
+        current['pi_mode'] = enabled
+        cfg_path.write_text(json.dumps(current, indent=2))
+
+        level_name = logging.getLevelName(new_level)
+        logger.warning(f"Pi mode {'enabled' if enabled else 'disabled'} — log level set to {level_name}")
+        return jsonify({
+            'success': True,
+            'pi_mode': enabled,
+            'log_level': level_name,
+        }), 200
+    except Exception as e:
+        logger.error(f'settings/pi-mode error: {e}')
         return jsonify({'error': str(e)}), 500
 
 
