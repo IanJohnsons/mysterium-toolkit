@@ -2874,26 +2874,18 @@ class MetricsCollector:
             # node reachability. They never pay and make many short low-traffic sessions.
             # Criteria: ≥5 sessions, zero earnings, avg data < 2 MB/session.
             #
-            # IMPORTANT exclusions from probe detection:
-            # - wireguard (Public) consumers: consumer_country is always empty by design
-            #   (Mysterium node never populates it for wireguard sessions — see SessionDTO).
-            #   Wireguard consumers with significant data (>50 MB total) are real paying
-            #   consumers even when earnings show 0 (Hermes promises settle after session).
-            # - noop: access_policies=[], no real tunnel traffic — correctly never meets
-            #   the session threshold for probe detection.
+            # Confirmed via blockchain research: Mysterium monitoring agents have
+            # 0 MYST/MATIC balance, nonce=0, are not in the whitelist, and connect
+            # via wireguard (Public) without a consumer_country. This matches exactly:
+            # - 0 earnings (agents never pay)
+            # - ≥5 sessions (periodic quality checks every 6h = many sessions over time)
+            # - avg data < 2 MB/session (0.1 GB/day spread over many short sessions)
+            # Source: https://help.mystnodes.com/en/articles/8005478-node-service-monitoring
             probe_ids = set()
             for c in top_consumers:
                 avg_mb = c['total_data_mb'] / c['sessions'] if c['sessions'] > 0 else 0
-                service_types = set(c.get('service_types', []))
-                # Never mark as probe if consumer has wireguard sessions with meaningful data
-                # (wireguard earnings are always 0 until Hermes settlement completes)
-                has_wireguard_traffic = (
-                    'wireguard' in service_types
-                    and c['total_data_mb'] > 50.0
-                )
                 c['is_probe'] = (
-                    not has_wireguard_traffic
-                    and c['sessions'] >= 5
+                    c['sessions'] >= 5
                     and c['total_earnings'] == 0
                     and avg_mb < 2.0
                 )
