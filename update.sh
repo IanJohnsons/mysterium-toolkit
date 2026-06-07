@@ -269,6 +269,7 @@ if command -v systemctl &>/dev/null; then
 CURRENT=\$(cat "$TOOLKIT_DIR/VERSION" 2>/dev/null)
 LATEST=\$(curl -sf https://raw.githubusercontent.com/IanJohnsons/mysterium-toolkit/main/VERSION 2>/dev/null)
 [ -n "\$LATEST" ] && [ "\$CURRENT" != "\$LATEST" ] && exec "$TOOLKIT_DIR/update.sh"
+exit 0
 WRAPPER_EOF
     $SUDO chmod +x "$_WRAPPER"
 fi

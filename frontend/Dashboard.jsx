@@ -1719,140 +1719,6 @@ const MysteriumDashboard = () => {
         }
       };
 
-      const FleetNodeManager = () => {
-        return (
-          <>
-            {/* Add Node button */}
-            <button onClick={openFleetAdd}
-              className="px-3 py-1.5 text-xs font-semibold rounded border border-violet-500/40 bg-violet-500/10 text-violet-300 hover:bg-violet-500/20 hover:border-violet-400 transition flex items-center gap-1.5">
-              <span>⊕</span> Add Node
-            </button>
-
-            {/* Edit buttons on node cards — injected via data attribute */}
-            {fleetNodes.map(n => (
-              <button key={`edit-${n.id}`} data-edit-node={n.id}
-                onClick={() => openFleetEdit(n)}
-                className="hidden" />
-            ))}
-
-            {/* Modal */}
-            {fleetModalOpen && (
-              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm px-4">
-                <div className="w-full max-w-md bg-slate-900 border border-violet-500/20 rounded-xl shadow-2xl">
-                  {/* Modal header */}
-                  <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800">
-                    <div className="flex items-center gap-2">
-                      <span className="text-violet-400">⬡</span>
-                      <h3 className="text-sm font-semibold text-slate-200">
-                        {fleetEditNode ? 'Edit Node' : 'Add Node to Fleet'}
-                      </h3>
-                    </div>
-                    <button onClick={() => setFleetModalOpen(false)} className="text-slate-500 hover:text-white transition">✕</button>
-                  </div>
-
-                  {/* Modal body */}
-                  <div className="px-5 py-4 space-y-4">
-                    {/* Toolkit URL */}
-                    <div>
-                      <label className="block text-xs text-slate-400 mb-1">Toolkit URL <span className="text-red-400">*</span></label>
-                      <input
-                        value={fleetForm.toolkit_url}
-                        onChange={e => {
-                          let v = e.target.value.trim();
-                          setFleetForm(f => ({ ...f, toolkit_url: v }));
-                          setFleetProbeResult(null);
-                        }}
-                        onBlur={e => {
-                          let v = e.target.value.trim();
-                          // Auto-fix bare IP or hostname: add http:// and :5000
-                          if (v && !v.startsWith('http')) v = 'http://' + v;
-                          if (v && /^http:\/\/[\d.a-zA-Z-]+$/.test(v)) v = v + ':5000';
-                          setFleetForm(f => ({ ...f, toolkit_url: v }));
-                        }}
-                        placeholder="http://NODE_IP:5000"
-                        className="w-full bg-slate-800 border border-slate-600 focus:border-violet-400 rounded px-3 py-2 text-xs text-slate-200 outline-none transition font-mono"
-                      />
-                      <p className="text-xs text-slate-600 mt-1">IP address and port of the remote toolkit backend</p>
-                    </div>
-
-                    {/* API Key */}
-                    <div>
-                      <label className="block text-xs text-slate-400 mb-1">API Key <span className="text-red-400">*</span></label>
-                      <input
-                        type="password"
-                        value={fleetForm.toolkit_api_key}
-                        onChange={e => { setFleetForm(f => ({ ...f, toolkit_api_key: e.target.value })); setFleetProbeResult(null); }}
-                        placeholder="Paste API key from remote node's config/setup.json"
-                        className="w-full bg-slate-800 border border-slate-600 focus:border-violet-400 rounded px-3 py-2 text-xs text-slate-200 outline-none transition font-mono"
-                      />
-                    </div>
-
-                    {/* Test Connection */}
-                    <button onClick={handleFleetProbe} disabled={fleetProbing || !fleetForm.toolkit_url}
-                      className="w-full py-2 text-xs font-semibold rounded border border-violet-500/40 bg-violet-500/10 text-violet-300 hover:bg-violet-500/20 transition disabled:opacity-40">
-                      {fleetProbing ? '⟳ Testing connection…' : '⚡ Test Connection & Auto-discover'}
-                    </button>
-
-                    {/* Probe result */}
-                    {fleetProbeResult && (
-                      <div className={`p-3 rounded text-xs border ${fleetProbeResult.success ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-red-500/10 border-red-500/30'}`}>
-                        {fleetProbeResult.success ? (
-                          <div className="space-y-1">
-                            <div className="text-emerald-300 font-semibold">✓ Connection successful</div>
-                            {fleetProbeResult.identity && <div className="text-slate-400 font-mono">{fleetProbeResult.identity.slice(0,10)}…{fleetProbeResult.identity.slice(-6)}</div>}
-                            <div className="flex gap-3 text-slate-400">
-                              {fleetProbeResult.version && <span>v{fleetProbeResult.version}</span>}
-                              {fleetProbeResult.ip && <span>{fleetProbeResult.ip}</span>}
-                              {fleetProbeResult.nat && <span>NAT: {fleetProbeResult.nat}</span>}
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="text-red-300">✗ {fleetProbeResult.error}</div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Label */}
-                    <div>
-                      <label className="block text-xs text-slate-400 mb-1">Label</label>
-                      <input
-                        value={fleetForm.label}
-                        onChange={e => setFleetForm(f => ({ ...f, label: e.target.value }))}
-                        placeholder="My VPS Node"
-                        className="w-full bg-slate-800 border border-slate-600 focus:border-violet-400 rounded px-3 py-2 text-xs text-slate-200 outline-none transition"
-                      />
-                      <p className="text-xs text-slate-600 mt-1">Display name in the fleet overview (auto-filled after test)</p>
-                    </div>
-
-                    {fleetSaveError && <div className="text-xs text-red-400">✗ {fleetSaveError}</div>}
-                  </div>
-
-                  {/* Modal footer */}
-                  <div className="flex items-center justify-between px-5 py-4 border-t border-slate-800">
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => setFleetModalOpen(false)}
-                        className="px-4 py-2 text-xs rounded border border-slate-700 text-slate-400 hover:text-white hover:border-slate-500 transition">
-                        Cancel
-                      </button>
-                      {fleetEditNode && (
-                        <button onClick={() => { setFleetModalOpen(false); handleFleetRemove(fleetEditNode); }}
-                          className="px-4 py-2 text-xs rounded border border-red-500/40 bg-red-500/10 text-red-400 hover:bg-red-500/20 transition"
-                          title="Remove this node from fleet">
-                          ✕ Delete Node
-                        </button>
-                      )}
-                    </div>
-                    <button onClick={handleFleetSave} disabled={fleetSaving || !fleetForm.toolkit_url || !fleetForm.toolkit_api_key}
-                      className="px-4 py-2 text-xs font-semibold rounded border border-violet-500/40 bg-violet-500/20 text-violet-200 hover:bg-violet-500/30 transition disabled:opacity-40">
-                      {fleetSaving ? '⟳ Saving…' : fleetEditNode ? '✓ Save Changes' : '⊕ Add to Fleet'}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-          </>
-        );
-      };
 
       return (
         <div data-theme={theme} className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 text-white font-['SF_Mono',monospace]">
@@ -1905,7 +1771,136 @@ const MysteriumDashboard = () => {
                     ↑ Update All to v{updateInfo.latest}
                   </button>
                 )}
-                <FleetNodeManager />
+                <>
+                  {/* Add Node button */}
+                  <button onClick={openFleetAdd}
+                    className="px-3 py-1.5 text-xs font-semibold rounded border border-violet-500/40 bg-violet-500/10 text-violet-300 hover:bg-violet-500/20 hover:border-violet-400 transition flex items-center gap-1.5">
+                    <span>⊕</span> Add Node
+                  </button>
+
+                  {/* Edit buttons on node cards — injected via data attribute */}
+                  {fleetNodes.map(n => (
+                    <button key={`edit-${n.id}`} data-edit-node={n.id}
+                      onClick={() => openFleetEdit(n)}
+                      className="hidden" />
+                  ))}
+
+                  {/* Modal */}
+                  {fleetModalOpen && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm px-4">
+                      <div className="w-full max-w-md bg-slate-900 border border-violet-500/20 rounded-xl shadow-2xl">
+                        {/* Modal header */}
+                        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800">
+                          <div className="flex items-center gap-2">
+                            <span className="text-violet-400">⬡</span>
+                            <h3 className="text-sm font-semibold text-slate-200">
+                              {fleetEditNode ? 'Edit Node' : 'Add Node to Fleet'}
+                            </h3>
+                          </div>
+                          <button onClick={() => setFleetModalOpen(false)} className="text-slate-500 hover:text-white transition">✕</button>
+                        </div>
+
+                        {/* Modal body */}
+                        <div className="px-5 py-4 space-y-4">
+                          {/* Toolkit URL */}
+                          <div>
+                            <label className="block text-xs text-slate-400 mb-1">Toolkit URL <span className="text-red-400">*</span></label>
+                            <input
+                              value={fleetForm.toolkit_url}
+                              onChange={e => {
+                                let v = e.target.value.trim();
+                                setFleetForm(f => ({ ...f, toolkit_url: v }));
+                                setFleetProbeResult(null);
+                              }}
+                              onBlur={e => {
+                                let v = e.target.value.trim();
+                                // Auto-fix bare IP or hostname: add http:// and :5000
+                                if (v && !v.startsWith('http')) v = 'http://' + v;
+                                if (v && /^http:\/\/[\d.a-zA-Z-]+$/.test(v)) v = v + ':5000';
+                                setFleetForm(f => ({ ...f, toolkit_url: v }));
+                              }}
+                              placeholder="http://NODE_IP:5000"
+                              className="w-full bg-slate-800 border border-slate-600 focus:border-violet-400 rounded px-3 py-2 text-xs text-slate-200 outline-none transition font-mono"
+                            />
+                            <p className="text-xs text-slate-600 mt-1">IP address and port of the remote toolkit backend</p>
+                          </div>
+
+                          {/* API Key */}
+                          <div>
+                            <label className="block text-xs text-slate-400 mb-1">API Key <span className="text-red-400">*</span></label>
+                            <input
+                              type="password"
+                              value={fleetForm.toolkit_api_key}
+                              onChange={e => { setFleetForm(f => ({ ...f, toolkit_api_key: e.target.value })); setFleetProbeResult(null); }}
+                              placeholder="Paste API key from remote node's config/setup.json"
+                              className="w-full bg-slate-800 border border-slate-600 focus:border-violet-400 rounded px-3 py-2 text-xs text-slate-200 outline-none transition font-mono"
+                            />
+                          </div>
+
+                          {/* Test Connection */}
+                          <button onClick={handleFleetProbe} disabled={fleetProbing || !fleetForm.toolkit_url}
+                            className="w-full py-2 text-xs font-semibold rounded border border-violet-500/40 bg-violet-500/10 text-violet-300 hover:bg-violet-500/20 transition disabled:opacity-40">
+                            {fleetProbing ? '⟳ Testing connection…' : '⚡ Test Connection & Auto-discover'}
+                          </button>
+
+                          {/* Probe result */}
+                          {fleetProbeResult && (
+                            <div className={`p-3 rounded text-xs border ${fleetProbeResult.success ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-red-500/10 border-red-500/30'}`}>
+                              {fleetProbeResult.success ? (
+                                <div className="space-y-1">
+                                  <div className="text-emerald-300 font-semibold">✓ Connection successful</div>
+                                  {fleetProbeResult.identity && <div className="text-slate-400 font-mono">{fleetProbeResult.identity.slice(0,10)}…{fleetProbeResult.identity.slice(-6)}</div>}
+                                  <div className="flex gap-3 text-slate-400">
+                                    {fleetProbeResult.version && <span>v{fleetProbeResult.version}</span>}
+                                    {fleetProbeResult.ip && <span>{fleetProbeResult.ip}</span>}
+                                    {fleetProbeResult.nat && <span>NAT: {fleetProbeResult.nat}</span>}
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="text-red-300">✗ {fleetProbeResult.error}</div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Label */}
+                          <div>
+                            <label className="block text-xs text-slate-400 mb-1">Label</label>
+                            <input
+                              value={fleetForm.label}
+                              onChange={e => setFleetForm(f => ({ ...f, label: e.target.value }))}
+                              placeholder="My VPS Node"
+                              className="w-full bg-slate-800 border border-slate-600 focus:border-violet-400 rounded px-3 py-2 text-xs text-slate-200 outline-none transition"
+                            />
+                            <p className="text-xs text-slate-600 mt-1">Display name in the fleet overview (auto-filled after test)</p>
+                          </div>
+
+                          {fleetSaveError && <div className="text-xs text-red-400">✗ {fleetSaveError}</div>}
+                        </div>
+
+                        {/* Modal footer */}
+                        <div className="flex items-center justify-between px-5 py-4 border-t border-slate-800">
+                          <div className="flex items-center gap-2">
+                            <button onClick={() => setFleetModalOpen(false)}
+                              className="px-4 py-2 text-xs rounded border border-slate-700 text-slate-400 hover:text-white hover:border-slate-500 transition">
+                              Cancel
+                            </button>
+                            {fleetEditNode && (
+                              <button onClick={() => { setFleetModalOpen(false); handleFleetRemove(fleetEditNode); }}
+                                className="px-4 py-2 text-xs rounded border border-red-500/40 bg-red-500/10 text-red-400 hover:bg-red-500/20 transition"
+                                title="Remove this node from fleet">
+                                ✕ Delete Node
+                              </button>
+                            )}
+                          </div>
+                          <button onClick={handleFleetSave} disabled={fleetSaving || !fleetForm.toolkit_url || !fleetForm.toolkit_api_key}
+                            className="px-4 py-2 text-xs font-semibold rounded border border-violet-500/40 bg-violet-500/20 text-violet-200 hover:bg-violet-500/30 transition disabled:opacity-40">
+                            {fleetSaving ? '⟳ Saving…' : fleetEditNode ? '✓ Save Changes' : '⊕ Add to Fleet'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </>
                 <button onClick={() => {
                     try { localStorage.removeItem('myst-auth'); localStorage.removeItem('myst-backend-url'); } catch {}
                     setIsConnected(false);

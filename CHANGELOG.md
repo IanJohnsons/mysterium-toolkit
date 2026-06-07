@@ -3,6 +3,10 @@
 All notable changes to Mysterium Node Toolkit are documented here.  
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.2.16
+- fix: auto-update service exit code 1 when up-to-date (add `exit 0` to wrapper script)
+- fix: fleet Add Node input fields uneditable due to nested component definition causing remount on every render
+
 ---
 ## [1.2.15] - 2026-05-31
 ### Added
