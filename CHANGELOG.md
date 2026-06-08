@@ -36,6 +36,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - docs: README permissions table updated with fail2ban entries
 - docs: Help section in dashboard — Security tab, Tailscale, Pi mode, CLI option 9 explained
 
+## v1.2.21
+- fix: fail2ban managed toggle no longer resets every 5s — settings fetch split from firewallData useEffect
+
 ---
 ## [1.2.15] - 2026-05-31
 ### Added

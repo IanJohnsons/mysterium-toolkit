@@ -451,15 +451,16 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
   };
   useEffect(()=>{ loadJails(); loadUfw(); }, [backendUrl]);
   useEffect(()=>{ if(firewallData?.ufw_rules) setUfwRules(firewallData.ufw_rules); }, [firewallData]);
+  // Load fail2ban_managed setting once on mount — NOT on firewallData change
+  // firewallData refreshes every 5s and would reset the toggle state
   useEffect(()=>{
-    // Load fail2ban_managed setting
     fetch(`${backendUrl}/settings`, { headers: authHeaders||{} })
       .then(r=>r.json()).then(d=>{ if(typeof d.fail2ban_managed === 'boolean') setF2bManaged(d.fail2ban_managed); }).catch(()=>{});
-    // Load tailscale status from firewall data
+  }, [backendUrl]);
+  // Tailscale status — update from firewallData when available
+  useEffect(()=>{
     if(firewallData?.tailscale) setTailscale(firewallData.tailscale);
-    else fetch(`${backendUrl}/firewall`, { headers: authHeaders||{} })
-      .then(r=>r.json()).then(d=>{ if(d.tailscale) setTailscale(d.tailscale); }).catch(()=>{});
-  }, [backendUrl, firewallData]);
+  }, [firewallData]);
 
   const installF2b = () => {
     setInstalling(true);
