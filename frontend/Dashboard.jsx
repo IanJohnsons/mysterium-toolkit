@@ -421,8 +421,6 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
   const [f2bStarting, setF2bStarting] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [editJail, setEditJail] = useState(null);
-  const [showAddJail, setShowAddJail] = useState(false);
-  const [newJail, setNewJail] = useState({ name:'', port:'', logpath:'', filter:'', maxretry:5, bantime:3600, findtime:600, enabled:true });
   const [ufwMsg, setUfwMsg] = useState(null);
   const [ufwRules, setUfwRules] = useState(null);
   const [newRule, setNewRule] = useState({ action:'allow', port:'', proto:'tcp', from:'' });
@@ -672,40 +670,9 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
                 </div>
               ))}
 
-              {showAddJail ? (
-                <div className="border border-violet-500/30 bg-slate-800/30 rounded p-3">
-                  <h5 className="text-xs font-semibold text-slate-200 mb-3">Add custom jail</h5>
-                  {[['Jail name','e.g. nginx','name'],['Port','e.g. 80,443','port'],['Log path','full path to log file','logpath'],['Filter','filter name (empty = jail name)','filter']].map(([label,hint,key])=>(
-                    <div key={key} className="mb-2">
-                      <label className="block text-[10px] text-slate-400 mb-1">{label} <span className="text-slate-600">— {hint}</span></label>
-                      <input type="text" value={newJail[key]} onChange={e=>setNewJail({...newJail,[key]:e.target.value})} className={inp} />
-                    </div>
-                  ))}
-                  <div className="grid grid-cols-3 gap-3 mb-3">
-                    {[['Max retries','maxretry',1],['Ban time (s)','bantime',-1],['Find time (s)','findtime',1]].map(([label,key,min])=>(
-                      <div key={key}>
-                        <label className="block text-[10px] text-slate-400 mb-1">{label}{key==='bantime'&&<span className="text-slate-600"> (−1=perm)</span>}</label>
-                        <input type="number" min={min} value={newJail[key]} onChange={e=>{const v=parseInt(e.target.value);setNewJail({...newJail,[key]:isNaN(v)?min:v});}} className={inp} />
-                      </div>
-                    ))}
-                  </div>
-                  <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer mb-3">
-                    <input type="checkbox" checked={newJail.enabled} onChange={e=>setNewJail({...newJail,enabled:e.target.checked})} className="accent-violet-500" /> Enabled
-                  </label>
-                  <div className="flex gap-2">
-                    <button onClick={()=>saveJails([...(f2bJails?.filter(j=>j.is_toolkit)||[]),newJail])} disabled={f2bSaving||!newJail.name}
-                      className="flex-1 py-2 text-xs bg-violet-600 hover:bg-violet-700 text-white rounded font-semibold transition disabled:opacity-50">
-                      {f2bSaving?'Saving…':'+ Add jail'}
-                    </button>
-                    <button onClick={()=>setShowAddJail(false)} className="px-4 py-2 text-xs text-slate-500 hover:text-slate-300">cancel</button>
-                  </div>
-                </div>
-              ) : (
-                <button onClick={()=>setShowAddJail(true)}
-                  className="w-full mt-1 py-2 text-xs border border-dashed border-slate-600 rounded hover:border-violet-500/40 hover:text-violet-400 text-slate-500 transition">
-                  + Add custom jail
-                </button>
-              )}
+              <div className="mt-2 p-3 border border-dashed border-slate-700/50 rounded text-[10px] text-slate-600">
+                💡 The toolkit only manages the <code className="text-slate-500">mysterium-dashboard</code> jail. To add custom jails, edit <code className="text-slate-500">/etc/fail2ban/jail.local</code> manually — outside the toolkit block. The toolkit will never touch them.
+              </div>
             </div>
           )}
         </div>
@@ -758,25 +725,40 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
             )}
           </div>
           {tailscale?.installed ? (
-            <div className="p-3 bg-slate-800/30 border border-slate-700/40 rounded-lg space-y-1">
-              {tailscale.ip && (
-                <div className="flex items-center gap-2 text-xs">
-                  <span className="text-slate-500">IP</span>
-                  <code className="text-emerald-400 font-mono">{tailscale.ip}</code>
-                  <span className="text-[10px] text-slate-600">— use this to access dashboard from other devices</span>
+            tailscale.running ? (
+              <div className="p-3 bg-slate-800/30 border border-slate-700/40 rounded-lg space-y-2">
+                {tailscale.ip && (
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="text-slate-500">IP</span>
+                    <code className="text-emerald-400 font-mono">{tailscale.ip}</code>
+                    <span className="text-[10px] text-slate-600">— use this to access dashboard from other devices</span>
+                  </div>
+                )}
+                {tailscale.peers > 0 && (
+                  <div className="text-[10px] text-slate-500">{tailscale.peers} peer{tailscale.peers !== 1 ? 's' : ''} in your Tailscale network</div>
+                )}
+                <div className="text-[10px] text-slate-600">
+                  Dashboard via Tailscale: <code className="text-slate-400">http://{tailscale.ip || '100.x.x.x'}:5000</code>
                 </div>
-              )}
-              {tailscale.peers > 0 && (
-                <div className="text-[10px] text-slate-500">{tailscale.peers} peer{tailscale.peers !== 1 ? 's' : ''} in your Tailscale network</div>
-              )}
-              <div className="text-[10px] text-slate-600 pt-1">
-                Dashboard via Tailscale: <code className="text-slate-400">http://{tailscale.ip || '100.x.x.x'}:5000</code>
+                <div className="pt-1 border-t border-slate-700/40">
+                  <div className="text-[10px] text-slate-500 mb-1">Optional: hide dashboard from internet (run in terminal)</div>
+                  <code className="block text-[10px] text-slate-400 bg-slate-900/50 rounded px-2 py-1 font-mono">sudo ufw deny 5000</code>
+                  <code className="block text-[10px] text-slate-400 bg-slate-900/50 rounded px-2 py-1 font-mono mt-1">sudo ufw allow in on tailscale0</code>
+                  <div className="text-[9px] text-slate-600 mt-1">⚠ Only do this after confirming Tailscale works — dashboard will only be reachable via Tailscale IP afterwards.</div>
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="p-3 bg-slate-800/30 border border-yellow-500/20 rounded-lg space-y-2">
+                <p className="text-xs text-yellow-400">Tailscale is installed but not connected.</p>
+                <p className="text-[10px] text-slate-500">Run the following command to connect:</p>
+                <code className="block text-[10px] text-slate-300 bg-slate-900/50 rounded px-2 py-1 font-mono">sudo tailscale up</code>
+                <p className="text-[10px] text-slate-600">Open the URL shown and authenticate with your Tailscale account.</p>
+              </div>
+            )
           ) : (
             <div className="p-4 border border-slate-700/40 rounded text-center">
               <p className="text-xs text-slate-400 mb-1">Tailscale is not installed.</p>
-              <p className="text-[10px] text-slate-500 mb-4">Tailscale hides your dashboard from the internet — only accessible via your private Tailscale network.</p>
+              <p className="text-[10px] text-slate-500 mb-4">Tailscale hides your dashboard from the internet — only reachable via your private Tailscale network.</p>
               <a
                 href="https://tailscale.com/download"
                 target="_blank"

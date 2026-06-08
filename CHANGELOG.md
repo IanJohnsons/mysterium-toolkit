@@ -22,6 +22,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - fix: fail2ban managed toggle now renders correctly regardless of jail load state
 - fix: removed mention of specific tool names from fail2ban managed toggle description
 
+## v1.2.19
+- fix: auto-update wrapper now uses `sudo -n` on non-root systems (fixes Parrot OS and other security-hardened distros)
+- fix: removed Add custom jail UI — toolkit only manages mysterium-dashboard jail; info hint added pointing to manual jail.local editing
+- fix: Tailscale card now shows actionable message when installed but not connected
+- feat: Tailscale card shows optional UFW commands to hide dashboard from internet when connected
+
 ---
 ## [1.2.15] - 2026-05-31
 ### Added
