@@ -3912,6 +3912,15 @@ const MysteriumDashboard = () => {
                 </div>
 
                 <div>
+                  <h4 className="text-emerald-400 font-semibold mb-1">Log Level &amp; Debug Mode</h4>
+                  <p className="text-slate-400">
+                    Set during the setup wizard or changed later in <code className="bg-slate-800 px-1 rounded">config/setup.json</code> → restart the backend to apply.<br/><br/>
+                    <strong className="text-slate-300">INFO</strong> (default) — normal operation, all events logged.<br/>
+                    <strong className="text-slate-300">WARNING</strong> — only warnings and errors. Recommended on Raspberry Pi to reduce SD card writes (~90% fewer log writes).<br/>
+                    <strong className="text-slate-300">DEBUG</strong> — very detailed output. Use only for troubleshooting — creates large log files fast.<br/><br/>
+                    <strong className="text-slate-300">Debug mode</strong> — separate from log level. Enables Flask debug output. Only useful for development — never enable on a production node.
+                  </p>
+
                   <h4 className="text-emerald-400 font-semibold mb-1">CLI Menu — Security &amp; Upgrades (option 9)</h4>
                   <p className="text-slate-400">
                     Already installed the toolkit but skipped fail2ban or Tailscale during setup? No need to reinstall. Run <code className="bg-slate-800 px-1 rounded">./start.sh</code> and choose <strong className="text-slate-300">option 9 — Security &amp; Upgrades</strong> at any time after installation.<br/><br/>

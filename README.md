@@ -1,6 +1,6 @@
 # Mysterium Node Toolkit
 
-![Version](https://img.shields.io/badge/version-1.2.25-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Version](https://img.shields.io/badge/version-1.2.26-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 
 A professional monitoring and management dashboard for [Mysterium Network](https://mysterium.network) VPN node operators. Runs fully local on your node machine — no cloud account, no third-party service, no data leaving your server.
 
@@ -350,32 +350,32 @@ If `config/setup.json` already exists and is valid, the setup wizard is skipped 
 
 ### Step 8 — Setup wizard
 
-Connects the dashboard to your node and sets up authentication. Two modes:
+Connects the dashboard to your node and sets up authentication.
+
+**First question — where is your node?**
 
 ```
-1. Easy   — node on this machine, auto-detects port and config
-2. Custom — node on another machine, different IP, or manual settings
+1. On this machine      — auto-detect everything (recommended for most users)
+2. On another machine   — enter IP address manually (LAN / VPS)
+3. Fleet setup          — I have multiple nodes to monitor
 ```
 
-#### Easy mode
+#### Option 1 — On this machine (Easy mode)
 
-- Scans port 4050 first (bare metal), then 4449 (Docker) for a running node
-- If found: confirms port and node version automatically
-- Asks for your Node UI password:
+Fully automatic for local installs:
 
-```
-· Your node's TequilAPI is on port [port].
-  Enter the password you set in the Node UI (http://localhost:4449/ui).
-  If you never set one, try leaving it blank or use 'mystberry'.
-
-  Node UI password (press Enter if none):
-```
-
-- Dashboard port: 5000 by default, auto-suggests alternative if 5000 is in use
+- Scans port 4050 first (bare metal/LXC), then 4449 (Docker)
+- Confirms port and node version automatically
+- Asks for your Node UI password (set during Mysterium node first-time setup)
+- Dashboard port: 5000 by default, auto-suggests alternative if in use
 - Timezone: auto-detected from system
-- Optionally asks for your Polygon wallet address (0x...)
+- Optionally asks for your Polygon wallet address
+- Asks for Polygonscan API key (free at etherscan.io — without it: wallet balance updates once/hour)
+- Raspberry Pi detected automatically → log level set to WARNING to reduce SD card writes
 
-#### Custom mode
+At the end, shows local and network access URLs and explains how to open ports if the dashboard is not reachable from another device.
+
+#### Option 2 — On another machine (Custom mode)
 
 **Step 1 — Node location**
 
@@ -387,17 +387,11 @@ Connects the dashboard to your node and sets up authentication. Two modes:
 
 **Step 1b — Docker auto-detection**
 
-If localhost is selected, the wizard scans running Docker containers for a `myst` image. If found, the port is read automatically:
-
-```
-✓ Docker container detected: myst
-✓   Mapped TequilAPI port: 4449 (Docker) — bare metal uses 4050
-    We'll use this port automatically.
-```
+If localhost is selected, the wizard scans running Docker containers for a `myst` image. If found, the port is read automatically.
 
 **Step 2 — TequilAPI port**
 
-Default 4050 (bare metal) or 4449 (Docker). The wizard warns: *"PORT is a NUMBER, not an API key string!"*
+Default 4050 (bare metal/LXC) or 4449 (Docker). The wizard warns: *"PORT is a NUMBER, not an API key string!"*
 
 **Step 3 — TequilAPI authentication**
 
@@ -436,53 +430,34 @@ Auto-detected from system. Used for daily/monthly resets in earnings and traffic
 3. No auth               — local network only, NOT recommended
 ```
 
-For **API Key** — the wizard generates a key if you leave the field blank, then shows:
-
-```
-============================================================
-  IMPORTANT — SAVE YOUR API KEY
-============================================================
-
-  API Key: <your-key-here>
-
-  COPY/PASTE this key in the login screen — never type it.
-  Typing causes typos (i vs l, 5 vs 2, 0 vs O, etc).
-  Store it in a password manager or secure note now.
-  Find it later in: .env  and  config/setup.json
-============================================================
-
-  Press Enter to continue...
-```
-
-The wizard does not continue until you press Enter.
-
-For **Username + Password** — generates a password if you leave it blank:
-
-```
-============================================================
-  IMPORTANT — SAVE YOUR CREDENTIALS
-============================================================
-
-  Username : admin
-  Password : <your-password-here>
-
-  The login screen asks for these credentials.
-  Find them later in: .env  and  config/setup.json
-============================================================
-
-  Press Enter to continue...
-```
+For **API Key** — the wizard generates a key if you leave the field blank. The key is shown once — copy/paste it, never type it. Stored in `config/setup.json`.
 
 **Optional extras:**
 
 - Polygon wallet address (auto-detected from settlement history if skipped)
 - Polygonscan API key — free at etherscan.io → My Account → API Keys. Without it: wallet balance updates once/hour. With it: real-time.
-- Log level: INFO (default) / WARNING / DEBUG
+- Log level: `INFO` (default) / `WARNING` (recommended for Pi, less disk usage) / `DEBUG` (verbose)
+- Debug mode: off by default
 
-After saving, the wizard shows credentials one final time and waits for a second *"Press Enter once you have saved..."* before continuing.
+After saving, shows local and network access URLs with port-opening instructions.
+
+#### Option 3 — Fleet setup
+
+**Type 2 — Fleet master:**
+
+1. Runs the central dashboard on this machine
+2. Guides through local node connection (same as Option 2)
+3. Explains nodes.json setup for remote nodes
+4. Remote nodes added via ⊕ Add Node button in dashboard — no manual JSON editing needed
+
+**Type 3 — Lightweight backend (remote node):**
+
+1. Backend only — no browser UI, no Node.js needed
+2. Guides through local node connection
+3. Shows the toolkit URL for the fleet master: `http://THIS_IP:5000`
+4. API key found in `config/setup.json → dashboard_api_key` after setup
 
 ---
-
 ### Step 8.5 — Fleet master configuration (Type 2 only)
 
 Creates a `config/nodes.json` template and explains each field.

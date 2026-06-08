@@ -57,6 +57,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - fix: nodes.json examples updated to use port 4050 (TequilAPI) instead of 4449 (Node UI)
 - fix: port scan now tries 4050 first (bare metal), then 4449 (Docker)
 
+## v1.2.26
+- feat: setup wizard new entry question — node location instead of Easy/Custom
+- feat: fleet wizard added — guides Type 2 (fleet master) and Type 3 (lightweight backend) setup
+- feat: Easy mode now asks for Polygonscan API key
+- feat: Easy mode auto-detects Raspberry Pi — sets log level to WARNING automatically
+- feat: Easy mode wallet address explanation improved
+- feat: post-setup port reachability guide added to wizard
+- docs: README Step 8 wizard section fully rewritten to match new wizard flow
+- docs: Help section — log level and debug mode explanation added
+
 ---
 ## [1.2.15] - 2026-05-31
 ### Added

@@ -207,17 +207,22 @@ def _run_wizard_steps() -> bool:
     print_info("This wizard connects the dashboard to your Mysterium node.")
     print_info("")
 
-    # ============ MODE SELECTION: Easy vs Advanced ============
+    # ============ MODE SELECTION ============
+    print_info("Where is your Mysterium node running?")
+    print_info("")
     mode = input_choice(
-        "Setup mode:",
+        "Select your setup:",
         [
-            "Easy  — node on this machine, auto-detect port & auth",
-            "Custom — node on another machine, different IP, or advanced settings",
+            "On this machine  — auto-detect everything (recommended for most users)",
+            "On another machine  — enter IP address manually (LAN / VPS)",
+            "Fleet setup  — I have multiple nodes to monitor",
         ]
     )
 
-    if mode.startswith("Easy"):
+    if mode.startswith("On this machine"):
         return _run_easy_wizard()
+    elif mode.startswith("Fleet"):
+        return _run_fleet_wizard()
     else:
         return _run_advanced_wizard()
 
@@ -414,13 +419,160 @@ def _run_easy_wizard() -> bool:
 
     # Optional wallet address
     print_info("")
-    ben = input_text("Your Polygon wallet address (0x...) — optional, press Enter to skip", "")
+    print_info("=" * 60)
+    print_info("POLYGON WALLET ADDRESS (optional)")
+    print_info("=" * 60)
+    print_info("")
+    print_info("This is the Polygon wallet where your settled MYST lands.")
+    print_info("It is set in your node's own UI — the toolkit reads it from there.")
+    print_info("Leave blank to skip — the dashboard auto-detects it from settlement history.")
+    print_info("")
+    ben = input_text("Polygon wallet address (0x...) — press Enter to skip", "")
     if ben and ben.startswith('0x') and len(ben) == 42:
         config['beneficiary_address'] = ben
+        print_success(f"Saved: {ben[:8]}...{ben[-6:]}")
     else:
         config['beneficiary_address'] = ''
+        if ben:
+            print_warning("Invalid format — skipped. The dashboard will auto-detect it later.")
+
+    # Polygonscan API key
+    print_info("")
+    print_info("=" * 60)
+    print_info("POLYGONSCAN API KEY (optional but recommended)")
+    print_info("=" * 60)
+    print_info("")
+    print_info("Used to show your on-chain MYST balance in real-time.")
+    print_info("Without it: balance refreshes once per hour.")
+    print_info("With it:    refreshes on demand after each settlement.")
+    print_info("")
+    print_info("Get a FREE key at: https://etherscan.io → My Account → API Keys")
+    print_info("(Etherscan and Polygonscan share the same account)")
+    print_info("")
+    _poly_easy = input_text("Polygonscan API key — press Enter to skip", "")
+    if _poly_easy and len(_poly_easy) >= 20:
+        config['polygonscan_api_key'] = _poly_easy
+        print_success("API key saved.")
+    else:
+        config['polygonscan_api_key'] = ''
+        if _poly_easy:
+            print_warning("Key too short — skipped. Add it later in config/setup.json.")
+
+    # Pi detection — auto set log level to WARNING to reduce SD card writes
+    import os as _os_pi
+    _is_pi = False
+    try:
+        with open('/proc/cpuinfo') as _f:
+            _is_pi = 'Raspberry Pi' in _f.read() or 'BCM' in _f.read()
+    except Exception:
+        pass
+    if not _is_pi:
+        try:
+            import subprocess as _sp_pi
+            _model = _sp_pi.check_output(['cat', '/proc/device-tree/model'],
+                                          text=True, stderr=_sp_pi.DEVNULL).strip()
+            _is_pi = 'Raspberry Pi' in _model
+        except Exception:
+            pass
+
+    if _is_pi:
+        config['log_level'] = 'WARNING'
+        config['pi_mode'] = True
+        print_info("")
+        print_success("Raspberry Pi detected — log level set to WARNING to reduce SD card writes.")
+        print_info("  You can change this in the dashboard Settings → Pi Mode.")
+    else:
+        config['log_level'] = 'INFO'
+        config['pi_mode'] = False
 
     return _save_config(config)
+
+
+
+def _run_fleet_wizard() -> bool:
+    """Fleet setup wizard — guides through Type 2 (fleet master) or Type 3 (lightweight backend)."""
+    print_header("Fleet Setup")
+
+    print_info("Fleet mode lets you monitor multiple Mysterium nodes from one central dashboard.")
+    print_info("")
+    fleet_type = input_choice(
+        "What is this machine?",
+        [
+            "Fleet master  — central dashboard, monitors all nodes (Type 2)",
+            "Remote node   — backend only, no UI, monitored by a fleet master (Type 3)",
+        ]
+    )
+
+    if fleet_type.startswith("Fleet master"):
+        print_info("")
+        print_info("Fleet master setup:")
+        print_info("  1. This machine runs the central dashboard")
+        print_info("  2. Each remote node runs a Type 3 lightweight backend")
+        print_info("  3. You connect them via config/nodes.json")
+        print_info("")
+        print_info("First, let's configure the local node connection on this machine.")
+        print_info("Then we will set up the nodes.json for your remote nodes.")
+        print_info("")
+        input("  Press Enter to continue to the connection wizard...")
+        # Run standard advanced wizard for the local connection
+        result = _run_advanced_wizard()
+        if not result:
+            return False
+        # Now guide through nodes.json
+        print_header("Fleet Nodes Configuration")
+        print_info("Now add your remote nodes to config/nodes.json.")
+        print_info("")
+        print_info("For each remote node you need:")
+        print_info("  - IP address of the remote machine")
+        print_info("  - API key from that node's config/setup.json (dashboard_api_key)")
+        print_info("")
+        print_info("Example nodes.json entry:")
+        print_info("""  {
+    "nodes": [
+      {
+        "id": "node1",
+        "label": "My VPS Node",
+        "url": "http://NODE_IP:4050",
+        "toolkit_url": "http://NODE_IP:5000",
+        "toolkit_api_key": "API_KEY_FROM_REMOTE_CONFIG"
+      }
+    ]
+  }""")
+        print_info("")
+        print_info("The remote node's API key is in:  config/setup.json → dashboard_api_key")
+        print_info("Hot-reload: edit nodes.json while running — changes apply within 30s.")
+        print_info("")
+        print_info("Use the ⊕ Add Node button in the fleet header to add nodes via the dashboard UI.")
+        print_info("No manual nodes.json editing needed if you use the dashboard.")
+        print_info("")
+        input("  Press Enter to finish setup...")
+        return True
+
+    else:
+        # Type 3 — lightweight backend
+        print_info("")
+        print_info("Lightweight backend setup:")
+        print_info("  This machine runs a backend only — no browser UI, no Node.js needed.")
+        print_info("  The fleet master will connect to this machine via the API.")
+        print_info("")
+        print_info("After setup, give the fleet master this address:")
+
+        import socket as _sock3
+        try:
+            _s3 = _sock3.socket(_sock3.AF_INET, _sock3.SOCK_DGRAM)
+            _s3.connect(('8.8.8.8', 80))
+            _this_ip = _s3.getsockname()[0]
+            _s3.close()
+        except Exception:
+            _this_ip = 'THIS_IP'
+
+        print_info(f"  Toolkit URL:  http://{_this_ip}:5000")
+        print_info("  API key:      found in config/setup.json → dashboard_api_key after setup")
+        print_info("")
+        print_info("Make sure port 5000 is reachable from the fleet master machine.")
+        print_info("")
+        input("  Press Enter to continue to the connection wizard...")
+        return _run_advanced_wizard()
 
 
 def _run_advanced_wizard() -> bool:
@@ -872,6 +1024,26 @@ LOG_LEVEL={config.get('log_level', 'INFO')}
     except Exception:
         own_ip = 'localhost'
 
+    # Port reachability hint
+    print()
+    print_info("=" * 60)
+    print_info("ACCESSING YOUR DASHBOARD")
+    print_info("=" * 60)
+    print_info("")
+    print_success(f"Local access:    http://localhost:{dashboard_port}")
+    print_success(f"Network access:  http://{own_ip}:{dashboard_port}")
+    print_info("")
+    print_info("From another device (phone, other computer):")
+    print_info(f"  → http://{own_ip}:{dashboard_port}")
+    print_info("")
+    print_info("If you cannot reach it from another device:")
+    print_info(f"  Check UFW:    sudo ufw allow {dashboard_port}/tcp")
+    print_info(f"  Check UFW:    sudo ufw status")
+    print_info("  Behind NAT?   Forward port {dashboard_port} in your router to {own_ip}")
+    print_info("")
+    print_info("For secure remote access: use Tailscale (option 9 in the CLI menu)")
+    print_info("")
+
     input(f"{Colors.OKBLUE}  → Press Enter to continue to the dashboard menu...{Colors.ENDC}")
     print()
     print("Next steps:")
@@ -879,8 +1051,6 @@ LOG_LEVEL={config.get('log_level', 'INFO')}
     print(f"  Access locally:       http://localhost:{dashboard_port}")
     print(f"  Access from network:  http://{own_ip}:{dashboard_port}")
     print()
-    print("  Or manually:")
-    print("    source venv/bin/activate && python backend/app.py")
 
     return True
 
