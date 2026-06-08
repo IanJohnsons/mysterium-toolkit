@@ -428,6 +428,9 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
   const [newRule, setNewRule] = useState({ action:'allow', port:'', proto:'tcp', from:'' });
   const [ufwSaving, setUfwSaving] = useState(false);
   const [editUfwRule, setEditUfwRule] = useState(null); // {index, original, action, port, proto}
+  const [f2bManaged, setF2bManaged] = useState(true);
+  const [f2bManagedLoading, setF2bManagedLoading] = useState(false);
+  const [tailscale, setTailscale] = useState(null);
 
   const fmtTime = s => { s=parseInt(s); if(s<0) return 'perm'; if(s>=86400) return `${Math.round(s/86400)}d`; if(s>=3600) return `${Math.round(s/3600)}h`; if(s>=60) return `${Math.round(s/60)}m`; return `${s}s`; };
 
@@ -450,6 +453,15 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
   };
   useEffect(()=>{ loadJails(); loadUfw(); }, [backendUrl]);
   useEffect(()=>{ if(firewallData?.ufw_rules) setUfwRules(firewallData.ufw_rules); }, [firewallData]);
+  useEffect(()=>{
+    // Load fail2ban_managed setting
+    fetch(`${backendUrl}/settings`, { headers: authHeaders||{} })
+      .then(r=>r.json()).then(d=>{ if(typeof d.fail2ban_managed === 'boolean') setF2bManaged(d.fail2ban_managed); }).catch(()=>{});
+    // Load tailscale status from firewall data
+    if(firewallData?.tailscale) setTailscale(firewallData.tailscale);
+    else fetch(`${backendUrl}/firewall`, { headers: authHeaders||{} })
+      .then(r=>r.json()).then(d=>{ if(d.tailscale) setTailscale(d.tailscale); }).catch(()=>{});
+  }, [backendUrl, firewallData]);
 
   const installF2b = () => {
     setInstalling(true);
@@ -546,7 +558,7 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
           {f2bInstalled === false ? (
             <div className="p-4 border border-slate-700/40 rounded text-center">
               <p className="text-xs text-slate-400 mb-2">fail2ban is not installed.</p>
-              <p className="text-[10px] text-slate-500 mb-4">Installs SSH, dashboard and recidive protection.</p>
+              <p className="text-[10px] text-slate-500 mb-4">Protects toolkit dashboard (port 5000) against brute force login attempts.</p>
               <button onClick={installF2b} disabled={installing}
                 className="px-5 py-2 text-xs bg-violet-600 hover:bg-violet-700 text-white rounded font-semibold transition disabled:opacity-50">
                 {installing ? 'Installing…' : '⬇ Install fail2ban'}
@@ -694,6 +706,86 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
                   + Add custom jail
                 </button>
               )}
+            </div>
+          )}
+        </div>
+
+        {/* ── fail2ban managed toggle ── */}
+        {f2bInstalled && (
+          <div className="p-3 bg-slate-800/30 border border-slate-700/40 rounded-lg flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold text-slate-300 mb-0.5">Toolkit manages fail2ban</div>
+              <p className="text-[10px] text-slate-500">
+                {f2bManaged
+                  ? 'Toolkit can write to jail.local — disable if another tool (ServerGuardian etc.) manages fail2ban.'
+                  : 'Read-only mode — toolkit displays jails but never writes to jail.local.'}
+              </p>
+            </div>
+            <button
+              disabled={f2bManagedLoading}
+              onClick={async () => {
+                setF2bManagedLoading(true);
+                try {
+                  const r = await fetch(`${backendUrl}/settings/fail2ban-managed`, {
+                    method: 'POST',
+                    headers: { ...(authHeaders||{}), 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled: !f2bManaged }),
+                  });
+                  const d = await r.json();
+                  if (d.success) setF2bManaged(d.fail2ban_managed);
+                } catch(e) { console.error('fail2ban-managed toggle failed:', e); }
+                finally { setF2bManagedLoading(false); }
+              }}
+              className={`shrink-0 px-4 py-2 text-xs font-semibold rounded border transition disabled:opacity-40 ${
+                f2bManaged
+                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/30'
+                  : 'bg-slate-600/30 text-slate-400 border-slate-600/40 hover:bg-slate-600/50'
+              }`}
+            >
+              {f2bManagedLoading ? '…' : f2bManaged ? 'Managed: ON' : 'Managed: OFF'}
+            </button>
+          </div>
+        )}
+
+        {/* ── Tailscale ── */}
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">Tailscale</h4>
+            {tailscale?.installed && (
+              <span className={`text-[10px] px-2 py-0.5 rounded font-medium ${tailscale.running ? 'bg-emerald-500/20 text-emerald-400' : 'bg-yellow-500/20 text-yellow-400'}`}>
+                {tailscale.running ? 'connected' : 'not connected'}
+              </span>
+            )}
+          </div>
+          {tailscale?.installed ? (
+            <div className="p-3 bg-slate-800/30 border border-slate-700/40 rounded-lg space-y-1">
+              {tailscale.ip && (
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="text-slate-500">IP</span>
+                  <code className="text-emerald-400 font-mono">{tailscale.ip}</code>
+                  <span className="text-[10px] text-slate-600">— use this to access dashboard from other devices</span>
+                </div>
+              )}
+              {tailscale.peers > 0 && (
+                <div className="text-[10px] text-slate-500">{tailscale.peers} peer{tailscale.peers !== 1 ? 's' : ''} in your Tailscale network</div>
+              )}
+              <div className="text-[10px] text-slate-600 pt-1">
+                Dashboard via Tailscale: <code className="text-slate-400">http://{tailscale.ip || '100.x.x.x'}:5000</code>
+              </div>
+            </div>
+          ) : (
+            <div className="p-4 border border-slate-700/40 rounded text-center">
+              <p className="text-xs text-slate-400 mb-1">Tailscale is not installed.</p>
+              <p className="text-[10px] text-slate-500 mb-4">Tailscale hides your dashboard from the internet — only accessible via your private Tailscale network.</p>
+              <a
+                href="https://tailscale.com/download"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-block px-5 py-2 text-xs bg-violet-600 hover:bg-violet-700 text-white rounded font-semibold transition"
+              >
+                ↗ Install Tailscale
+              </a>
+              <p className="text-[10px] text-slate-600 mt-3">Or install via CLI menu → Security &amp; Upgrades → Tailscale</p>
             </div>
           )}
         </div>

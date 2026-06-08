@@ -119,10 +119,31 @@ pkg_install() {
 # ============ PRE-FLIGHT: PYTHON VERSION CHECK ============
 echo "Pre-flight checks..."
 PYTHON_CMD=""
-if command -v python3 &> /dev/null; then
-    PYTHON_CMD="python3"
-elif command -v python &> /dev/null; then
-    PYTHON_CMD="python"
+
+# 1. Check pyenv shims first — works even under sudo if SUDO_USER has pyenv installed.
+#    This is needed on systems like Raspberry Pi Buster where system python3 is 3.7
+#    but the user installed 3.9+ via pyenv.
+_SUDO_HOME=""
+if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+    _SUDO_HOME=$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)
+fi
+for _pyenv_candidate in \
+    "${_SUDO_HOME}/.pyenv/shims/python3" \
+    "${HOME}/.pyenv/shims/python3" \
+    "/root/.pyenv/shims/python3"; do
+    if [ -x "$_pyenv_candidate" ]; then
+        PYTHON_CMD="$_pyenv_candidate"
+        break
+    fi
+done
+
+# 2. Fall back to system python3/python if no pyenv found
+if [ -z "$PYTHON_CMD" ]; then
+    if command -v python3 &> /dev/null; then
+        PYTHON_CMD="python3"
+    elif command -v python &> /dev/null; then
+        PYTHON_CMD="python"
+    fi
 fi
 
 if [ -z "$PYTHON_CMD" ]; then
@@ -131,6 +152,7 @@ if [ -z "$PYTHON_CMD" ]; then
     echo "  Fedora/RHEL:   sudo dnf install python3 python3-pip"
     echo "  Arch:          sudo pacman -S python python-pip"
     echo "  Alpine:        apk add python3 py3-pip"
+    echo "  pyenv:         curl https://pyenv.run | bash  (then: pyenv install 3.9.18)"
     exit 1
 fi
 
@@ -140,7 +162,9 @@ PY_MINOR=$($PYTHON_CMD -c 'import sys; print(sys.version_info.minor)' 2>/dev/nul
 
 if [ "$PY_MAJOR" -lt 3 ] || ([ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 8 ]); then
     echo -e "${RED}✗ Python $PY_VER found but 3.8+ required.${NC}"
-    echo "  Upgrade: sudo apt install python3 (or use pyenv)"
+    echo "  Upgrade: sudo apt install python3"
+    echo "  Or use pyenv: curl https://pyenv.run | bash  (then: pyenv install 3.9.18 && pyenv global 3.9.18)"
+    echo "  Then re-run: sudo env PATH="\$PATH" bash bin/setup.sh"
     exit 1
 fi
 echo -e "${GREEN}✓ Python $PY_VER${NC}"
@@ -1503,8 +1527,8 @@ echo "Step 12.5: fail2ban (optional brute force protection)..."
 if command -v fail2ban-client &>/dev/null; then
     echo -e "  ${GREEN}✓ fail2ban already installed — skipping${NC}"
 else
-    echo -e "  fail2ban provides brute force protection for SSH, toolkit dashboard and Mysterium node."
-    echo -e "  ${DIM}  Jails: sshd, mysterium-dashboard (port 5000), recidive${NC}"
+    echo -e "  fail2ban provides brute force protection for your toolkit dashboard (port 5000)."
+    echo -e "  ${DIM}  Only the mysterium-dashboard jail is created — existing jails are never touched.${NC}"
     echo
     printf "  Install fail2ban? [y/N]: "
     read -r _f2b_answer </dev/tty
@@ -1518,24 +1542,13 @@ else
 failregex = ^.*\[.*\] ".*" 401
 ignoreregex =
 F2B_FILTER_EOF
-            # Detect correct banaction and backend for this system
-            _F2B_BANACTION_LINE=""
-            _F2B_BACKEND_LINE=""
-            if grep -q 'banaction.*nftables' /etc/fail2ban/jail.d/defaults-debian.conf 2>/dev/null; then
-                : # nftables inherited from defaults-debian.conf — no override needed
-            elif command -v nft &>/dev/null && ! command -v iptables &>/dev/null; then
-                _F2B_BANACTION_LINE="banaction = nftables"
-            fi
-            if ! command -v rsyslog &>/dev/null && systemctl list-units --type=service 2>/dev/null | grep -q 'systemd-journald'; then
-                _F2B_BACKEND_LINE="backend  = systemd"
-            fi
             # Remove old jail.d conf if it exists (migration to jail.local)
             _OLD_JAIL_D="/etc/fail2ban/jail.d/mysterium-toolkit.conf"
             if [ -f "$_OLD_JAIL_D" ]; then
                 $SUDO rm -f "$_OLD_JAIL_D"
                 echo -e "  ${DIM}  Migrated: removed old jail.d/mysterium-toolkit.conf${NC}"
             fi
-            # Write toolkit block into jail.local (official override file)
+            # Write toolkit block into jail.local
             _BLOCK_START="# --- Mysterium Toolkit managed jails ---"
             _BLOCK_END="# --- End Mysterium Toolkit ---"
             if $SUDO grep -q "$_BLOCK_START" "$_F2B_CONF" 2>/dev/null; then
@@ -1547,15 +1560,6 @@ F2B_FILTER_EOF
                     echo "# Managed by Mysterium Toolkit — do not edit this block manually."
                     echo "# To customize, add or override settings outside this block."
                     echo ""
-                    echo "[sshd]"
-                    echo "enabled  = true"
-                    echo "port     = ssh"
-                    [ -n "$_F2B_BACKEND_LINE"  ] && echo "$_F2B_BACKEND_LINE"
-                    [ -n "$_F2B_BANACTION_LINE" ] && echo "$_F2B_BANACTION_LINE"
-                    echo "maxretry = 5"
-                    echo "bantime  = 86400"
-                    echo "findtime = 600"
-                    echo ""
                     echo "[mysterium-dashboard]"
                     echo "enabled  = true"
                     echo "port     = 5000"
@@ -1565,20 +1569,14 @@ F2B_FILTER_EOF
                     echo "bantime  = 86400"
                     echo "findtime = 600"
                     echo ""
-                    echo "[recidive]"
-                    echo "enabled  = true"
-                    echo "logpath  = /var/log/fail2ban.log"
-                    echo "bantime  = 604800"
-                    echo "findtime = 86400"
-                    echo "maxretry = 5"
-                    echo ""
                     echo "$_BLOCK_END"
                 } | $SUDO tee -a "$_F2B_CONF" > /dev/null
+                echo -e "  ${DIM}  Created mysterium-dashboard jail (protects toolkit login on port 5000)${NC}"
             fi
 
             systemctl enable fail2ban >/dev/null 2>&1 || true
             systemctl restart fail2ban >/dev/null 2>&1 || true
-            echo -e "  ${GREEN}✓ fail2ban installed and configured${NC}"
+            echo -e "  ${GREEN}✓ fail2ban configured — mysterium-dashboard jail active${NC}"
         else
             echo -e "  ${RED}✗ fail2ban installation failed${NC}"
         fi

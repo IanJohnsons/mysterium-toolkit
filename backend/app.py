@@ -141,6 +141,7 @@ if setup_config_path.exists():
 # All error and warning messages are still captured.
 # pi_mode can be toggled live via POST /settings/pi-mode without restart.
 PI_MODE: bool = bool(setup_config.get('pi_mode', False))
+FAIL2BAN_MANAGED: bool = bool(setup_config.get('fail2ban_managed', True))
 if PI_MODE:
     logging.getLogger().setLevel(logging.WARNING)
     logger.warning("Pi mode active — log level set to WARNING to reduce SD card writes")
@@ -4244,6 +4245,33 @@ class MetricsCollector:
         except Exception:
             pass
 
+        # ── Tailscale detection ───────────────────────────────────────────
+        tailscale = {'installed': False, 'running': False, 'ip': None, 'peers': 0}
+        try:
+            import shutil as _shutil
+            if _shutil.which('tailscale'):
+                tailscale['installed'] = True
+                # Check status via tailscale status --json
+                _ts = subprocess.run(
+                    ['tailscale', 'status', '--json'],
+                    capture_output=True, timeout=5, text=True
+                )
+                if _ts.returncode == 0 and _ts.stdout.strip():
+                    import json as _json
+                    _ts_data = _json.loads(_ts.stdout)
+                    _backend = _ts_data.get('BackendState', '')
+                    tailscale['running'] = _backend == 'Running'
+                    # Get own Tailscale IP
+                    _self = _ts_data.get('Self', {})
+                    _addrs = _self.get('TailscaleIPs', [])
+                    if _addrs:
+                        tailscale['ip'] = _addrs[0]
+                    # Count peers (excluding self)
+                    _peers = _ts_data.get('Peer', {})
+                    tailscale['peers'] = len(_peers) if isinstance(_peers, dict) else 0
+        except Exception:
+            pass
+
         return {
             'status': fw_status,
             'fw_type': fw_type,
@@ -4254,6 +4282,7 @@ class MetricsCollector:
             'firewalld_rules': firewalld_rules[:100],
             'legacy_ports': legacy_ports_found,
             'fail2ban': fail2ban,
+            'tailscale': tailscale,
         }
 
     @staticmethod
@@ -6035,8 +6064,57 @@ def _f2b_all_jails():
     return list(jails.values())
 
 
+def _f2b_get_external_jail_names():
+    """Return all jail names that exist OUTSIDE the toolkit managed block.
+    Used to avoid overwriting jails managed by other tools (ServerGuardian, etc.).
+    """
+    import glob as _glob
+    import re as _re
+    names = set()
+
+    # Read jail.conf and all jail.d/*.conf files
+    config_files = (
+        ['/etc/fail2ban/jail.conf']
+        + sorted(_glob.glob('/etc/fail2ban/jail.d/*.conf'))
+    )
+    for fpath in config_files:
+        if not os.path.exists(fpath):
+            continue
+        try:
+            for line in open(fpath):
+                m = _re.match(r'^\[([^\]]+)\]', line)
+                if m and m.group(1).upper() != 'DEFAULT':
+                    names.add(m.group(1).strip())
+        except Exception:
+            pass
+
+    # Also read jail names outside the toolkit block in jail.local
+    if os.path.exists(TOOLKIT_JAIL_FILE):
+        try:
+            raw = open(TOOLKIT_JAIL_FILE).read()
+            if TOOLKIT_BLOCK_START in raw and TOOLKIT_BLOCK_END in raw:
+                bi = raw.index(TOOLKIT_BLOCK_START)
+                ei = raw.index(TOOLKIT_BLOCK_END) + len(TOOLKIT_BLOCK_END)
+                outside = raw[:bi] + raw[ei:]
+            else:
+                outside = raw
+            for line in outside.splitlines():
+                m = _re.match(r'^\[([^\]]+)\]', line)
+                if m and m.group(1).upper() != 'DEFAULT':
+                    names.add(m.group(1).strip())
+        except Exception:
+            pass
+
+    return names
+
+
 def _f2b_write_toolkit_conf(jails_data):
-    """Write toolkit jails into the managed block inside jail.local."""
+    """Write toolkit jails into the managed block inside jail.local.
+    Does nothing when fail2ban_managed is disabled — toolkit is read-only then.
+    """
+    if not FAIL2BAN_MANAGED:
+        logger.info('fail2ban_managed=false — skipping jail.local write')
+        return True
     # Read existing jail.local — preserve user content outside our block
     user_before, user_after = '', ''
     if os.path.exists(TOOLKIT_JAIL_FILE):
@@ -6306,18 +6384,23 @@ def fail2ban_install():
                 break
             except Exception:
                 continue
-        # Write toolkit jails into jail.local managed block
+        # Write toolkit jails into jail.local managed block.
+        # Only mysterium-dashboard is always created — it exists nowhere else.
+        # sshd is only added if not already managed by another tool (ServerGuardian etc.).
+        _external = _f2b_get_external_jail_names()
         _install_jails = [
-            {'name': 'sshd', 'enabled': True, 'port': 'ssh', 'filter': 'sshd',
-             'maxretry': 5, 'bantime': 86400, 'findtime': 600,
-             'logpath': '', 'backend_type': 'systemd' if backend_line else ''},
             {'name': 'mysterium-dashboard', 'enabled': True, 'port': '5000',
              'filter': 'mysterium-dashboard', 'logpath': f'{toolkit_dir}/logs/backend.log',
              'maxretry': 5, 'bantime': 86400, 'findtime': 600},
-            {'name': 'recidive', 'enabled': True, 'port': '',
-             'filter': 'recidive', 'logpath': '/var/log/fail2ban.log',
-             'maxretry': 5, 'bantime': 604800, 'findtime': 86400},
         ]
+        if 'sshd' not in _external:
+            _install_jails.append(
+                {'name': 'sshd', 'enabled': True, 'port': 'ssh', 'filter': 'sshd',
+                 'maxretry': 5, 'bantime': 86400, 'findtime': 600,
+                 'logpath': '', 'backend_type': 'systemd' if backend_line else ''}
+            )
+        else:
+            logger.info('fail2ban install: sshd jail already managed elsewhere — skipping')
         _f2b_write_toolkit_conf(_install_jails)
 
         for cmd in [
@@ -9242,6 +9325,7 @@ def get_toolkit_settings():
         'pi_mode': PI_MODE,
         'is_pi': is_pi,
         'log_level': logging.getLevelName(logging.getLogger().level),
+        'fail2ban_managed': FAIL2BAN_MANAGED,
     }), 200
 
 
@@ -9286,6 +9370,45 @@ def set_pi_mode():
         }), 200
     except Exception as e:
         logger.error(f'settings/pi-mode error: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/settings/fail2ban-managed', methods=['POST'])
+@require_auth
+def set_fail2ban_managed():
+    """Enable or disable toolkit management of fail2ban jail.local.
+
+    Body: {"enabled": true} or {"enabled": false}
+
+    When disabled:
+    - Toolkit never writes to jail.local — read-only mode
+    - Existing jails are still displayed in the dashboard
+    - Useful when another tool (ServerGuardian etc.) manages fail2ban
+
+    Takes effect immediately — no restart required.
+    """
+    global FAIL2BAN_MANAGED
+    try:
+        body = request.get_json(silent=True) or {}
+        enabled = bool(body.get('enabled', True))
+        FAIL2BAN_MANAGED = enabled
+
+        # Persist to setup.json
+        cfg_path = Path('config/setup.json')
+        try:
+            current = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+        except Exception:
+            current = {}
+        current['fail2ban_managed'] = enabled
+        cfg_path.write_text(json.dumps(current, indent=2))
+
+        logger.info(f"fail2ban_managed set to {enabled}")
+        return jsonify({
+            'success': True,
+            'fail2ban_managed': enabled,
+        }), 200
+    except Exception as e:
+        logger.error(f'settings/fail2ban-managed error: {e}')
         return jsonify({'error': str(e)}), 500
 
 

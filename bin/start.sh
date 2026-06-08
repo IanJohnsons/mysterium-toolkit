@@ -752,6 +752,136 @@ _action_exit() {
     exit 0
 }
 
+_action_security() {
+    while true; do
+        clear
+        echo
+        echo -e "  ${BOLD}╔══════════════════════════════════════════╗${NC}"
+        echo -e "  ${BOLD}║   Security & Upgrades                    ║${NC}"
+        echo -e "  ${BOLD}╚══════════════════════════════════════════╝${NC}"
+        echo
+
+        # fail2ban status
+        _f2b_status="${RED}not installed${NC}"
+        if command -v fail2ban-client &>/dev/null; then
+            if fail2ban-client ping &>/dev/null 2>&1 || sudo -n fail2ban-client ping &>/dev/null 2>&1; then
+                _f2b_status="${GREEN}running${NC}"
+            else
+                _f2b_status="${YELLOW}installed, stopped${NC}"
+            fi
+        fi
+
+        # Tailscale status
+        _ts_status="${RED}not installed${NC}"
+        _ts_ip=""
+        if command -v tailscale &>/dev/null; then
+            _ts_out=$(tailscale status 2>/dev/null || true)
+            if echo "$_ts_out" | grep -q "^[0-9]"; then
+                _ts_ip=$(tailscale ip -4 2>/dev/null || echo "")
+                _ts_status="${GREEN}connected${_ts_ip:+ — $_ts_ip}${NC}"
+            else
+                _ts_status="${YELLOW}installed, not connected${NC}"
+            fi
+        fi
+
+        echo -e "  fail2ban:  $(echo -e "$_f2b_status")"
+        echo -e "  Tailscale: $(echo -e "$_ts_status")"
+        echo
+        echo "  ── fail2ban ─────────────────────────"
+        if ! command -v fail2ban-client &>/dev/null; then
+            echo "  1. Install fail2ban (protects dashboard port 5000)"
+        else
+            echo "  1. fail2ban — manage via dashboard Security tab"
+        fi
+        echo "  ── Tailscale ────────────────────────"
+        if ! command -v tailscale &>/dev/null; then
+            echo "  2. Install Tailscale (hides dashboard from internet)"
+        else
+            echo "  2. Tailscale — connect / reconnect"
+        fi
+        echo "  ── Sudoers ──────────────────────────"
+        echo "  3. Reconfigure sudoers (fix sudo permission issues)"
+        echo "  ── ──────────────────────────────────"
+        echo "  0. Back to main menu"
+        echo
+        read -p "  Select (0-3): " _sec_choice
+        case "$_sec_choice" in
+            1)
+                if ! command -v fail2ban-client &>/dev/null; then
+                    echo
+                    echo -e "  Installing fail2ban..."
+                    if apt-get install -y fail2ban >/dev/null 2>&1; then
+                        echo -e "  ${GREEN}✓ fail2ban installed${NC}"
+                        echo -e "  ${DIM}  Configure jails via the dashboard Security tab${NC}"
+                    else
+                        echo -e "  ${RED}✗ Installation failed — try: sudo apt install fail2ban${NC}"
+                    fi
+                else
+                    echo
+                    echo -e "  ${DIM}  Open the dashboard and go to Security tab to manage fail2ban jails.${NC}"
+                    echo -e "  ${DIM}  Dashboard: http://$(hostname -I | awk '{print $1}' 2>/dev/null || echo localhost):${DASHBOARD_PORT:-5000}${NC}"
+                fi
+                echo
+                echo "  Press Enter to continue..."
+                read -r
+                ;;
+            2)
+                echo
+                if ! command -v tailscale &>/dev/null; then
+                    echo -e "  ${BOLD}Installing Tailscale...${NC}"
+                    echo -e "  ${DIM}  This installs Tailscale VPN so the dashboard is only reachable${NC}"
+                    echo -e "  ${DIM}  via your private Tailscale network — not exposed to the internet.${NC}"
+                    echo
+                    printf "  Continue? [y/N]: "
+                    read -r _ts_answer
+                    if [[ "$_ts_answer" =~ ^[Yy]$ ]]; then
+                        curl -fsSL https://tailscale.com/install.sh | sh
+                        if command -v tailscale &>/dev/null; then
+                            echo -e "  ${GREEN}✓ Tailscale installed${NC}"
+                            echo
+                            echo -e "  ${BOLD}Next steps:${NC}"
+                            echo -e "  ${DIM}  1. Run: sudo tailscale up${NC}"
+                            echo -e "  ${DIM}  2. Open the URL shown and authenticate${NC}"
+                            echo -e "  ${DIM}  3. Your Tailscale IP will be in the 100.x.x.x range${NC}"
+                            echo -e "  ${DIM}  4. Access dashboard via http://100.x.x.x:5000${NC}"
+                            echo -e "  ${DIM}  5. Optionally block port 5000 from internet: sudo ufw deny 5000${NC}"
+                            echo -e "  ${DIM}     Then allow Tailscale: sudo ufw allow in on tailscale0${NC}"
+                        else
+                            echo -e "  ${RED}✗ Installation failed${NC}"
+                        fi
+                    else
+                        echo -e "  ${DIM}  Skipped${NC}"
+                    fi
+                else
+                    echo -e "  ${BOLD}Tailscale connect${NC}"
+                    echo
+                    echo -e "  Running: sudo tailscale up"
+                    sudo tailscale up 2>&1 || tailscale up 2>&1 || echo -e "  ${RED}✗ tailscale up failed — try manually: sudo tailscale up${NC}"
+                fi
+                echo
+                echo "  Press Enter to continue..."
+                read -r
+                ;;
+            3)
+                echo
+                echo -e "  ${BOLD}Reconfiguring sudoers...${NC}"
+                if [ -f "$TOOLKIT_DIR/bin/setup.sh" ]; then
+                    # Re-run only the sudoers section via update.sh
+                    bash "$TOOLKIT_DIR/update.sh" 2>&1 | grep -i "sudoers\|✓\|✗\|⚠" || true
+                    echo -e "  ${GREEN}✓ Done — sudoers updated via update.sh${NC}"
+                else
+                    echo -e "  ${RED}✗ setup.sh not found${NC}"
+                fi
+                echo
+                echo "  Press Enter to continue..."
+                read -r
+                ;;
+            0) break ;;
+            *) echo -e "  ${RED}Invalid choice${NC}"; sleep 1 ;;
+        esac
+    done
+}
+
 # ── Menu loop ────────────────────────────────────────────────────────────────
 
 while true; do
@@ -803,9 +933,10 @@ while true; do
         echo "  4. System Diagnostics"
         echo "  5. Maintenance"
         echo "  6. Autostart on Boot"
+        echo "  7. Security & Upgrades"
         echo "  0. Exit"
         echo
-        read -p "  Select (0-6): " choice
+        read -p "  Select (0-7): " choice
         case $choice in
             1) _action_start_backend ;;
             2) _action_stop ;;
@@ -813,6 +944,7 @@ while true; do
             4) _action_diagnostics ;;
             5) _action_maintenance ;;
             6) _action_autostart ;;
+            7) _action_security ;;
             0) _action_exit ;;
             *) echo -e "  ${RED}Invalid choice${NC}"; sleep 1 ;;
         esac
@@ -829,9 +961,10 @@ while true; do
         echo "  6. System Diagnostics"
         echo "  7. Maintenance"
         echo "  8. Autostart on Boot"
+        echo "  9. Security & Upgrades"
         echo "  0. Exit"
         echo
-        read -p "  Select (0-8): " choice
+        read -p "  Select (0-9): " choice
         case $choice in
             1) _action_start_dashboard ;;
             2) _action_stop ;;
@@ -841,6 +974,7 @@ while true; do
             6) _action_diagnostics ;;
             7) _action_maintenance ;;
             8) _action_autostart ;;
+            9) _action_security ;;
             0) _action_exit ;;
             *) echo -e "  ${RED}Invalid choice${NC}"; sleep 1 ;;
         esac

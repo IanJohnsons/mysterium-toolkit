@@ -7,6 +7,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - fix: auto-update service exit code 1 when up-to-date (add `exit 0` to wrapper script)
 - fix: fleet Add Node input fields uneditable due to nested component definition causing remount on every render
 
+## v1.2.17
+- fix: setup.sh Python check now detects pyenv shims under sudo (Raspberry Pi Buster + other EOL systems)
+- fix: fail2ban only creates `mysterium-dashboard` jail — SSH and other jails managed by other tools are never touched
+- fix: update.sh sudoers rewritten in multi-line heredoc format (fixes Parrot OS and other security-hardened distros)
+- feat: Tailscale detection in firewall data (installed/running/IP/peers)
+- feat: Tailscale status card in Security tab with install guide
+- feat: fail2ban managed toggle in Security tab (disable to prevent toolkit from writing jail.local)
+- feat: Security & Upgrades menu in CLI (option 9) — install fail2ban, Tailscale wizard, reconfigure sudoers
+
 ---
 ## [1.2.15] - 2026-05-31
 ### Added
