@@ -711,13 +711,13 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
         </div>
 
         {/* ── fail2ban managed toggle ── */}
-        {f2bInstalled && (
+        {f2bInstalled !== false && (
           <div className="p-3 bg-slate-800/30 border border-slate-700/40 rounded-lg flex items-center justify-between gap-3">
             <div>
               <div className="text-xs font-semibold text-slate-300 mb-0.5">Toolkit manages fail2ban</div>
               <p className="text-[10px] text-slate-500">
                 {f2bManaged
-                  ? 'Toolkit can write to jail.local — disable if another tool (ServerGuardian etc.) manages fail2ban.'
+                  ? 'Toolkit can write to jail.local — disable if fail2ban is already managed by another tool on this system.'
                   : 'Read-only mode — toolkit displays jails but never writes to jail.local.'}
               </p>
             </div>

@@ -6026,10 +6026,10 @@ def _f2b_all_jails():
             data = _f2b_read_conf(fpath)
         except Exception:
             continue
-        is_toolkit = fpath == TOOLKIT_JAIL_FILE and name in _toolkit_names
         for name, vals in data.items():
             if name == 'DEFAULT':
                 continue
+            is_toolkit = fpath == TOOLKIT_JAIL_FILE and name in _toolkit_names
             if name in jails:
                 if is_toolkit:
                     jails[name]['is_toolkit'] = True
@@ -6216,7 +6216,8 @@ def fail2ban_get_jails():
         import shutil
         if not shutil.which('fail2ban-client'):
             return jsonify({'ok': False, 'error': 'fail2ban not installed'}), 200
-        jails = _f2b_all_jails()
+        # Only return toolkit-managed jails — external jails (ServerGuardian etc.) are not shown
+        jails = [j for j in _f2b_all_jails() if j.get('is_toolkit', False)]
         # Check if running
         running = False
         try:

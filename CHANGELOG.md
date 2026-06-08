@@ -16,6 +16,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - feat: fail2ban managed toggle in Security tab (disable to prevent toolkit from writing jail.local)
 - feat: Security & Upgrades menu in CLI (option 9) — install fail2ban, Tailscale wizard, reconfigure sudoers
 
+## v1.2.18
+- fix: `_f2b_all_jails()` is_toolkit computed inside inner loop — prevents wrong toolkit label on external jails (sshd, nginx-botsearch etc.)
+- fix: fail2ban_get_jails now only returns toolkit-managed jails — external jails never shown in dashboard
+- fix: fail2ban managed toggle now renders correctly regardless of jail load state
+- fix: removed mention of specific tool names from fail2ban managed toggle description
+
 ---
 ## [1.2.15] - 2026-05-31
 ### Added
