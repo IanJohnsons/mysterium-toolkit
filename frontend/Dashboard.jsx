@@ -411,7 +411,7 @@ const ConsumerRow = ({ c }) => (
   </div>
 );
 
-const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
+const SecurityPage = ({ backendUrl, localUrl, authHeaders, firewallData }) => {
   const [f2bJails, setF2bJails] = useState(null);
   const [f2bLoading, setF2bLoading] = useState(false);
   const [f2bSaving, setF2bSaving] = useState(false);
@@ -454,7 +454,7 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
   // Load fail2ban_managed setting once on mount — NOT on firewallData change
   // firewallData refreshes every 5s and would reset the toggle state
   useEffect(()=>{
-    fetch(`${backendUrl}/settings`, { headers: authHeaders||{} })
+    fetch(`${localUrl}/settings`, { headers: authHeaders||{} })
       .then(r=>r.json()).then(d=>{ if(typeof d.fail2ban_managed === 'boolean') setF2bManaged(d.fail2ban_managed); }).catch(()=>{});
   }, [backendUrl]);
   // Tailscale status — update from firewallData when available
@@ -464,7 +464,7 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
 
   const installF2b = () => {
     setInstalling(true);
-    fetch(`${backendUrl}/system/fail2ban/install`, { method:'POST', headers: authHeaders||{} })
+    fetch(`${localUrl}/system/fail2ban/install`, { method:'POST', headers: authHeaders||{} })
       .then(r=>r.json()).then(d=>{ setInstalling(false); if(d.ok){ loadJails(); } else setF2bMsg({ok:false,text:d.error}); })
       .catch(()=>{ setInstalling(false); setF2bMsg({ok:false,text:'Install failed'}); });
   };
@@ -694,7 +694,7 @@ const SecurityPage = ({ backendUrl, authHeaders, firewallData }) => {
               onClick={async () => {
                 setF2bManagedLoading(true);
                 try {
-                  const r = await fetch(`${backendUrl}/settings/fail2ban-managed`, {
+                  const r = await fetch(`${localUrl}/settings/fail2ban-managed`, {
                     method: 'POST',
                     headers: { ...(authHeaders||{}), 'Content-Type': 'application/json' },
                     body: JSON.stringify({ enabled: !f2bManaged }),
@@ -3968,6 +3968,7 @@ const MysteriumDashboard = () => {
           {showSecurity && (
             <SecurityPage
               backendUrl={getNodeAwareUrl()}
+              localUrl={backendUrlRef.current}
               authHeaders={authHeaderRef.current}
               firewallData={metrics.firewall}
             />
