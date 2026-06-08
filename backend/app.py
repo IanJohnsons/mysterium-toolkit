@@ -213,14 +213,14 @@ def local_today() -> str:
 
 # ============ CONFIGURATION ============
 node_host = setup_config.get('node_host', 'localhost')
-node_port = setup_config.get('node_port', 4449)  # 4449 = standard Mysterium port
+node_port = setup_config.get('node_port', 4050)  # 4050 = TequilAPI default (bare metal/LXC)
 node_api_from_env = os.getenv('MYSTERIUM_NODE_API', '')
 
 # Multi-node support:
-# Option 1: MYSTERIUM_NODE_APIS=http://localhost:4449,http://localhost:4450
-# Option 2: MYSTERIUM_NODE_PORTS=4449,4450 (assumes localhost)
-# Option 3: Single MYSTERIUM_NODE_API=http://localhost:4449 (backwards compatible)
-# Option 4: setup_config node_ports: [4449, 4450]
+# Option 1: MYSTERIUM_NODE_APIS=http://localhost:4050,http://localhost:4051
+# Option 2: MYSTERIUM_NODE_PORTS=4050,4051 (assumes localhost)
+# Option 3: Single MYSTERIUM_NODE_API=http://localhost:4050 (backwards compatible)
+# Option 4: setup_config node_ports: [4050, 4051]
 # Option 5: nodes.json file (v3.0.0 — full multi-node fleet monitoring)
 
 def _normalize_url(url):
@@ -6940,7 +6940,7 @@ def probe_fleet_node():
 @require_auth
 def test_fleet_node(node_id):
     """Connectivity test for a specific fleet node.
-    Tests both TequilAPI (port 4449) and toolkit peer API (port 5000).
+    Tests both TequilAPI (port 4050) and toolkit peer API (port 5000).
     Useful for diagnosing port-forwarding issues without a full restart.
     """
     node_entry = next((n for n in _node_registry if n['id'] == node_id), None)
@@ -8858,7 +8858,7 @@ def settle_earnings():
                     'error': (f'All settle endpoints returned errors. '
                               f'Last: HTTP {last_status}: {last_body}'),
                     'hint':  ('Run on your node: '
-                              'curl -s -u myst:myst http://localhost:4449/tequilapi/doc '
+                              'curl -s -u myst:myst http://localhost:4050/tequilapi/doc '
                               '| python3 -c "import sys,json; d=json.load(sys.stdin); '
                               '[print(p) for p in d[\"paths\"] if \"settle\" in p]"'),
                 }), 500

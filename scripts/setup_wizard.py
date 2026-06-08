@@ -115,7 +115,7 @@ def input_choice(prompt: str, options: list) -> str:
         except ValueError:
             print_error("Please enter a valid number")
 
-def input_port(prompt: str, default: str = "4449") -> int:
+def input_port(prompt: str, default: str = "4050") -> int:
     """Get and validate a port number"""
     while True:
         try:
@@ -236,7 +236,7 @@ def _run_easy_wizard() -> bool:
     found_version = None
 
     import base64
-    for port in [4449, 4050, 14449, 14050]:
+    for port in [4050, 4449]:
         try:
             import requests as _req
             resp = _req.get(f"http://localhost:{port}/healthcheck", timeout=2)
@@ -488,12 +488,12 @@ def _run_advanced_wizard() -> bool:
         if docker_detected:
             print_info("Docker container found — common ports: 4449 (default Docker), 4050 (bare metal)")
         else:
-            print_info("Default port is 4449 (Node UI) or 4050 (custom config)")
+            print_info("Default port is 4050 (bare metal/LXC) or 4449 (Docker container)")
         print_warning("PORT is a NUMBER, not an API key string!")
-        print_info("Examples: 4050, 4449, 14050, 5000")
+        print_info("Examples: 4050 (bare metal), 4449 (Docker)")
         print()
 
-        default_port = "4449"  # Mysterium node default is always 4449
+        default_port = "4050"  # TequilAPI default for bare metal installs
         config['node_port'] = input_port("Enter TequilAPI port number", default_port)
     print_success(f"TequilAPI port set to: {config['node_port']}")
 
@@ -538,8 +538,8 @@ def _run_advanced_wizard() -> bool:
         print_warning("  1. Is Mysterium Node running?")
         print_warning("  2. Is the host/port correct?")
         print_warning("  3. Is the username/password correct?")
-        print_warning("  4. LAN/VPS: check firewall allows port 4449")
-        print_warning("  5. Docker: make sure the container was started with -p 4449:4449")
+        print_warning("  4. LAN/VPS: check firewall allows port 4050 (bare metal) or 4449 (Docker)")
+        print_warning("  5. Docker: make sure the container was started with -p 4449:4449 or -p 4050:4050")
 
         retry = input_choice(
             "Try different settings?",

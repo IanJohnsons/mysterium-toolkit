@@ -1,6 +1,6 @@
 # Mysterium Node Toolkit
 
-![Version](https://img.shields.io/badge/version-1.2.23-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Version](https://img.shields.io/badge/version-1.2.25-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 
 A professional monitoring and management dashboard for [Mysterium Network](https://mysterium.network) VPN node operators. Runs fully local on your node machine — no cloud account, no third-party service, no data leaving your server.
 
@@ -35,7 +35,7 @@ The toolkit needs a running Mysterium node to monitor. This is the first thing s
 1. systemd service `mysterium-node` — active status
 2. Docker container named `myst` — running state
 3. Process list — `myst` binary
-4. TequilAPI responding on `localhost:4449`
+4. TequilAPI responding on `localhost:4050`
 
 **Node found** — prints `✓ Mysterium node detected` and hands control back to setup.sh.
 
@@ -123,7 +123,7 @@ On success:
 
 ```
 ✓ Container is running!
-· TequilAPI available at: http://localhost:4449
+· TequilAPI available at: http://localhost:4449 (Node UI) / 4050 (TequilAPI)
 ```
 
 > **Proxmox / LXC containers:** enable `NET_ADMIN` before running. In the Proxmox web UI go to container → Options → Features → enable nesting. In the LXC config add `lxc.cap.keep: net_admin`. Without this, WireGuard tunnel creation fails.
@@ -213,7 +213,7 @@ If the automatic method fails, the manual fallback is shown:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 IMPORTANT: Complete your node setup in the browser:
 
-  1. Open http://YOUR_SERVER_IP:4449/ui
+  1. Open http://YOUR_SERVER_IP:4449/ui  (Node UI)
      (replace YOUR_SERVER_IP with this machine's IP)
 
   2. Log in and accept the Terms & Conditions
@@ -359,13 +359,13 @@ Connects the dashboard to your node and sets up authentication. Two modes:
 
 #### Easy mode
 
-- Scans port 4449 for a running node
+- Scans port 4050 first (bare metal), then 4449 (Docker) for a running node
 - If found: confirms port and node version automatically
 - Asks for your Node UI password:
 
 ```
 · Your node's TequilAPI is on port [port].
-  Enter the password you set in the Node UI (http://localhost:4449).
+  Enter the password you set in the Node UI (http://localhost:4449/ui).
   If you never set one, try leaving it blank or use 'mystberry'.
 
   Node UI password (press Enter if none):
@@ -391,13 +391,13 @@ If localhost is selected, the wizard scans running Docker containers for a `myst
 
 ```
 ✓ Docker container detected: myst
-✓   Mapped TequilAPI port: 4449
+✓   Mapped TequilAPI port: 4449 (Docker) — bare metal uses 4050
     We'll use this port automatically.
 ```
 
 **Step 2 — TequilAPI port**
 
-Default 4449. The wizard warns: *"PORT is a NUMBER, not an API key string!"*
+Default 4050 (bare metal) or 4449 (Docker). The wizard warns: *"PORT is a NUMBER, not an API key string!"*
 
 **Step 3 — TequilAPI authentication**
 
@@ -405,7 +405,7 @@ Default 4449. The wizard warns: *"PORT is a NUMBER, not an API key string!"*
 TequilAPI Authentication — this is your Node UI password.
 
 Where to find your password:
-  Open http://localhost:4449/ui in your browser.
+  Open http://localhost:4449/ui in your browser (Node UI port — always 4449).
   The password was shown ONCE when you first set up your node.
   It looks like: xK9#mP2$vL7@nQ4w  (random, unique per install)
 
@@ -811,14 +811,14 @@ Each node runs its own toolkit backend. The fleet master reads data from each no
     {
       "id": "vps",
       "label": "My VPS Node",
-      "url": "http://localhost:4449",
+      "url": "http://localhost:4050",
       "toolkit_url": "http://localhost:5000",
       "toolkit_api_key": "VPS_API_KEY_HERE"
     },
     {
       "id": "home",
       "label": "Home Node",
-      "url": "http://YOUR_HOME_IP:4449",
+      "url": "http://YOUR_HOME_IP:4050",
       "toolkit_url": "http://YOUR_HOME_IP:5000",
       "toolkit_api_key": "HOME_API_KEY_HERE"
     }
@@ -1002,6 +1002,26 @@ Rules are persisted automatically:
 - `nftables` → written back to `/etc/nftables.conf`
 - `firewalld` → `--permanent` on all rules, then `--reload`
 - `ufw` → `ufw allow`; enabled automatically if inactive
+
+---
+
+## Adding Security After Install
+
+Skipped fail2ban or Tailscale during setup? No need to reinstall. Run `./start.sh` and choose **option 9 — Security & Upgrades** at any time:
+
+```bash
+cd mysterium-toolkit
+./start.sh
+# → option 9: Security & Upgrades
+```
+
+| Option | What it does |
+|--------|-------------|
+| 1 | Install fail2ban and protect port 5000 against brute force |
+| 2 | Install Tailscale — hides dashboard from internet |
+| 3 | Reconfigure sudoers — fix sudo permission issues |
+
+After installing fail2ban, configure it via the **🛡 Security** tab in the dashboard. After installing Tailscale, run `sudo tailscale up` and authenticate — your Tailscale IP then appears in the Security tab.
 
 ---
 

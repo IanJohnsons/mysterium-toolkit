@@ -45,6 +45,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## v1.2.23
 - fix: fail2ban start/stop use fail2ban-client instead of systemctl — fixes permission error on non-root installs
 
+## v1.2.24
+- fix: Help section autostart option numbers corrected (8 for Type1/2, 6 for Type3)
+- fix: setup.sh Step 13 key tips corrected — option 8 autostart, option 9 security
+- docs: Help section now explains security can be added after install via option 9
+- docs: README new section 'Adding Security After Install'
+
+## v1.2.25
+- fix: TequilAPI port corrected to 4050 throughout setup_wizard.py, app.py, README and Dashboard.jsx
+- fix: removed non-existent ports 14449/14050 from port scan
+- fix: nodes.json examples updated to use port 4050 (TequilAPI) instead of 4449 (Node UI)
+- fix: port scan now tries 4050 first (bare metal), then 4449 (Docker)
+
 ---
 ## [1.2.15] - 2026-05-31
 ### Added

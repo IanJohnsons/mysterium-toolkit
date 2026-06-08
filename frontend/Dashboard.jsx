@@ -3848,14 +3848,14 @@ const MysteriumDashboard = () => {
     {
       "id": "vps",
       "label": "My VPS Node",
-      "url": "http://localhost:4449",
+      "url": "http://localhost:4050",
       "toolkit_url": "http://localhost:5000",
       "toolkit_api_key": "YOUR_VPS_API_KEY"
     },
     {
       "id": "home",
       "label": "Home Node",
-      "url": "http://YOUR_HOME_IP:4449",
+      "url": "http://YOUR_HOME_IP:4050",
       "toolkit_url": "http://YOUR_HOME_IP:5000",
       "toolkit_api_key": "YOUR_HOME_API_KEY"
     }
@@ -3877,8 +3877,8 @@ const MysteriumDashboard = () => {
                   <p className="text-slate-400">Setup (setup.sh) runs kernel optimisations automatically at step 9 — no manual commands needed. Creates: <code className="bg-slate-800 px-1 rounded">/etc/sysctl.d/99-mysterium-node.conf</code> (kernel network params), <code className="bg-slate-800 px-1 rounded">mysterium-cpu-governor.service</code> (CPU performance on boot), <code className="bg-slate-800 px-1 rounded">tcp_bbr.conf</code> (BBR on boot), <code className="bg-slate-800 px-1 rounded">mysterium-rps-tuning.service</code> (NIC/RPS on boot). All survive reboot. If you skipped setup or upgraded from an older version, use the System Health panel to apply and persist missing fixes.</p>
                   <p className="text-slate-400 mt-1"><strong className="text-slate-300">Existing config detection</strong> — if <code className="bg-slate-800 px-1 rounded">config/setup.json</code> already exists when you run setup.sh, you will be asked whether to keep it. Choosing yes skips the entire setup wizard and reconstructs <code className="bg-slate-800 px-1 rounded">.env</code> from the existing config automatically. Your node password, API key, port and all other settings are preserved.</p>
                   <p className="text-slate-400 mt-1"><strong className="text-slate-300">nodes.json migration</strong> — when setup.sh detects a previous toolkit installation, it automatically copies <code className="bg-slate-800 px-1 rounded">config/nodes.json</code> (fleet node list) alongside earnings, sessions and traffic databases. On update via update.sh, nodes.json is backed up before git pull and restored if the pull would overwrite it.</p>
-                  <p className="text-slate-400 mt-1"><strong className="text-slate-300">Autostart (option 9)</strong> — installs a systemd service <code className="bg-slate-800 px-1 rounded">mysterium-toolkit</code> that starts the backend automatically at every boot. The service starts <strong className="text-slate-300">after</strong> the Mysterium node service so snapshots are never missed at boot. Restarts automatically after crashes (15 second delay, up to 5 retries). Works on laptops and VPS — no login required.</p>
-                  <p className="text-slate-400 mt-1"><span className="text-amber-400 font-semibold">Type 3 (lightweight) autostart order:</span> start the backend manually first via option 1 or <code className="bg-slate-800 px-1 rounded">./start.sh</code>, <strong className="text-slate-300">then</strong> activate autostart via option 9. Activating autostart before the backend is running will fail on this node type.</p>
+                  <p className="text-slate-400 mt-1"><strong className="text-slate-300">Autostart (option 8)</strong> — installs a systemd service <code className="bg-slate-800 px-1 rounded">mysterium-toolkit</code> that starts the backend automatically at every boot. The service starts <strong className="text-slate-300">after</strong> the Mysterium node service so snapshots are never missed at boot. Restarts automatically after crashes (15 second delay, up to 5 retries). Works on laptops and VPS — no login required.</p>
+                  <p className="text-slate-400 mt-1"><span className="text-amber-400 font-semibold">Type 3 (lightweight) autostart order:</span> start the backend manually first via option 1 or <code className="bg-slate-800 px-1 rounded">./start.sh</code>, <strong className="text-slate-300">then</strong> activate autostart via option 6 (Type 3). Activating autostart before the backend is running will fail on this node type.</p>
                   <p className="text-slate-400 mt-1"><span className="text-amber-400 font-semibold">First-enable tip:</span> on the first enable, the service may show a warning and fail within the 25s window — this is normal. Systemd auto-retries after 15s. If still failed: <strong className="text-slate-300">disable → wait 10s → enable again</strong>. The second attempt always succeeds because the port is fully free by then.</p>
                 </div>
 
@@ -3914,7 +3914,7 @@ const MysteriumDashboard = () => {
                 <div>
                   <h4 className="text-emerald-400 font-semibold mb-1">CLI Menu — Security &amp; Upgrades (option 9)</h4>
                   <p className="text-slate-400">
-                    Option 9 in the CLI menu (<code className="bg-slate-800 px-1 rounded">./start.sh</code>) opens a Security &amp; Upgrades submenu:<br/>
+                    Already installed the toolkit but skipped fail2ban or Tailscale during setup? No need to reinstall. Run <code className="bg-slate-800 px-1 rounded">./start.sh</code> and choose <strong className="text-slate-300">option 9 — Security &amp; Upgrades</strong> at any time after installation.<br/><br/>
                     <strong className="text-slate-300">1. fail2ban</strong> — install fail2ban if not present; if installed, directs to the dashboard Security tab for configuration.<br/>
                     <strong className="text-slate-300">2. Tailscale</strong> — installs Tailscale and runs <code className="bg-slate-800 px-1 rounded">sudo tailscale up</code> to connect.<br/>
                     <strong className="text-slate-300">3. Reconfigure sudoers</strong> — re-runs <code className="bg-slate-800 px-1 rounded">update.sh</code> to write the latest sudoers rules. Useful after OS updates or permission issues.

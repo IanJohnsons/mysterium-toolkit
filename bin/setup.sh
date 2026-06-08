@@ -1006,7 +1006,7 @@ case "$_FW_TYPE" in
     firewalld) _firewalld_reload ;;
 esac
 
-echo -e "  ${DIM}Node UI accessible at: http://$(python3 -c "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.connect(('8.8.8.8',80)); print(s.getsockname()[0]); s.close()" 2>/dev/null || echo "YOUR_IP"):4449/ui${NC}"
+echo -e "  ${DIM}Node UI: http://$(python3 -c "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.connect(('8.8.8.8',80)); print(s.getsockname()[0]); s.close()" 2>/dev/null || echo "YOUR_IP"):4449/ui  (TequilAPI on port 4050)${NC}"
 echo
     echo -e "  ${DIM}─────────────────────────────────────────────${NC}"
     echo -e "  ${GREEN}Firewall configuration done. Press Enter to continue...${NC}"
@@ -1596,7 +1596,8 @@ echo -e "  ${GREEN}✓ Dashboard:${NC}  http://$(hostname -I | awk '{print $1}' 
 echo -e "  ${GREEN}✓ Config:${NC}     $TOOLKIT_DIR/config/setup.json"
 echo
 echo -e "  ${CYAN}Key tips:${NC}"
-echo -e "  ${DIM}  • Option 9  — enable autostart so toolkit survives reboots${NC}"
+echo -e "  ${DIM}  • Option 8  — enable autostart so toolkit survives reboots${NC}"
+echo -e "  ${DIM}  • Option 9  — Security & Upgrades (fail2ban, Tailscale) — add security at any time${NC}"
 echo -e "  ${DIM}  • Option 4  — open the CLI dashboard (terminal UI)${NC}"
 echo -e "  ${DIM}  • Option 7  — maintenance, uninstall, cleanup old versions${NC}"
 if [ "$SETUP_MODE" = "2" ]; then
@@ -1612,9 +1613,9 @@ echo -e "  ${YELLOW}Lightweight backend:${NC}"
 echo -e "  ${DIM}  • This node serves /peer/data for the fleet master${NC}"
 echo -e "  ${DIM}  • Fleet master URL for this node: http://$(hostname -I | awk '{print $1}' 2>/dev/null || echo 'THIS_IP'):${DASHBOARD_PORT:-5000}${NC}"
 echo
-echo -e "  ${YELLOW}  ⚠ Autostart (option 9) — important order:${NC}"
+echo -e "  ${YELLOW}  ⚠ Autostart (option 6) — important order:${NC}"
 echo -e "  ${DIM}    1. First start the backend manually via option 1 or ./start.sh${NC}"
-echo -e "  ${DIM}    2. Only then activate autostart via option 9 in the menu${NC}"
+echo -e "  ${DIM}    2. Only then activate autostart via option 6 in the menu${NC}"
 echo -e "  ${DIM}    Activating autostart before the backend runs will fail on this node type.${NC}"
 fi
 echo
