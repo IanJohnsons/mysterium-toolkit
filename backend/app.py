@@ -6365,7 +6365,7 @@ def fail2ban_install():
 
         sshd_extras = banaction_line + backend_line
         # Write filter file
-        filter_content = '[Definition]\nfailregex = ^.*\\[.*\\] ".*" 401\nignoreregex =\n'
+        filter_content = '[Definition]\nfailregex = ^<HOST> -.*".*" 401\nignoreregex =\n'
         for prefix in [[], ['sudo', '-n']]:
             try:
                 r = subprocess.run(
@@ -6449,14 +6449,15 @@ def fail2ban_reload():
 def fail2ban_start():
     """Start fail2ban service."""
     try:
+        # Try fail2ban-client first (in sudoers NOPASSWD), fall back to systemctl
         for prefix in [[], ['sudo', '-n']]:
-            try:
-                r = subprocess.run(prefix + ['systemctl', 'start', 'fail2ban'],
-                                   capture_output=True, timeout=15, text=True)
-                if r.returncode == 0:
-                    return jsonify({'ok': True, 'message': 'fail2ban started'}), 200
-            except Exception:
-                continue
+            for cmd in [['fail2ban-client', 'start'], ['systemctl', 'start', 'fail2ban']]:
+                try:
+                    r = subprocess.run(prefix + cmd, capture_output=True, timeout=15, text=True)
+                    if r.returncode == 0:
+                        return jsonify({'ok': True, 'message': 'fail2ban started'}), 200
+                except Exception:
+                    continue
         return jsonify({'ok': False, 'error': 'Could not start fail2ban'}), 200
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 200
@@ -6467,14 +6468,15 @@ def fail2ban_start():
 def fail2ban_stop():
     """Stop fail2ban service."""
     try:
+        # Try fail2ban-client first (in sudoers NOPASSWD), fall back to systemctl
         for prefix in [[], ['sudo', '-n']]:
-            try:
-                r = subprocess.run(prefix + ['systemctl', 'stop', 'fail2ban'],
-                                   capture_output=True, timeout=15, text=True)
-                if r.returncode == 0:
-                    return jsonify({'ok': True, 'message': 'fail2ban stopped'}), 200
-            except Exception:
-                continue
+            for cmd in [['fail2ban-client', 'stop'], ['systemctl', 'stop', 'fail2ban']]:
+                try:
+                    r = subprocess.run(prefix + cmd, capture_output=True, timeout=15, text=True)
+                    if r.returncode == 0:
+                        return jsonify({'ok': True, 'message': 'fail2ban stopped'}), 200
+                except Exception:
+                    continue
         return jsonify({'ok': False, 'error': 'Could not stop fail2ban'}), 200
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 200

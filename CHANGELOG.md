@@ -42,6 +42,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## v1.2.22
 - fix: SecurityPage settings routes (fail2ban managed toggle, install) use local backend URL instead of fleet proxy — fixes 403 FORBIDDEN in fleet context
 
+## v1.2.23
+- fix: fail2ban start/stop use fail2ban-client instead of systemctl — fixes permission error on non-root installs
+
 ---
 ## [1.2.15] - 2026-05-31
 ### Added

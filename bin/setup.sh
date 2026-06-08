@@ -1539,7 +1539,7 @@ else
             _F2B_FILTER="/etc/fail2ban/filter.d/mysterium-dashboard.conf"
             tee "$_F2B_FILTER" > /dev/null << 'F2B_FILTER_EOF'
 [Definition]
-failregex = ^.*\[.*\] ".*" 401
+failregex = ^<HOST> -.*".*" 401
 ignoreregex =
 F2B_FILTER_EOF
             # Remove old jail.d conf if it exists (migration to jail.local)
