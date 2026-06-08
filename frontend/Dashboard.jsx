@@ -3896,6 +3896,39 @@ const MysteriumDashboard = () => {
                 </div>
 
                 <div>
+                  <h4 className="text-emerald-400 font-semibold mb-1">Security Tab — fail2ban &amp; Tailscale</h4>
+                  <p className="text-slate-400">
+                    The Security tab (scroll down or click 🛡 Security) has three sections: <strong className="text-slate-300">fail2ban</strong>, <strong className="text-slate-300">Tailscale</strong>, and <strong className="text-slate-300">UFW firewall rules</strong>.<br/><br/>
+
+                    <strong className="text-slate-300">fail2ban</strong> — protects port 5000 against brute force login attempts. The toolkit manages one jail: <code className="bg-slate-800 px-1 rounded">mysterium-dashboard</code>. No other jails are created or touched — existing jails from other tools (sshd, nginx, etc.) are shown read-only and never modified.<br/><br/>
+
+                    <strong className="text-slate-300">Toolkit managed toggle</strong> — if another tool manages fail2ban on this system, turn this OFF. The toolkit then becomes read-only: shows jail status but never writes to <code className="bg-slate-800 px-1 rounded">jail.local</code>.<br/><br/>
+
+                    <strong className="text-slate-300">Custom jails</strong> — the toolkit only manages <code className="bg-slate-800 px-1 rounded">mysterium-dashboard</code>. To add other jails (sshd, nginx, etc.), edit <code className="bg-slate-800 px-1 rounded">/etc/fail2ban/jail.local</code> manually and place your jails <em>outside</em> the toolkit block. The toolkit block is clearly marked — everything outside it is never touched.<br/><br/>
+
+                    <strong className="text-slate-300">Tailscale</strong> — creates a private network between your devices. Once connected, the dashboard is reachable via your Tailscale IP (<code className="bg-slate-800 px-1 rounded">100.x.x.x:5000</code>) without exposing it to the internet. Install via CLI menu → option 9 → Tailscale, or run <code className="bg-slate-800 px-1 rounded">curl -fsSL https://tailscale.com/install.sh | sh</code>. After connecting, the Security tab shows your Tailscale IP and optional UFW commands to block port 5000 from the public internet — only do this after confirming Tailscale works.
+                  </p>
+                </div>
+
+                <div>
+                  <h4 className="text-emerald-400 font-semibold mb-1">CLI Menu — Security &amp; Upgrades (option 9)</h4>
+                  <p className="text-slate-400">
+                    Option 9 in the CLI menu (<code className="bg-slate-800 px-1 rounded">./start.sh</code>) opens a Security &amp; Upgrades submenu:<br/>
+                    <strong className="text-slate-300">1. fail2ban</strong> — install fail2ban if not present; if installed, directs to the dashboard Security tab for configuration.<br/>
+                    <strong className="text-slate-300">2. Tailscale</strong> — installs Tailscale and runs <code className="bg-slate-800 px-1 rounded">sudo tailscale up</code> to connect.<br/>
+                    <strong className="text-slate-300">3. Reconfigure sudoers</strong> — re-runs <code className="bg-slate-800 px-1 rounded">update.sh</code> to write the latest sudoers rules. Useful after OS updates or permission issues.
+                  </p>
+                </div>
+
+                <div>
+                  <h4 className="text-emerald-400 font-semibold mb-1">Pi Mode 🍓</h4>
+                  <p className="text-slate-400">
+                    Pi Mode reduces SD card writes by setting the log level to WARNING — eliminates ~90% of log writes while keeping all errors and warnings captured. Recommended on Raspberry Pi where SD card longevity matters.<br/><br/>
+                    The Pi Mode card appears automatically when a Raspberry Pi is detected. Toggle it on or off without restarting the backend — takes effect immediately. The setting persists in <code className="bg-slate-800 px-1 rounded">config/setup.json</code> as <code className="bg-slate-800 px-1 rounded">pi_mode: true</code>.
+                  </p>
+                </div>
+
+                <div>
                   <h4 className="text-slate-400 font-semibold mb-1">CLI, Mobile &amp; Phone Access</h4>
                   <p className="text-slate-400">CLI has 2 pages: <strong className="text-slate-300">1 Status</strong> (node info, resources, quality, uptime) and <strong className="text-slate-300">2 Earnings</strong> (balance, net earned after 20% Hermes fee, live fiat price, daily/weekly/monthly, history chart). Auto-adapts to screen size: full mode (≥90×27), compact mode (&lt;90 cols or &lt;27 rows). Keys: <strong className="text-slate-300">?</strong>=help, <strong className="text-slate-300">w</strong>=restart, <strong className="text-slate-300">$</strong>=settle, <strong className="text-slate-300">T</strong>=test node, <strong className="text-slate-300">t</strong>=theme, <strong className="text-slate-300">r</strong>=refresh, <strong className="text-slate-300">+/-</strong>=interval, <strong className="text-slate-300">Tab</strong>=next page. <strong className="text-slate-300">Phone/LAN:</strong> open <code className="bg-slate-800 px-1 rounded">http://&lt;your-ip&gt;:5000</code>. Ensure ufw allows port 5000.</p>
                 </div>

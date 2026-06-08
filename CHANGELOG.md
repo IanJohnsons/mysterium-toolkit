@@ -28,6 +28,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - fix: Tailscale card now shows actionable message when installed but not connected
 - feat: Tailscale card shows optional UFW commands to hide dashboard from internet when connected
 
+## v1.2.20
+- docs: removed outdated sudo ./update.sh warning from README
+- docs: README menu tables updated with Security & Upgrades option
+- docs: README firewall table corrected (port 4050, not 4449)
+- docs: README new Security section — fail2ban, Tailscale, custom jails
+- docs: README permissions table updated with fail2ban entries
+- docs: Help section in dashboard — Security tab, Tailscale, Pi mode, CLI option 9 explained
+
 ---
 ## [1.2.15] - 2026-05-31
 ### Added

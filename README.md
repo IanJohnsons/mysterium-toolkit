@@ -1,22 +1,12 @@
 # Mysterium Node Toolkit
 
-![Version](https://img.shields.io/badge/version-1.2.19-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Version](https://img.shields.io/badge/version-1.2.20-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 
 A professional monitoring and management dashboard for [Mysterium Network](https://mysterium.network) VPN node operators. Runs fully local on your node machine — no cloud account, no third-party service, no data leaving your server.
 
 **Author:** Ian Johnsons — [github.com/IanJohnsons](https://github.com/IanJohnsons)  
 **License:** AGPL-3.0 — free to use and modify, modifications must be open source, not for commercial use without permission  
 **Community:** Mysterium Network Telegram
-
----
-
-> **⚠ One-time fix required if you previously ran `sudo ./update.sh`**  
-> Running update with outer sudo causes `.git/objects` to become root-owned, breaking future `git pull` calls.  
-> Run this once to fix it:
-> ```bash
-> sudo chown -R $USER:$USER ~/mysterium-toolkit
-> ```
-> After v1.1.18, `./update.sh` (without sudo) handles all privileges internally. The fleet update button works automatically going forward.
 
 ---
 
@@ -538,6 +528,7 @@ Prints your dashboard URL and opens `start.sh` automatically:
 | 6 | System Diagnostics |
 | 7 | Maintenance — scan, cleanup, uninstall |
 | 8 | Autostart on Boot — enable/disable |
+| 9 | Security & Upgrades — fail2ban, Tailscale, sudoers |
 | 0 | Exit |
 
 **Type 3 (lightweight backend):**
@@ -550,6 +541,7 @@ Prints your dashboard URL and opens `start.sh` automatically:
 | 4 | System Diagnostics |
 | 5 | Maintenance — scan, cleanup, uninstall |
 | 6 | Autostart on Boot — enable/disable |
+| 7 | Security & Upgrades — fail2ban, Tailscale, sudoers |
 | 0 | Exit |
 
 ---
@@ -943,6 +935,9 @@ The backend always runs as your normal user, never as root. During setup, `setup
 | `systemctl start/stop/enable/disable mysterium-*` | Node and toolkit service management |
 | `systemctl daemon-reload` | Reload systemd after unit changes |
 | `iptables` / `ip6tables` / `nft` | Read and manage firewall rules |
+| `fail2ban-client` | Read jail status and apply live jail settings |
+| `tee /etc/fail2ban/jail.local` | Write toolkit-managed jail block |
+| `tee /etc/fail2ban/filter.d/*` | Write toolkit filter definitions |
 
 To regenerate after an update: `./update.sh`
 
@@ -993,7 +988,7 @@ Based on active rules, not binary presence.
 | Port | Protocol | Service |
 |------|----------|---------|
 | 5000 | TCP | Toolkit dashboard |
-| 4449 | TCP | TequilAPI / Node UI |
+| 4050 | TCP | TequilAPI (internal — localhost only) |
 | 1194 | UDP | OpenVPN UDP |
 | 1194 | TCP | OpenVPN TCP |
 | 51820 | UDP | WireGuard |
@@ -1007,6 +1002,61 @@ Rules are persisted automatically:
 - `nftables` → written back to `/etc/nftables.conf`
 - `firewalld` → `--permanent` on all rules, then `--reload`
 - `ufw` → `ufw allow`; enabled automatically if inactive
+
+---
+
+## Security
+
+The **Security** tab (scroll down in the dashboard, or click the 🛡 Security link) covers three areas: fail2ban brute force protection, Tailscale VPN access, and UFW firewall rules.
+
+### fail2ban
+
+fail2ban protects port 5000 (toolkit dashboard) against brute force login attempts. The toolkit creates and manages one jail: `mysterium-dashboard`. This jail monitors login failures on port 5000 and bans IPs after repeated failures.
+
+**What the toolkit manages:**
+- Only the `mysterium-dashboard` jail — nothing else
+- Written to `/etc/fail2ban/jail.local` inside a clearly marked toolkit block
+- All other jails (sshd, nginx, etc.) are left completely untouched
+
+**Toolkit managed toggle** — if you already use another tool (e.g. ServerGuardian) to manage fail2ban, disable the toggle in the Security tab. The toolkit then operates read-only: it shows fail2ban status but never writes to `jail.local`.
+
+**Custom jails** — to add jails beyond what the toolkit manages, edit `/etc/fail2ban/jail.local` manually and add your jails **outside** the toolkit block:
+
+```
+# --- Mysterium Toolkit managed jails ---
+[mysterium-dashboard]
+...
+# --- End Mysterium Toolkit ---
+
+# Your custom jails go here — the toolkit never touches these:
+[sshd]
+enabled = true
+port = ssh
+maxretry = 5
+bantime = 86400
+```
+
+Install fail2ban via the CLI menu → Security & Upgrades → option 1, or via `sudo apt install fail2ban`.
+
+### Tailscale
+
+Tailscale creates a private VPN network between your devices. With Tailscale active, the dashboard is reachable via your Tailscale IP (`100.x.x.x`) without exposing port 5000 to the internet.
+
+Install via CLI menu → Security & Upgrades → option 2, or manually:
+
+```bash
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+```
+
+After connecting, your Tailscale IP appears in the Security tab. Optionally block port 5000 from the public internet once Tailscale is working:
+
+```bash
+sudo ufw deny 5000
+sudo ufw allow in on tailscale0
+```
+
+> ⚠ Only run these commands after confirming Tailscale works — the dashboard will only be reachable via Tailscale IP afterwards.
 
 ---
 
