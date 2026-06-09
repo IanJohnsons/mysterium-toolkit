@@ -485,6 +485,21 @@ case "$_ARCH" in
         pkg_install "sensors" "lm-sensors" "lm_sensors" "lm_sensors" "lm_sensors" ;;
 esac
 pkg_install "sqlite3" "sqlite3" "sqlite" "sqlite" "sqlite"
+# Buster/EOL fallback: if sqlite3 still not installed, download from snapshot.debian.org
+if ! command -v sqlite3 &> /dev/null; then
+    echo -e "  ${YELLOW}Trying snapshot.debian.org fallback for sqlite3...${NC}"
+    _SQLITE_URL=""
+    case "$_ARCH" in
+        armv7l|armhf) _SQLITE_URL="https://snapshot.debian.org/file/bb2d0925c417a377769dee3aca8f6987ce6a1045/sqlite3_3.27.2-3%2Bdeb10u2_armhf.deb" ;;
+        aarch64|arm64) _SQLITE_URL="https://snapshot.debian.org/file/bb2d0925c417a377769dee3aca8f6987ce6a1045/sqlite3_3.27.2-3%2Bdeb10u2_arm64.deb" ;;
+        x86_64|amd64)  _SQLITE_URL="https://snapshot.debian.org/file/bb2d0925c417a377769dee3aca8f6987ce6a1045/sqlite3_3.27.2-3%2Bdeb10u2_amd64.deb" ;;
+    esac
+    if [ -n "$_SQLITE_URL" ]; then
+        _SQLITE_DEB="$TOOLKIT_DIR/logs/sqlite3.deb"
+        mkdir -p "$TOOLKIT_DIR/logs"
+        curl -fsSL "$_SQLITE_URL" -o "$_SQLITE_DEB" 2>/dev/null &&             sudo dpkg -i --force-depends "$_SQLITE_DEB" >/dev/null 2>&1 &&             rm -f "$_SQLITE_DEB" &&             echo -e "  ${GREEN}✓ sqlite3 installed from snapshot${NC}" ||             echo -e "  ${YELLOW}⚠ Could not install sqlite3 — some features may be limited${NC}"
+    fi
+fi
 
 # irqbalance is a service, check differently
 if command -v irqbalance &> /dev/null || systemctl is-active irqbalance &> /dev/null 2>&1; then
@@ -524,30 +539,93 @@ fi
 PYTHON_VERSION=$(python3 --version 2>&1 | awk '{print $2}')
 echo -e "${GREEN}✓ Python: $PYTHON_VERSION${NC}"
 
+# ── Node.js install / upgrade ─────────────────────────────────────────────
+_install_nodejs_binary() {
+    # Downloads Node.js 18 LTS binary directly from nodejs.org
+    # Used as fallback when apt fails (EOL distros like Debian Buster)
+    local _arch_node=""
+    case "$_ARCH" in
+        x86_64|amd64)  _arch_node="x64" ;;
+        aarch64|arm64) _arch_node="arm64" ;;
+        armv7l|armhf)  _arch_node="armv7l" ;;
+        armv6l)        echo -e "  ${YELLOW}⚠ ARMv6 — Node.js 18 not available for Pi Zero/Pi 1. Skipping.${NC}"; return 1 ;;
+        *)             _arch_node="x64" ;;
+    esac
+    echo -e "  ${YELLOW}Downloading Node.js 18 LTS (${_arch_node}) from nodejs.org...${NC}"
+    local _node_url="https://nodejs.org/dist/v18.20.4/node-v18.20.4-linux-${_arch_node}.tar.xz"
+    local _node_tar="$TOOLKIT_DIR/logs/node18.tar.xz"
+    mkdir -p "$TOOLKIT_DIR/logs"
+    if curl -fsSL "$_node_url" -o "$_node_tar"; then
+        sudo tar -xJf "$_node_tar" -C /usr/local --strip-components=1 --no-same-owner
+        rm -f "$_node_tar"
+        # Fix npm symlink if needed
+        if ! npm --version >/dev/null 2>&1; then
+            sudo ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm 2>/dev/null || true
+        fi
+        echo -e "  ${GREEN}✓ Node.js 18 installed from nodejs.org${NC}"
+        return 0
+    else
+        echo -e "  ${RED}✗ Failed to download Node.js 18${NC}"
+        return 1
+    fi
+}
+
+_fix_npm_if_broken() {
+    # Detect and fix broken npm (TypeError: Class extends value)
+    if npm --version 2>&1 | grep -q "TypeError\|Error"; then
+        echo -e "  ${YELLOW}npm appears broken — reinstalling...${NC}"
+        local _npm_tar="$TOOLKIT_DIR/logs/npm.tgz"
+        mkdir -p "$TOOLKIT_DIR/logs"
+        if curl -fsSL https://registry.npmjs.org/npm/-/npm-8.19.4.tgz -o "$_npm_tar"; then
+            sudo rm -rf /usr/local/lib/node_modules/npm
+            sudo tar -xzf "$_npm_tar" -C /usr/local/lib/node_modules
+            sudo mv /usr/local/lib/node_modules/package /usr/local/lib/node_modules/npm 2>/dev/null || true
+            sudo ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm
+            rm -f "$_npm_tar"
+            echo -e "  ${GREEN}✓ npm reinstalled${NC}"
+        fi
+    fi
+}
+
 if ! command -v node &> /dev/null; then
     echo -e "${YELLOW}Installing Node.js...${NC}"
+    _installed_via_pkg=false
     case "$_ARCH" in
         armv6l)
-            # Pi Zero / Pi 1 — NodeSource has no armv6l build; apt is the only option
             echo -e "  ${YELLOW}⚠ ARMv6 detected (Pi Zero/Pi 1) — only apt-provided Node.js available${NC}"
-            sudo apt-get update -qq >/dev/null 2>&1; sudo apt-get install -y -qq nodejs npm >/dev/null 2>&1 || true ;;
+            sudo apt-get update -qq >/dev/null 2>&1
+            sudo apt-get install -y -qq nodejs npm >/dev/null 2>&1 || true ;;
         *)
             case "$PKG_MGR" in
-                apt)    sudo apt-get update -qq >/dev/null 2>&1; sudo apt-get install -y -qq nodejs npm >/dev/null 2>&1 || true ;;
-                dnf|yum) sudo dnf install -y nodejs npm >/dev/null 2>&1 || true ;;
-                pacman) sudo pacman -S --noconfirm nodejs npm >/dev/null 2>&1 || true ;;
-                apk)    apk add nodejs npm >/dev/null 2>&1 || true ;;
+                apt)
+                    sudo apt-get update -qq >/dev/null 2>&1
+                    sudo apt-get install -y -qq nodejs npm >/dev/null 2>&1 && _installed_via_pkg=true || true ;;
+                dnf|yum) sudo dnf install -y nodejs npm >/dev/null 2>&1 && _installed_via_pkg=true || true ;;
+                pacman) sudo pacman -S --noconfirm nodejs npm >/dev/null 2>&1 && _installed_via_pkg=true || true ;;
+                apk)    apk add nodejs npm >/dev/null 2>&1 && _installed_via_pkg=true || true ;;
             esac ;;
     esac
+    # If package manager failed or node still not found — fallback to binary download
+    if ! command -v node &> /dev/null || [ "$_installed_via_pkg" = "false" ]; then
+        echo -e "  ${YELLOW}Package manager install failed or unavailable — trying direct download...${NC}"
+        _install_nodejs_binary || true
+    fi
 fi
+
+# Fix broken npm before version check
+_fix_npm_if_broken
+
 NODE_VERSION=$(node --version 2>&1)
-# Minimum version check — need v16+
-_NODE_MAJOR=$(echo "$NODE_VERSION" | sed 's/v\([0-9]*\).*/\1/')
-if [ -n "$_NODE_MAJOR" ] && [ "$_NODE_MAJOR" -lt 16 ] 2>/dev/null; then
-    echo -e "${RED}✗ Node.js ${NODE_VERSION} is too old — need v16 or higher.${NC}"
-    echo -e "  ${YELLOW}Fix: curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs${NC}"
-    echo -e "  ${DIM}  On ARMv6 (Pi Zero/Pi 1): v16+ is not available. Use --lightweight flag for backend-only mode.${NC}"
-    exit 1
+# Minimum version check — need v18+ (Vite requires crypto.getRandomValues)
+_NODE_MAJOR=$(echo "$NODE_VERSION" | sed 's/v\([0-9]*\).*//')
+if [ -n "$_NODE_MAJOR" ] && [ "$_NODE_MAJOR" -lt 18 ] 2>/dev/null; then
+    echo -e "${YELLOW}⚠ Node.js ${NODE_VERSION} is too old — need v18 or higher. Upgrading...${NC}"
+    _install_nodejs_binary || {
+        echo -e "${RED}✗ Could not install Node.js 18. Build will fail.${NC}"
+        echo -e "  ${DIM}Manual fix: curl -fsSL https://nodejs.org/dist/v18.20.4/node-v18.20.4-linux-x64.tar.xz | sudo tar -xJ -C /usr/local --strip-components=1${NC}"
+        exit 1
+    }
+    NODE_VERSION=$(node --version 2>&1)
 fi
 echo -e "${GREEN}✓ Node.js: $NODE_VERSION${NC}"
 echo
@@ -609,13 +687,14 @@ fi
 
 # Install packages needed for the build
 echo -e "  Installing npm packages..."
-if ! npm install --legacy-peer-deps > /tmp/npm_install_$$.log 2>&1; then
+_NPM_LOG="$TOOLKIT_DIR/logs/npm_install.log"
+mkdir -p "$TOOLKIT_DIR/logs"
+if ! npm install --legacy-peer-deps > "$_NPM_LOG" 2>&1; then
     echo -e "  ${RED}✗ npm install failed. Build log:${NC}"
-    cat /tmp/npm_install_$$.log | tail -20
-    rm -f /tmp/npm_install_$$.log
+    tail -20 "$_NPM_LOG"
     exit 1
 fi
-rm -f /tmp/npm_install_$$.log
+rm -f "$_NPM_LOG"
 echo -e "  ${GREEN}✓ npm packages installed${NC}"
 
 # Remove any stale dist/ only — node_modules must stay for the build
@@ -761,11 +840,17 @@ if [ "$SETUP_MODE" = "2" ]; then
         echo -e "  ${DIM}  toolkit_url — toolkit backend, e.g. http://host:5000${NC}"
         echo -e "  ${DIM}  toolkit_api_key — dashboard_api_key from that node's setup.json${NC}"
         echo
-        read -p "  Create a nodes.json template now? [Y/n]: " fleet_create
-        case "${fleet_create:-Y}" in
-            [nN]|[nN][oO])\n                echo -e "  ${DIM}Skipped. Create config/nodes.json manually before starting.${NC}"
+        read -p "  Create a nodes.json template now? [y/N]: " fleet_create
+        case "${fleet_create:-N}" in
+            [yY]|[yY][eE][sS])
                 ;;
             *)
+                echo -e "  ${DIM}Skipped. Use the ⊕ Add Node button in the dashboard to add nodes.${NC}"
+                fleet_create="n"
+                ;;
+        esac
+        case "${fleet_create:-N}" in
+            [yY]|[yY][eE][sS])
                 mkdir -p "$TOOLKIT_DIR/config"
                 cat > "$NODES_JSON" << 'NODES_EOF'
 {
@@ -1583,6 +1668,14 @@ F2B_FILTER_EOF
     else
         echo -e "  ${DIM}  Skipped${NC}"
     fi
+fi
+
+# Fix permissions on logs/ — sudo install makes files root-owned
+if [ -d "$TOOLKIT_DIR/logs" ]; then
+    chown -R "$_REAL_USER:" "$TOOLKIT_DIR/logs" 2>/dev/null || true
+fi
+if [ -d "$TOOLKIT_DIR/config" ]; then
+    chown -R "$_REAL_USER:" "$TOOLKIT_DIR/config" 2>/dev/null || true
 fi
 
 # ============ STEP 13: OPEN MENU ============

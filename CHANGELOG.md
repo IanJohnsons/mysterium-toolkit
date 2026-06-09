@@ -67,6 +67,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - docs: README Step 8 wizard section fully rewritten to match new wizard flow
 - docs: Help section — log level and debug mode explanation added
 
+## v1.2.27
+- fix: setup.sh now downloads Node.js 18 binary directly when apt fails (Debian Buster/EOL systems)
+- fix: setup.sh detects and repairs broken npm (TypeError: Class extends value)
+- fix: Node.js minimum raised to v18 — Vite requires crypto.getRandomValues
+- fix: sqlite3 Buster fallback via snapshot.debian.org
+- fix: npm install log no longer uses /tmp — uses toolkit logs/ directory
+- fix: logs/ and config/ chown after sudo install — prevents permission errors
+- fix: nodes.json template creation default changed to N — prevents ghost nodes in fleet UI
+- fix: backend skips template nodes with REPLACE_WITH_NODE_IP — never shown in fleet
+- fix: delete node immediately updates fleet UI state without waiting for metrics refresh
+
 ---
 ## [1.2.15] - 2026-05-31
 ### Added

@@ -1788,6 +1788,8 @@ const MysteriumDashboard = () => {
             headers: { ...authHeaderRef.current, 'Content-Type': 'application/json' },
             body: JSON.stringify({ nodes: updated }),
           });
+          // Immediately sync local state so the node disappears without waiting for metrics refresh
+          setFleetConfigNodes(updated);
           setTimeout(fetchMetrics, 500);
         } catch (e) {
           console.error('Remove failed:', e);

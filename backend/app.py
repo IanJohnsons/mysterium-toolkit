@@ -264,6 +264,10 @@ def _load_nodes_json():
                         n = {'url': n}
                     if 'url' not in n:
                         continue
+                    # Skip template nodes — never installed by user
+                    if 'REPLACE_WITH_NODE_IP' in n.get('url', '')                             or 'REPLACE_WITH_NODE_IP' in n.get('toolkit_url', '')                             or 'REPLACE_WITH_DASHBOARD_API_KEY' in n.get('toolkit_api_key', ''):
+                        logger.info(f"nodes.json: skipping template node '{n.get('id', i)}' — placeholder values not replaced")
+                        continue
                     raw_url = _normalize_url(n['url'])
                     # Auto-correct: port 4449 is the MystNodes UI, not TequilAPI (4050).
                     # Silently remap so existing nodes.json files work without manual editing.
