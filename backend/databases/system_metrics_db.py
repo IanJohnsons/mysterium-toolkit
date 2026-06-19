@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 class SystemMetricsDB:
     """Persistent storage for system resource metrics."""
     
-    _db_path = Path(__file__).parent.parent.parent / 'config' / 'system_metrics.db'
+    _db_path = Path(__file__).parent / 'system_metrics.db'
     _initialized = False
     _lock = Lock()
     

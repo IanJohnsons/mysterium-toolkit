@@ -1001,7 +1001,7 @@ class TrafficDB:
     complete from the day vnstat was first installed — not just from toolkit install.
     """
 
-    _db_path = Path(__file__).parent.parent / 'config' / 'traffic_history.db'
+    _db_path = Path(__file__).parent / 'databases' / 'traffic_history.db'
     _initialized = False
     _lock = Lock()
 
@@ -1347,7 +1347,7 @@ class SessionDB:
       )
     """
 
-    _db_path = Path(__file__).parent.parent / 'config' / 'sessions_history.db'
+    _db_path = Path(__file__).parent / 'databases' / 'sessions_history.db'
     _initialized = False
     _lock = Lock()
 
@@ -1638,7 +1638,7 @@ class EarningsDB:
       )
     """
 
-    _db_path = Path(__file__).parent.parent / 'config' / 'earnings_history.db'
+    _db_path = Path(__file__).parent / 'databases' / 'earnings_history.db'
     _initialized = False
     _lock = Lock()
 

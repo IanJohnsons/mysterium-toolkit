@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 class QualityDB:
     """Persistent storage for node quality metrics from Discovery API."""
     
-    _db_path = Path(__file__).parent.parent.parent / 'config' / 'quality_history.db'
+    _db_path = Path(__file__).parent / 'quality_history.db'
     _initialized = False
     _lock = Lock()
     

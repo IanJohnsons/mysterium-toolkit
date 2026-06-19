@@ -260,7 +260,7 @@ def _count_snapshots(path: Path) -> int:
     the JSON file stopped growing after migration and shows a stale (lower) count.
     """
     # Primary: SQLite earnings_history.db — the real store since migration
-    db_file = path / 'config' / 'earnings_history.db'
+    db_file = path / 'backend' / 'databases' / 'earnings_history.db'
     if db_file.exists():
         try:
             import sqlite3
@@ -342,9 +342,9 @@ def _available_data(install_path: Path) -> List[Dict]:
     # These are NOT in DATA_FILES (copied separately) but their existence
     # means there IS data worth migrating.
     db_sentinel = [
-        'config/earnings_history.db',
-        'config/sessions_history.db',
-        'config/traffic_history.db',
+        'backend/databases/earnings_history.db',
+        'backend/databases/sessions_history.db',
+        'backend/databases/traffic_history.db',
     ]
     for rel in db_sentinel:
         fp = install_path / rel
@@ -503,8 +503,8 @@ def migrate_from_dir(src_dir: Path, dest_dir: Path, force: bool = False,
     # earnings_history.db — SQLite earnings snapshot archive
     # Only copy if same node identity — earnings snapshots contain node-specific lifetime totals.
     # IMPORTANT: an empty DB (0 rows) at the destination is treated as non-existent.
-    earnings_db_src = src_dir / 'config' / 'earnings_history.db'
-    earnings_db_dst = dest_dir / 'config' / 'earnings_history.db'
+    earnings_db_src = src_dir / 'backend' / 'databases' / 'earnings_history.db'
+    earnings_db_dst = dest_dir / 'backend' / 'databases' / 'earnings_history.db'
     if earnings_db_src.exists():
         src_identity = src_dir / 'config' / 'node_identity.txt'
         dst_identity = dest_dir / 'config' / 'node_identity.txt'
@@ -536,8 +536,8 @@ def migrate_from_dir(src_dir: Path, dest_dir: Path, force: bool = False,
     # sessions_history.db — SQLite session archive
     # Only copy if same node identity — sessions belong to a specific node.
     # Copying sessions from a different node would corrupt the analytics.
-    sessions_src = src_dir / 'config' / 'sessions_history.db'
-    sessions_dst = dest_dir / 'config' / 'sessions_history.db'
+    sessions_src = src_dir / 'backend' / 'databases' / 'sessions_history.db'
+    sessions_dst = dest_dir / 'backend' / 'databases' / 'sessions_history.db'
     if sessions_src.exists():
         # Check node identity before copying
         src_identity = src_dir / 'config' / 'node_identity.txt'
@@ -570,8 +570,8 @@ def migrate_from_dir(src_dir: Path, dest_dir: Path, force: bool = False,
                 results['sessions_history.db'] = 'skipped (already exists with data)'
 
     # traffic_history.db — SQLite, copy as-is (binary, no merge needed)
-    traffic_src = src_dir / 'config' / 'traffic_history.db'
-    traffic_dst = dest_dir / 'config' / 'traffic_history.db'
+    traffic_src = src_dir / 'backend' / 'databases' / 'traffic_history.db'
+    traffic_dst = dest_dir / 'backend' / 'databases' / 'traffic_history.db'
     if traffic_src.exists():
         traffic_dst.parent.mkdir(parents=True, exist_ok=True)
         dst_is_empty = _db_is_empty(traffic_dst, 'daily_traffic')
@@ -587,8 +587,8 @@ def migrate_from_dir(src_dir: Path, dest_dir: Path, force: bool = False,
             results['traffic_history.db'] = 'skipped (already exists with data)'
 
     # quality_history.db — QualityDB snapshots (new in v1.5.1)
-    quality_src = src_dir / 'config' / 'quality_history.db'
-    quality_dst = dest_dir / 'config' / 'quality_history.db'
+    quality_src = src_dir / 'backend' / 'databases' / 'quality_history.db'
+    quality_dst = dest_dir / 'backend' / 'databases' / 'quality_history.db'
     if quality_src.exists() and not quality_dst.exists():
         quality_dst.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -599,8 +599,8 @@ def migrate_from_dir(src_dir: Path, dest_dir: Path, force: bool = False,
             results['quality_history.db'] = f'error: {e}'
 
     # system_metrics.db — SystemMetricsDB snapshots (new in v1.5.1)
-    system_src = src_dir / 'config' / 'system_metrics.db'
-    system_dst = dest_dir / 'config' / 'system_metrics.db'
+    system_src = src_dir / 'backend' / 'databases' / 'system_metrics.db'
+    system_dst = dest_dir / 'backend' / 'databases' / 'system_metrics.db'
     if system_src.exists() and not system_dst.exists():
         system_dst.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -611,8 +611,8 @@ def migrate_from_dir(src_dir: Path, dest_dir: Path, force: bool = False,
             results['system_metrics.db'] = f'error: {e}'
 
     # service_events.db — ServiceEventsDB events (new in v1.5.1)
-    events_src = src_dir / 'config' / 'service_events.db'
-    events_dst = dest_dir / 'config' / 'service_events.db'
+    events_src = src_dir / 'backend' / 'databases' / 'service_events.db'
+    events_dst = dest_dir / 'backend' / 'databases' / 'service_events.db'
     if events_src.exists() and not events_dst.exists():
         events_dst.parent.mkdir(parents=True, exist_ok=True)
         try:

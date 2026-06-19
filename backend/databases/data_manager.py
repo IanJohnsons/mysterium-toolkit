@@ -30,7 +30,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-CONFIG_DIR = Path(__file__).parent.parent.parent / 'config'
+CONFIG_DIR = Path(__file__).parent
 
 
 class DataManager:

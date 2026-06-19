@@ -157,9 +157,9 @@ class ToolkitInstall:
         Does NOT read or modify any data — read-only check only.
         """
         db_checks = {
-            'config/earnings_history.db':  'earnings_snapshots',
-            'config/sessions_history.db':  'sessions',
-            'config/traffic_history.db':   'daily_traffic',
+            'backend/databases/earnings_history.db':  'earnings_snapshots',
+            'backend/databases/sessions_history.db':  'sessions',
+            'backend/databases/traffic_history.db':   'daily_traffic',
         }
         for rel, table in db_checks.items():
             db_path = self.path / rel
@@ -651,9 +651,9 @@ def clean_install(install: ToolkitInstall, remove_all: bool = False) -> Dict[str
     # If the install has SQLite databases with real rows, warn the user explicitly.
     # This data is historical earnings/session history that cannot be recovered.
     db_files = [
-        (base / 'config' / 'earnings_history.db',  'earnings_snapshots'),
-        (base / 'config' / 'sessions_history.db',  'sessions'),
-        (base / 'config' / 'traffic_history.db',   'daily_traffic'),
+        (base / 'backend' / 'databases' / 'earnings_history.db',  'earnings_snapshots'),
+        (base / 'backend' / 'databases' / 'sessions_history.db',  'sessions'),
+        (base / 'backend' / 'databases' / 'traffic_history.db',   'daily_traffic'),
     ]
     dbs_with_data = []
     for db_path, table in db_files:

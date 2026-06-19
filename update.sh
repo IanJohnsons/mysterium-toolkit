@@ -85,6 +85,20 @@ if [ -n "$_NODES_BACKUP" ] && [ ! -f "config/nodes.json" ]; then
     echo -e "  ${GREEN}✓ config/nodes.json restored after pull${NC}"
 fi
 
+# ── Migrate databases from config/ to backend/databases/ (v1.2.28+) ─────────
+_DB_MIGRATED=0
+for _dbname in earnings_history.db sessions_history.db traffic_history.db quality_history.db system_metrics.db service_events.db; do
+    _src="$TOOLKIT_DIR/config/$_dbname"
+    _dst="$TOOLKIT_DIR/backend/databases/$_dbname"
+    if [ -f "$_src" ] && [ ! -f "$_dst" ]; then
+        mkdir -p "$TOOLKIT_DIR/backend/databases"
+        cp "$_src" "$_dst"
+        echo -e "  ${GREEN}✓ Migrated $_dbname → backend/databases/${NC}"
+        _DB_MIGRATED=$((_DB_MIGRATED + 1))
+    fi
+done
+[ "$_DB_MIGRATED" -gt 0 ] && echo -e "  ${GREEN}✓ Database migration complete ($_DB_MIGRATED files)${NC}"
+
 # ── Fix ownership on config/ — git pull runs as root and can make DB files root-owned ──
 _REAL_USER="${SUDO_USER:-$USER}"
 if [ "$_REAL_USER" != "root" ]; then

@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 class ServiceEventsDB:
     """Persistent storage for service lifecycle events."""
     
-    _db_path = Path(__file__).parent.parent.parent / 'config' / 'service_events.db'
+    _db_path = Path(__file__).parent / 'service_events.db'
     _initialized = False
     _lock = Lock()
     _last_service_state = {}

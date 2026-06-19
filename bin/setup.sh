@@ -304,7 +304,7 @@ _MIGRATE_PYTHON=""
 if command -v python3 &> /dev/null; then _MIGRATE_PYTHON="python3"
 elif command -v python &> /dev/null; then _MIGRATE_PYTHON="python"; fi
 if [ -n "$_MIGRATE_PYTHON" ]; then
-    for _db_file in "config/earnings_history.db" "config/sessions_history.db" "config/traffic_history.db"; do
+    for _db_file in "backend/databases/earnings_history.db" "backend/databases/sessions_history.db" "backend/databases/traffic_history.db"; do
         _db_path="$TOOLKIT_DIR/$_db_file"
         if [ -f "$_db_path" ]; then
             _row_count=$($_MIGRATE_PYTHON -c "import sqlite3,sys
@@ -349,7 +349,7 @@ if [ -f "$MIGRATE_SCRIPT" ] && [ -n "$MIGRATE_PYTHON" ]; then
         esac
     else
         # No previous install found — but check if data already exists in this install
-        DB_FILE="$TOOLKIT_DIR/config/earnings_history.db"
+        DB_FILE="$TOOLKIT_DIR/backend/databases/earnings_history.db"
         JSON_FILE="$TOOLKIT_DIR/config/earnings_history.json"
         if [ -f "$DB_FILE" ] || [ -f "$JSON_FILE" ]; then
             SNAP_COUNT=$($MIGRATE_PYTHON "$MIGRATE_SCRIPT" --count-snapshots --dest "$TOOLKIT_DIR" 2>/dev/null || echo "0")
