@@ -1,6 +1,6 @@
 # Mysterium Node Toolkit
 
-![Version](https://img.shields.io/badge/version-1.2.28-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Version](https://img.shields.io/badge/version-1.2.29-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 
 A professional monitoring and management dashboard for [Mysterium Network](https://mysterium.network) VPN node operators. Runs fully local on your node machine — no cloud account, no third-party service, no data leaving your server.
 
@@ -964,9 +964,6 @@ Based on active rules, not binary presence.
 |------|----------|---------|
 | 5000 | TCP | Toolkit dashboard |
 | 4050 | TCP | TequilAPI (internal — localhost only) |
-| 1194 | UDP | OpenVPN UDP |
-| 1194 | TCP | OpenVPN TCP |
-| 51820 | UDP | WireGuard |
 | 10000–65000 | UDP | P2P / NAT hole punching |
 
 > **Type 3:** firewall configuration is skipped — the node machine manages its own rules. Run setup on the node machine to apply them there.
@@ -1063,12 +1060,12 @@ The **Data Management** card (below System Health) gives full control over all p
 
 | Database | File | Records | Interval |
 |----------|------|---------|----------|
-| Earnings history | `config/earnings_history.db` | Daily snapshots | every 10 min |
-| Traffic history | `config/traffic_history.db` | Monthly vnstat data | on import |
-| Session archive | `config/sessions_history.db` | All sessions | at startup |
-| Node quality | `config/quality_history.db` | Score, latency, bandwidth | every 10 min |
-| System metrics | `config/system_metrics.db` | CPU, RAM, disk, temp | every 5 min |
-| Service events | `config/service_events.db` | Start/stop events | on change |
+| Earnings history | `backend/databases/earnings_history.db` | Daily snapshots | every 10 min |
+| Traffic history | `backend/databases/traffic_history.db` | Monthly vnstat data | on import |
+| Session archive | `backend/databases/sessions_history.db` | All sessions | at startup |
+| Node quality | `backend/databases/quality_history.db` | Score, latency, bandwidth | every 10 min |
+| System metrics | `backend/databases/system_metrics.db` | CPU, RAM, disk, temp | every 5 min |
+| Service events | `backend/databases/service_events.db` | Start/stop events | on change |
 | Uptime log | `config/uptime_log.json` | Poll cycles | every 10 min |
 
 Default retention windows — pruned once per calendar day:

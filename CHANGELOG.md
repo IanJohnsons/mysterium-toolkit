@@ -2,6 +2,12 @@
 All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.2.29
+- fix: database migration in `update.sh` now correctly migrates existing data from `config/` to `backend/databases/` — previous check skipped migration when empty placeholder files existed in `backend/databases/` (affects all users who updated to v1.2.28)
+- fix: `data_manager.py` — `uptime_log.json` and `node_identity.txt` now correctly read from `config/` instead of `backend/databases/`; SQLite databases correctly use `backend/databases/`
+- fix: README database paths corrected from `config/` to `backend/databases/`
+- fix: README firewall table removed incorrect ports 1194 (OpenVPN) and 51820 (WireGuard) — Mysterium does not use these ports
+
 ## v1.2.28
 - fix: all SQLite databases moved from `config/` to `backend/databases/` (correct location) [file:38]
 - fix: `update.sh` auto-migrates existing `config/*.db` to `backend/databases/` on first run — no data loss [file:38]

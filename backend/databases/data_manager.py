@@ -30,7 +30,8 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-CONFIG_DIR = Path(__file__).parent
+CONFIG_DIR     = Path(__file__).parent                        # backend/databases/ — SQLite databases
+APP_CONFIG_DIR = Path(__file__).parent.parent.parent / 'config'  # config/ — uptime_log.json, node_identity.txt
 
 
 class DataManager:
@@ -65,7 +66,7 @@ class DataManager:
                                        because those would cause delete WHERE node_id='local'
                                        which silently deletes 0 rows.
         """
-        identity_file = CONFIG_DIR / 'node_identity.txt'
+        identity_file = APP_CONFIG_DIR / 'node_identity.txt'
         if identity_file.exists():
             val = identity_file.read_text().strip()
             if val and val.lower().startswith('0x') and len(val) > 10:
@@ -243,7 +244,7 @@ class DataManager:
     
     @staticmethod
     def _get_uptime_stats() -> Dict[str, Any]:
-        uptime_file = CONFIG_DIR / 'uptime_log.json'
+        uptime_file = APP_CONFIG_DIR / 'uptime_log.json'
         if not uptime_file.exists():
             return {'total': 0, 'exists': False}
         
@@ -445,8 +446,8 @@ class DataManager:
     
     @staticmethod
     def _delete_uptime(keep_days: Optional[int], before_date: Optional[str]) -> Dict[str, Any]:
-        uptime_file = CONFIG_DIR / 'uptime_log.json'
-        identity_file = CONFIG_DIR / 'node_identity.txt'
+        uptime_file = APP_CONFIG_DIR / 'uptime_log.json'
+        identity_file = APP_CONFIG_DIR / 'node_identity.txt'
         
         if not uptime_file.exists():
             return {'deleted': 0}

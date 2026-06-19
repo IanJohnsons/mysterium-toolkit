@@ -86,15 +86,20 @@ if [ -n "$_NODES_BACKUP" ] && [ ! -f "config/nodes.json" ]; then
 fi
 
 # ── Migrate databases from config/ to backend/databases/ (v1.2.28+) ─────────
+# Copies if src exists and has data, and dst is missing or smaller than src
 _DB_MIGRATED=0
 for _dbname in earnings_history.db sessions_history.db traffic_history.db quality_history.db system_metrics.db service_events.db; do
     _src="$TOOLKIT_DIR/config/$_dbname"
     _dst="$TOOLKIT_DIR/backend/databases/$_dbname"
-    if [ -f "$_src" ] && [ ! -f "$_dst" ]; then
-        mkdir -p "$TOOLKIT_DIR/backend/databases"
-        cp "$_src" "$_dst"
-        echo -e "  ${GREEN}✓ Migrated $_dbname → backend/databases/${NC}"
-        _DB_MIGRATED=$((_DB_MIGRATED + 1))
+    if [ -f "$_src" ]; then
+        _src_size=$(stat -c%s "$_src" 2>/dev/null || echo 0)
+        _dst_size=$(stat -c%s "$_dst" 2>/dev/null || echo 0)
+        if [ "$_src_size" -gt 8192 ] && [ "$_src_size" -gt "$_dst_size" ]; then
+            mkdir -p "$TOOLKIT_DIR/backend/databases"
+            cp "$_src" "$_dst"
+            echo -e "  ${GREEN}✓ Migrated $_dbname → backend/databases/ ($_src_size bytes)${NC}"
+            _DB_MIGRATED=$((_DB_MIGRATED + 1))
+        fi
     fi
 done
 [ "$_DB_MIGRATED" -gt 0 ] && echo -e "  ${GREEN}✓ Database migration complete ($_DB_MIGRATED files)${NC}"
