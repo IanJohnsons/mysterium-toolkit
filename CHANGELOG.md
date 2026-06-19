@@ -340,6 +340,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Updated fleet update button to run full update flow [file:38]
 - Fixed build file copy and node_modules handling [file:38]
 
+## v1.1.17
+- fix: `mystPrice` ReferenceError in fleet bar — undefined variable crash on load
+- fix: `update.sh` no longer exits on frontend build failure — backend always restarts even when build fails
+
+## v1.1.16
+- feat: GitHub Actions CI workflow added
+- docs: CHANGELOG added to repo
+
 ## v1.1.15
 - Added net earned and fleet bar summaries [file:38]
 - Added Ansible mass update section [file:38]
@@ -441,6 +449,88 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## v1.0.20
 - Fixed fleet routing and merged QUIC Scraping into B2B Data Scraping [file:38]
+
+## v1.0.19
+- feat: adaptive CLI start menu per install type (Type 1/2/3 tonen andere opties)
+- feat: detect and separate Mysterium network probes in Consumers tab with probe indicator
+- fix: missing `fmtType` in 5 mobile views
+- fix: `duration_secs` added to live sessions for working Duration sort
+- fix: reset archive offset on fleet node switch
+- fix: deduplicate ghost reconnect sessions per consumer/service-type pair
+- fix: `_run` input_data encoding bug
+- fix: `cpu_governor` persist via tee + systemd service
+- fix: replace `sudo bash` with `sudo tee` for all health fix file writes
+- fix: expand sudoers with missing sysctl/modules-load.d/chmod paths
+- fix: `fmtType` applied to ServiceSplitChart legend and SVG tooltips
+- fix: sync `_DEFAULT_RETENTION` with actual setup defaults
+- docs: README menu option numbers corrected per install type
+
+## v1.0.18
+- fix: phantom active sessions from stale WireGuard interfaces
+- fix: History tab showing wrong node archive in fleet mode
+
+## v1.0.17
+- feat: context-aware health profiling (Laptop, VM/VPS, LXC, Raspberry Pi, Bare metal, Alpine)
+- fix: quieter toast notifications
+
+## v1.0.16
+- fix: `TOOLKIT_DIR` path bug in root `setup.sh`
+- fix: NodeSource Node.js 20 install updated
+- fix: `fmtType` missing in mobile views
+- fix: Network Quality card display
+- docs: Ubuntu and Pi OS compatibility noted in README
+
+## v1.0.15
+- feat: uniform 7d/30d/90d/1y/All period selectors across all charts
+- feat: data retention raised to 365 days default
+- feat: new analytics charts (service split, earnings efficiency)
+- fix: auto-detect OS timezone, persist to `setup.json`
+- fix: earnings chart daily bucketing to local time
+- fix: service-split and earnings-efficiency endpoints use raw tokens/bytes columns
+
+## v1.0.14
+- fix: service-split and earnings-efficiency endpoints: `SessionDB.init()` and local timezone bucketing
+
+## v1.0.13
+- fix: auto-detect OS timezone and persist to `setup.json`
+- feat: fleet uptime/efficiency, MYST/GB per session, service split chart, earnings efficiency chart
+- fix: dynamic retention-aware period selectors and All button for quality/system history
+- fix: service stop stale UUID and scraping/quic_scraping functional link
+
+## v1.0.12
+- fix: sudo LXC/root compatibility
+- fix: venv pre-install check
+- fix: Node.js false positive version detection
+- fix: README port references corrected
+
+## v1.0.11
+- fix: earnings UTC timezone handling
+- fix: rate-limit snapshot
+- fix: system health inline expand
+- fix: logs position
+- fix: `fetchArchive` fleet routing
+- fix: QUIC label display
+
+## v1.0.10
+- feat: node update badge in dashboard
+- feat: editable data retention per node
+- feat: `data_retention` added to `setup.json`
+
+## v1.0.9
+- fix: fleet routing fix for quality/metrics history
+- fix: quality/metrics history reload on node switch
+- fix: duplicate data management card removed
+
+## v1.0.7
+- feat: extended system metrics (tunnels, speed, latency, temperatures)
+- fix: update badge visible in fleet overview
+- fix: metrics reading from correct cache tier
+- fix: system metrics DB writing speed/latency/tunnels from wrong cache tier
+
+## v1.0.4
+- feat: update check badge
+- feat: extended system metrics (tunnels, speed, latency, temperatures)
+- fix: config ownership after sudo operations
 
 ## v1.0.3
 - Fixed SessionDB migration issue with missing provider_id [file:38]
