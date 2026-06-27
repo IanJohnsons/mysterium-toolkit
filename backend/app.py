@@ -1530,28 +1530,56 @@ class SessionDB:
                 'total_myst': 0, 'total_gb': 0, 'oldest': None, 'newest': None}
 
     @classmethod
-    def get_range(cls, limit=500, offset=0, service_type=None):
-        """Return sessions sorted newest first."""
+    def get_range(cls, limit=500, offset=0, service_type=None, search=None):
+        """Return sessions sorted newest first.
+
+        search: optional substring matched (case-insensitive) against
+        consumer_id (wallet) OR session id — used by the dashboard search bar.
+        """
         cls.init()
         try:
             conn = cls._conn()
-            if service_type:
-                rows = conn.execute(
-                    "SELECT * FROM sessions WHERE service_type=? AND service_type!='monitoring' "
-                    "ORDER BY started_at DESC LIMIT ? OFFSET ?",
-                    (service_type, limit, offset)
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT * FROM sessions WHERE service_type!='monitoring' "
-                    "ORDER BY started_at DESC LIMIT ? OFFSET ?",
-                    (limit, offset)
-                ).fetchall()
+            where, params = cls._build_filter(service_type, search)
+            rows = conn.execute(
+                f"SELECT * FROM sessions WHERE {where} "
+                "ORDER BY started_at DESC LIMIT ? OFFSET ?",
+                params + [limit, offset]
+            ).fetchall()
             conn.close()
             return [dict(r) for r in rows]
         except Exception as e:
             logger.warning(f"SessionDB get_range failed: {e}")
             return []
+
+    @staticmethod
+    def _build_filter(service_type=None, search=None):
+        """Build the shared WHERE clause + params for get_range / count."""
+        where = ["service_type!='monitoring'"]
+        params = []
+        if service_type:
+            where.append("service_type=?")
+            params.append(service_type)
+        if search:
+            where.append("(LOWER(consumer_id) LIKE ? OR LOWER(id) LIKE ?)")
+            like = f"%{search.lower()}%"
+            params.extend([like, like])
+        return " AND ".join(where), params
+
+    @classmethod
+    def count(cls, service_type=None, search=None):
+        """Count sessions matching the same filter as get_range."""
+        cls.init()
+        try:
+            conn = cls._conn()
+            where, params = cls._build_filter(service_type, search)
+            n = conn.execute(
+                f"SELECT COUNT(*) FROM sessions WHERE {where}", params
+            ).fetchone()[0]
+            conn.close()
+            return int(n)
+        except Exception as e:
+            logger.warning(f"SessionDB count failed: {e}")
+            return 0
 
     @classmethod
     def backfill_countries(cls, live_sessions):
@@ -6427,16 +6455,6 @@ def fail2ban_install():
 
 
 
-@require_auth
-def fail2ban_reload():
-    """Reload fail2ban."""
-    try:
-        ok = _f2b_reload()
-        return jsonify({'ok': ok}), 200
-    except Exception as e:
-        return jsonify({'ok': False, 'error': str(e)}), 200
-
-
 @app.route('/firewall/fail2ban/reload', methods=['POST'])
 @require_auth
 def fail2ban_reload():
@@ -7476,9 +7494,13 @@ def get_sessions_archive():
         limit  = min(int(request.args.get('limit', 200)), 500)
         offset = int(request.args.get('offset', 0))
         svc    = request.args.get('service_type', None)
+        search = (request.args.get('search', '') or '').strip()
 
-        rows = SessionDB.get_range(limit=limit, offset=offset, service_type=svc)
+        rows = SessionDB.get_range(limit=limit, offset=offset, service_type=svc,
+                                   search=(search or None))
         stats = SessionDB.get_stats()
+        # When a search is active, total/has_more must reflect the filtered set.
+        total = SessionDB.count(service_type=svc, search=search) if search else stats.get('total', 0)
 
         # Normalize rows to match the live session format the frontend expects
         out = []
@@ -7527,10 +7549,10 @@ def get_sessions_archive():
 
         return jsonify({
             'items':       out,
-            'total':       stats.get('total', 0),
+            'total':       total,
             'offset':      offset,
             'limit':       limit,
-            'has_more':    (offset + len(out)) < stats.get('total', 0),
+            'has_more':    (offset + len(out)) < total,
             'stats':       stats,
         }), 200
 
@@ -8817,67 +8839,81 @@ def settle_earnings():
             'provider_id': identity_address,
             'hermes_id':   hermes_id,
         }
-        settle_attempts = [
-            (f'{node_url}/transactor/settle/sync', settle_data, 120, 'sync'),
-            (f'{node_url}/transactor/settle',      settle_data, 30,  'async'),
+
+        def _bust_balance_caches():
+            # Force the next poll to re-fetch the on-chain balance / earnings.
+            global _tier_slow_last
+            _polygonscan_cache['timestamp'] = 0
+            _tier_slow_last = 0
+
+        # Endpoint variants tried in order, per node.
+        # /transactor/settle/sync blocks until the on-chain settlement is processed —
+        # the official Mysterium SDK calls it with the HTTP timeout DISABLED because it
+        # is a slow on-chain operation. We use a generous read timeout and, crucially,
+        # treat a READ timeout as "accepted, settling on-chain" (NOT an error): the node
+        # received the request and the settlement completes shortly after.
+        # (connect, read) timeouts separate "node down" (connect) from "node busy" (read).
+        settle_variants = [
+            ('transactor/settle/sync',  (5, 130), 'sync'),
+            ('transactor/settle/async', (5, 30),  'async'),
         ]
 
+        last_status  = None
+        last_body    = ''
+        reached_node = False
+
         for node_url in NODE_API_URLS:
-            try:
-                last_status = None
-                last_body   = ''
-                for url, payload, tout, variant in settle_attempts:
-                    try:
-                        resp = requests.post(url, headers=headers,
-                                             json=payload, timeout=tout)
-                        last_status = resp.status_code
-                        last_body   = resp.text[:300]
-                        logger.info(f'Settle attempt [{variant}] → {resp.status_code}: {url}')
-                        if resp.status_code in (200, 202):
-                            label = 'initiated' if variant == 'sync' else                                     'queued'    if variant == 'async' else 'requested'
-                            return jsonify({
-                                'success':  True,
-                                'identity': identity_address,
-                                'amount':   round(unsettled, 4),
-                                'message':  f'Settlement {label} for {round(unsettled, 4)} MYST ({variant})',
-                                'variant':  variant,
-                            }), 200
-                            # Bust caches so next poll shows updated balance
-                            _polygonscan_cache['timestamp'] = 0
-                            global _tier_slow_last
-                            _tier_slow_last = 0
-                    except requests.exceptions.Timeout:
-                        logger.warning(f'Settle [{variant}] timed out: {url}')
-                        # Sync settle timing out may still succeed on-chain
-                        if variant == 'sync':
-                            return jsonify({
-                                'success': False,
-                                'error': 'Settlement timed out — may still be processing on-chain',
-                                'hint':  'Check settlement status in NodeUI in a few minutes',
-                            }), 504
-                        continue
+            for endpoint, tout, variant in settle_variants:
+                url = f'{node_url}/{endpoint}'
+                try:
+                    resp = requests.post(url, headers=headers,
+                                         json=settle_data, timeout=tout)
+                    reached_node = True
+                    last_status  = resp.status_code
+                    last_body    = resp.text[:300]
+                    logger.info(f'Settle attempt [{variant}] -> {resp.status_code}: {url}')
+                    if resp.status_code in (200, 202):
+                        _bust_balance_caches()
+                        label = 'queued' if variant == 'async' else 'initiated'
+                        return jsonify({
+                            'success':  True,
+                            'identity': identity_address,
+                            'amount':   round(unsettled, 4),
+                            'message':  f'Settlement {label} for {round(unsettled, 4)} MYST',
+                            'variant':  variant,
+                            'pending':  False,
+                        }), 200
+                    # Non-2xx (e.g. 404 unsupported variant) -> try next variant / node.
+                except requests.exceptions.ReadTimeout:
+                    # Node accepted the request but is still settling on-chain. This is
+                    # the normal case for a sync settle on a slow Hermes / Polygon round
+                    # trip — NOT a failure. The settlement completes shortly after.
+                    logger.info(f'Settle [{variant}] read-timeout (settling on-chain): {url}')
+                    _bust_balance_caches()
+                    return jsonify({
+                        'success':  True,
+                        'identity': identity_address,
+                        'amount':   round(unsettled, 4),
+                        'message':  f'Settlement of {round(unsettled, 4)} MYST is processing on-chain',
+                        'pending':  True,
+                        'hint':     'Balance updates within a few minutes — see Settlement History.',
+                    }), 200
+                except requests.exceptions.ConnectTimeout:
+                    logger.warning(f'Settle [{variant}] connect-timeout (node unreachable): {url}')
+                    break  # this node is unreachable -> move to the next node
+                except Exception as e:
+                    logger.error(f'Settle error [{variant}] {url}: {e}')
+                    continue
 
-                return jsonify({
-                    'success': False,
-                    'error': (f'All settle endpoints returned errors. '
-                              f'Last: HTTP {last_status}: {last_body}'),
-                    'hint':  ('Run on your node: '
-                              'curl -s -u myst:myst http://localhost:4050/tequilapi/doc '
-                              '| python3 -c "import sys,json; d=json.load(sys.stdin); '
-                              '[print(p) for p in d[\"paths\"] if \"settle\" in p]"'),
-                }), 500
+        if reached_node:
+            return jsonify({
+                'success': False,
+                'error': (f'Settle endpoints returned errors. '
+                          f'Last: HTTP {last_status}: {last_body}'),
+                'hint':  'Verify the node supports /transactor/settle/sync on TequilAPI 4050.',
+            }), 502
 
-            except requests.exceptions.Timeout:
-                return jsonify({
-                    'success': False,
-                    'error': 'Settlement timed out — may still be processing on-chain',
-                    'hint': 'Check settlement status in a few minutes',
-                }), 504
-            except Exception as e:
-                logger.error(f"Settle error for {node_url}: {e}")
-                continue
-
-        return jsonify({'success': False, 'error': 'Could not reach any node for settlement'}), 500
+        return jsonify({'success': False, 'error': 'Could not reach any node for settlement'}), 503
 
     except Exception as e:
         logger.error(f"Settle error: {e}")

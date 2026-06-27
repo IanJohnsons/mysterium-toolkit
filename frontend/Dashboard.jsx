@@ -289,7 +289,7 @@ function generateThemeCSS(key) {
 // Displays a full Ethereum address with copy-to-clipboard.
 // Click the abbreviated form on ANY device → overlay with full address + copy button.
 // Unified behaviour — no hidden hover-only icons.
-const CopyableId = ({ id, className = '' }) => {
+const CopyableId = ({ id, className = '', label = 'Consumer ID' }) => {
   const [copied, setCopied] = useState(false);
   const [open, setOpen] = useState(false);
   if (!id) return <span className={`text-slate-500 font-mono text-xs ${className}`}>—</span>;
@@ -316,7 +316,7 @@ const CopyableId = ({ id, className = '' }) => {
       {open && (
         <div className="fixed inset-0 z-[300] flex items-center justify-center p-5 bg-black/70 backdrop-blur-sm" onClick={() => setOpen(false)}>
           <div className="bg-slate-900 border border-slate-700 rounded-xl p-4 w-full max-w-sm shadow-2xl" onClick={e => e.stopPropagation()}>
-            <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1.5">Consumer ID</div>
+            <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1.5">{label}</div>
             <div className="font-mono text-xs text-cyan-300 break-all leading-relaxed mb-3 select-all">{id}</div>
             <div className="flex gap-2">
               <button onClick={doCopy} className="flex-1 py-2 text-xs bg-slate-800 border border-slate-600/40 rounded-lg hover:bg-slate-700 transition font-semibold text-slate-200">
@@ -1015,6 +1015,7 @@ const MysteriumDashboard = () => {
   const [archiveTotal, setArchiveTotal] = useState(0);
   const [archiveLoading, setArchiveLoading] = useState(false);
   const [archiveOffset, setArchiveOffset] = useState(0);
+  const [archiveSearch, setArchiveSearch] = useState('');  // wallet / session-id search (History tab)
   const ARCHIVE_PAGE = 100;
   // Pi mode state
   const [piMode, setPiMode] = useState(false);
@@ -1032,6 +1033,7 @@ const MysteriumDashboard = () => {
   });
   const selectedNodeRef = useRef(null); // keep ref in sync for fetchMetrics
   const nodeAwareUrlRef = useRef('');   // keep ref in sync for fetchArchive (avoids stale closure)
+  const archiveSearchRef = useRef('');  // search term read inside fetchArchive (stale-closure safe)
   // healthBackendUrl: returns the correct URL base for health fix/scan/persist requests.
   // For fleet nodes: routes via /fleet/node/<id>/proxy/<endpoint> on the central backend.
   // This keeps the remote API key server-side and never exposes it to the browser.
@@ -1409,13 +1411,14 @@ const MysteriumDashboard = () => {
   // Sync nodeAwareUrlRef whenever fleet node selection changes —
   // fetchArchive uses this ref to avoid the stale-closure bug with useCallback([])
   useEffect(() => { nodeAwareUrlRef.current = getNodeAwareUrl(); });
+  useEffect(() => { archiveSearchRef.current = archiveSearch; });
 
   // Fetch archive sessions from SessionDB when History tab is opened
   const fetchArchive = useCallback((offset = 0, replace = true) => {
     if (!backendUrlRef.current) return;
     setArchiveLoading(true);
     const hdrs = authHeaderRef.current || {};
-    fetch(`${nodeAwareUrlRef.current}/sessions/archive?limit=${ARCHIVE_PAGE}&offset=${offset}`, { headers: hdrs })
+    fetch(`${nodeAwareUrlRef.current}/sessions/archive?limit=${ARCHIVE_PAGE}&offset=${offset}&search=${encodeURIComponent(archiveSearchRef.current || '')}`, { headers: hdrs })
       .then(r => r.json())
       .then(data => {
         const items = data.items || [];
@@ -1428,8 +1431,11 @@ const MysteriumDashboard = () => {
   }, []);
 
   useEffect(() => {
-    if (sessionTab === 'history') fetchArchive(0, true);
-  }, [sessionTab, fetchArchive, selectedNodeId]);
+    if (sessionTab !== 'history') return;
+    setArchiveOffset(0);
+    const t = setTimeout(() => fetchArchive(0, true), archiveSearch ? 300 : 0);
+    return () => clearTimeout(t);
+  }, [sessionTab, fetchArchive, selectedNodeId, archiveSearch]);
 
   // Auto-refresh every 5s
   useEffect(() => {
@@ -2820,7 +2826,29 @@ const MysteriumDashboard = () => {
               {/* ======= HISTORY TAB ======= */}
               {sessionTab === 'history' && (
                 <>
-                  {metrics.sessions.items && metrics.sessions.items.length > 0 ? (
+                  {/* Search bar — wallet or session id, searched server-side across the whole archive */}
+                  <div className="mb-3 flex items-center gap-2">
+                    <div className="relative flex-1">
+                      <input
+                        type="text"
+                        value={archiveSearch}
+                        onChange={(e) => setArchiveSearch(e.target.value)}
+                        placeholder="Search wallet (0x…) or session ID…"
+                        className="w-full bg-slate-900/60 border border-slate-700 rounded-lg pl-3 pr-8 py-2 text-xs font-mono text-cyan-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-600/60"
+                      />
+                      {archiveSearch && (
+                        <button
+                          onClick={() => setArchiveSearch('')}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 text-sm"
+                          title="Clear search"
+                        >✕</button>
+                      )}
+                    </div>
+                    {archiveSearch.trim() && (
+                      <span className="text-[11px] text-slate-500 whitespace-nowrap">{archiveTotal} match{archiveTotal === 1 ? '' : 'es'}</span>
+                    )}
+                  </div>
+                  {archiveSearch.trim() ? null : (metrics.sessions.items && metrics.sessions.items.length > 0 ? (
                     <>
                       {/* Mobile stacked view */}
                       <div className="sm:hidden space-y-2">
@@ -2854,7 +2882,7 @@ const MysteriumDashboard = () => {
                               {s.started_fmt && <span className="text-slate-500">{s.started_fmt}</span>}
                               {s.is_active && <span className="text-emerald-400 text-[10px]">● live</span>}
                             </div>
-                            {s.id && <div className="mt-1 text-slate-600 font-mono text-[10px]">{s.id.slice(0, 8)}…</div>}
+                            {s.id && <div className="mt-1"><CopyableId id={s.id} label="Session ID" className="text-[10px]" /></div>}
                           </div>
                         ))}
                       </div>
@@ -2898,8 +2926,8 @@ const MysteriumDashboard = () => {
                                 </div>
                               )}
                             </div>
-                            <div className="col-span-1 text-slate-500 font-mono text-xs truncate" title={session.id}>
-                              {session.id ? session.id.slice(0, 8) + '…' : '—'}
+                            <div className="col-span-1 min-w-0">
+                              <CopyableId id={session.id} label="Session ID" />
                             </div>
                           </div>
                         ))}
@@ -2907,13 +2935,15 @@ const MysteriumDashboard = () => {
                     </>
                   ) : (
                     <div className="text-xs text-slate-500 py-8 text-center">No completed sessions yet</div>
-                  )}
+                  ))}
 
                   {/* ======= ARCHIVE SECTION — SessionDB history (survives node restarts) ======= */}
                   {(() => {
                     // Only show archive sessions not already in the live TequilAPI store
                     const liveIds = new Set((metrics.sessions?.items || []).map(s => s.id));
-                    const archiveOnly = archiveSessions.filter(s => !liveIds.has(s.id));
+                    const archiveOnly = archiveSearch.trim()
+                      ? archiveSessions
+                      : archiveSessions.filter(s => !liveIds.has(s.id));
 
                     // Still loading — show spinner
                     if (archiveLoading && archiveOnly.length === 0) return (
@@ -2935,7 +2965,9 @@ const MysteriumDashboard = () => {
                     if (!archiveLoading && archiveSessions.length === 0) return (
                       <div className="mt-4 pt-4 border-t border-slate-700/40">
                         <div className="text-xs text-slate-600">
-                          Archive is empty — sessions older than 30 days will appear here automatically as your node keeps running.
+                          {archiveSearch.trim()
+                            ? 'No sessions match "' + archiveSearch.trim() + '".'
+                            : 'Archive is empty — sessions older than 30 days will appear here automatically as your node keeps running.'}
                         </div>
                       </div>
                     );
@@ -2991,7 +3023,7 @@ const MysteriumDashboard = () => {
                                       </div>
                                     )}
                                   </div>
-                                  <div className="col-span-1 text-slate-600 font-mono text-xs truncate">{s.id ? s.id.slice(0,8)+'…' : '—'}</div>
+                                  <div className="col-span-1 min-w-0"><CopyableId id={s.id} label="Session ID" /></div>
                                 </div>
                               ))}
                             </div>
