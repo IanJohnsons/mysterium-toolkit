@@ -2,6 +2,11 @@
 All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.2.37
+- security (firewall): setup no longer opens the Mysterium Node UI port (4449/tcp) to the network. It exposed the node's own control UI with no toolkit protection in front of it. The Node UI stays reachable on localhost and LAN; node onboarding now documents the secure SSH-tunnel method (ssh -L 4449:127.0.0.1:4449) so it works without exposing the port and without Tailscale
+- fix (firewall/docs): corrected the documented P2P UDP range to 10000-60000, matching the node's udp.ports default (10000:60000) confirmed in Mysterium core config — the README previously said 65000
+- docs (ports): the Ports-opened table now reflects what setup actually opens (5000/tcp + 10000-60000/udp on local installs only; remote/fleet opens 5000 only). Clarified that 4050/tcp (TequilAPI) is localhost-only and never firewalled open, and that 4449/tcp is intentionally left closed
+
 ## v1.2.36
 - fix (node quality in Verified mode): the Discovery query now includes access_policy=all. Without it, Discovery only returns proposals under the default public policy, so when Public ran in Verified mode the wireguard proposal (moved to the 'mysterium' policy) was omitted and quality wrongly showed 0 score / 0% uptime / 0 Mbit/s. With access_policy=all the node's proposals and quality are read correctly in every mode — verified live against the Discovery API (1 proposal without the flag vs 6 with it)
 - fix (false warning removed): dropped the inaccurate 'Verified mode blocks Mysterium monitoring agents' notice. Verified does not block monitoring — the 0% readings were caused solely by the missing query parameter above, not by Mysterium

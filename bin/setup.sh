@@ -1078,11 +1078,11 @@ else:
 " 2>/dev/null || echo "local")
 
 if [ "$TOOLKIT_MODE" = "local" ]; then
-    _open_port 4449 tcp  "MystNodes UI (Node web interface)"
-    _open_range 10000 60000 udp  # P2P / NAT hole punching (myst --udp.ports default)
-    echo -e "  ${GREEN}✓ Mysterium node ports configured (4449/tcp, 10000-60000/udp)${NC}"
-    echo -e "  ${DIM}  Note: OpenVPN (1194) and WireGuard (51820) are NOT needed —${NC}"
-    echo -e "  ${DIM}  Mysterium uses WireGuard over the UDP range above via NAT hole punching.${NC}"
+    _open_range 10000 60000 udp  # P2P / NAT hole punching (myst --udp.ports default 10000:60000)
+    echo -e "  ${GREEN}✓ Mysterium P2P ports configured (10000-60000/udp)${NC}"
+    echo -e "  ${DIM}  Note: the Node UI (4449/tcp) is intentionally NOT opened to the internet —${NC}"
+    echo -e "  ${DIM}  it stays reachable on localhost/LAN. OpenVPN (1194) and WireGuard (51820)${NC}"
+    echo -e "  ${DIM}  are NOT needed — Mysterium uses WireGuard over the UDP range via NAT hole punching.${NC}"
 fi
 
 # Persist iptables rules if that's what we used
@@ -1091,7 +1091,7 @@ case "$_FW_TYPE" in
     firewalld) _firewalld_reload ;;
 esac
 
-echo -e "  ${DIM}Node UI: http://$(python3 -c "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.connect(('8.8.8.8',80)); print(s.getsockname()[0]); s.close()" 2>/dev/null || echo "YOUR_IP"):4449/ui  (TequilAPI on port 4050)${NC}"
+echo -e "  ${DIM}Node UI: http://$(python3 -c "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.connect(('8.8.8.8',80)); print(s.getsockname()[0]); s.close()" 2>/dev/null || echo "YOUR_IP"):4449/ui  (local network only · TequilAPI on port 4050)${NC}"
 echo
     echo -e "  ${DIM}─────────────────────────────────────────────${NC}"
     echo -e "  ${GREEN}Firewall configuration done. Press Enter to continue...${NC}"

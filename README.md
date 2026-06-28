@@ -1,6 +1,6 @@
 # Mysterium Node Toolkit
 
-![Version](https://img.shields.io/badge/version-1.2.36-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Version](https://img.shields.io/badge/version-1.2.37-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 
 A professional monitoring and management dashboard for [Mysterium Network](https://mysterium.network) VPN node operators. Runs fully local on your node machine — no cloud account, no third-party service, no data leaving your server.
 
@@ -213,8 +213,12 @@ If the automatic method fails, the manual fallback is shown:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 IMPORTANT: Complete your node setup in the browser:
 
-  1. Open http://YOUR_SERVER_IP:4449/ui  (Node UI)
-     (replace YOUR_SERVER_IP with this machine's IP)
+  1. Open the Node UI to claim it:
+       • On this machine:  http://localhost:4449/ui
+       • Remote / VPS:     open an SSH tunnel first, then use localhost:
+           ssh -L 4449:127.0.0.1:4449 USER@THIS_SERVER_IP
+         then open http://localhost:4449/ui on your own computer.
+     (Port 4449 is not exposed to the internet, by design.)
 
   2. Log in and accept the Terms & Conditions
   3. Claim your node on mystnodes.com:
@@ -960,13 +964,20 @@ firewalld → iptables (with active rules) → ufw → nftables → iptables-leg
 
 Based on active rules, not binary presence.
 
-### Ports opened — Type 1 / Type 2
+### Ports opened — Type 1 / Type 2 (local installs)
+
+This table applies when the toolkit runs on the node machine (`toolkit_mode=local`). Remote / fleet-slave installs (`toolkit_mode=remote`) open **only** port 5000.
 
 | Port | Protocol | Service |
 |------|----------|---------|
 | 5000 | TCP | Toolkit dashboard |
-| 4050 | TCP | TequilAPI (internal — localhost only) |
-| 10000–65000 | UDP | P2P / NAT hole punching |
+| 10000–60000 | UDP | Mysterium P2P / NAT hole punching (matches the node's `udp.ports` default of `10000:60000`) |
+
+**Not opened, by design:**
+
+- **4050/tcp (TequilAPI)** — used by the toolkit on localhost only; never exposed to the network.
+- **4449/tcp (Node UI)** — intentionally left closed to the internet for security. The Mysterium Node UI stays reachable on localhost and your LAN; open it yourself only if you knowingly want remote access to it.
+- **1194 (OpenVPN) / 51820 (WireGuard)** — not used; Mysterium runs WireGuard over the UDP range above via NAT hole punching. The toolkit can remove these if an older install left them open (Security tab).
 
 > **Type 3:** firewall configuration is skipped — the node machine manages its own rules. Run setup on the node machine to apply them there.
 
