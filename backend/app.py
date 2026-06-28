@@ -589,6 +589,7 @@ _vpn_day_baseline = {
 _vpn_day_baseline_lock = Lock()
 _tier_slow_last = 0
 TIER_SLOW_INTERVAL = 600    # 10 minutes — reduced API calls (was 300)
+_last_medium_unsettled = None   # last unsettled MYST seen on medium tier (settle detection)
 
 # ============ DATA RETENTION ============
 # Default retention periods (days) per database type.
@@ -4858,24 +4859,28 @@ class MetricsCollector:
                 _tier_medium_last = now
                 logger.debug("Medium tier refreshed (TequilaCache)")
 
-                # H1: detect a node-side AUTO-settle so the dashboard balance refreshes
-                # promptly instead of lagging up to the full slow-tier interval (10 min).
-                # When the live unsettled estimate (sum of live session tokens) drops far
-                # below the last cached on-chain unsettled, a settle just happened → force
-                # the slow tier to re-poll identity earnings on the next loop. Costs no extra
-                # API calls in steady state; only fires on an actual settle event.
+                # Detect a settle (auto OR manual) promptly: read the node's own
+                # unsettled earnings on the medium tier and compare to the last value.
+                # Unsettled only ever DROPS on a settle (otherwise it climbs with
+                # accrual), so a meaningful drop means a settle happened → force the
+                # slow tier to re-poll identity earnings on the next loop instead of
+                # waiting up to the full slow-tier interval (10 min). One cheap identity
+                # read per minute; fires the refresh only on a real drop.
+                global _last_medium_unsettled
                 try:
-                    _cached_unsettled = float((_tier_slow_cache or {}).get('earnings', {}).get('unsettled', 0) or 0)
-                    if _cached_unsettled >= 1.0:
-                        _live_tok = sum(int(s.get('tokens', 0) or 0) for s in TequilaCache.get_all_sessions())
-                        _live_unsettled_est = _live_tok / 1e18
-                        if _live_unsettled_est < _cached_unsettled * 0.5:
-                            _tier_slow_last = 0
-                            _polygonscan_cache['timestamp'] = 0
-                            logger.info(f"H1: settle detected (live≈{_live_unsettled_est:.2f} MYST << "
-                                        f"cached unsettled {_cached_unsettled:.2f}) — forcing earnings refresh")
-                except Exception as _h1_e:
-                    logger.debug(f"H1 settle-detect skipped: {_h1_e}")
+                    _e = MetricsCollector.get_identity_earnings(headers)
+                    _cur_unsettled = float(_e.get('unsettled', 0) or 0)
+                    if (_e.get('reachable')
+                            and _last_medium_unsettled is not None
+                            and _cur_unsettled < _last_medium_unsettled - 0.5):
+                        _tier_slow_last = 0
+                        _polygonscan_cache['timestamp'] = 0
+                        logger.info(f"Settle detected (unsettled {_last_medium_unsettled:.2f} "
+                                    f"→ {_cur_unsettled:.2f} MYST) — forcing earnings refresh")
+                    if _e.get('reachable'):
+                        _last_medium_unsettled = _cur_unsettled
+                except Exception as _se:
+                    logger.debug(f"settle-detect skipped: {_se}")
             except Exception as e:
                 logger.warning(f"Medium tier error: {e}")
 

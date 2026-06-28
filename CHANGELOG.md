@@ -2,6 +2,9 @@
 All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.2.38
+- fix (settle detection): the dashboard now reflects a settlement (auto OR manual) within ~1 minute instead of lagging up to the 10-minute slow-tier interval. The medium tier (60s) reads the node's own unsettled earnings and, when it drops by more than 0.5 MYST (unsettled only ever falls on a settle, otherwise it climbs with accrual), forces an immediate earnings refresh. Replaces the previous heuristic that estimated unsettled from live session tokens — an unreliable signal that rarely fired
+
 ## v1.2.37
 - security (firewall): setup no longer opens the Mysterium Node UI port (4449/tcp) to the network. It exposed the node's own control UI with no toolkit protection in front of it. The Node UI stays reachable on localhost and LAN; node onboarding now documents the secure SSH-tunnel method (ssh -L 4449:127.0.0.1:4449) so it works without exposing the port and without Tailscale
 - fix (firewall/docs): corrected the documented P2P UDP range to 10000-60000, matching the node's udp.ports default (10000:60000) confirmed in Mysterium core config — the README previously said 65000
