@@ -2,6 +2,12 @@
 All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.2.32
+- fix (Public/monitoring): turning Public Off no longer deletes the wireguard service (which tore down the shared WireGuard subnet and killed monitoring + other services on it). On nodes that manage wireguard via active-services, Off now removes only wireguard from the list and lets the node reconcile gracefully — monitoring keeps running. Falls back to a direct stop only when wireguard is managed separately. Open/Verified re-adds wireguard to active-services so Public persists across restarts
+- fix (tunnels): the Tunnels & Sessions count now reads recent-active tunnels (traffic in the last 5 minutes) instead of the cumulative since-boot interface count, so it no longer shows idle pool interfaces (e.g. '6 tunnels / 1 session')
+- feat (export): new CSV/TXT export of the session archive — choose last 30/90 days or all history, optionally filtered to a single consumer wallet. Generated read-only from the frozen archive so settled earnings are accurate. Available from the History tab
+- docs: updated in-app Help and README for the new Off behavior and the export feature
+
 ## v1.2.31
 - fix (G1): lifetime totals (earnings, data, sessions, service breakdown) now come from a permanent daily rollup (`earnings_rollup.db`) that survives session pruning — pruning old sessions can no longer shrink lifetime figures; a full data reset clears the rollup too
 - fix (A): Consumers tab, top earners, paying-consumer count and probe detection now use frozen archive tokens instead of live (settlement-zeroed) tokens, so settled real payers are no longer counted as 0-earning

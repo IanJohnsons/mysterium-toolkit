@@ -7851,6 +7851,109 @@ def get_sessions_archive():
         return jsonify({'items': [], 'total': 0, 'error': str(e)}), 200
 
 
+@app.route('/export/sessions', methods=['GET'])
+@require_auth
+def export_sessions():
+    """Export archived sessions as CSV or TXT (read-only, from sessions_history.db).
+
+    Query params:
+      format   csv | txt   (default csv)
+      days     30 | 90 | 0  (0 = all history; default 30)
+      wallet   optional consumer_id (0x...) exact-match filter
+      service  optional service_type filter
+
+    Uses frozen tokens from the session archive so settled earnings are accurate.
+    Read-only — touches no databases and makes no node calls.
+    """
+    try:
+        from flask import Response
+        import csv as _csv, io as _io
+
+        fmt = (request.args.get('format', 'csv') or 'csv').lower()
+        if fmt not in ('csv', 'txt'):
+            fmt = 'csv'
+        try:
+            days = int(request.args.get('days', 30))
+        except (TypeError, ValueError):
+            days = 30
+        wallet  = (request.args.get('wallet', '') or '').strip()
+        service = (request.args.get('service', '') or '').strip()
+
+        clauses, params = [], []
+        if days and days > 0:
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime('%Y-%m-%dT%H:%M:%SZ')
+            clauses.append("started_at >= ?"); params.append(cutoff)
+        if wallet:
+            clauses.append("consumer_id = ?"); params.append(wallet)
+        if service:
+            clauses.append("service_type = ?"); params.append(service)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+
+        rows = []
+        try:
+            with SessionDB._lock:
+                conn = SessionDB._conn()
+                rows = [dict(r) for r in conn.execute(
+                    f"SELECT id, started_at, consumer_id, consumer_country, service_type, "
+                    f"bytes_sent, bytes_received, tokens, status FROM sessions{where} "
+                    f"ORDER BY started_at DESC", params).fetchall()]
+                conn.close()
+        except Exception as e:
+            return jsonify({'error': f'export query failed: {e}'}), 200
+
+        tot_earn = sum(int(r.get('tokens', 0) or 0) for r in rows) / 1e18
+        tot_out  = sum(int(r.get('bytes_sent', 0) or 0) for r in rows) / (1024 * 1024)
+        tot_in   = sum(int(r.get('bytes_received', 0) or 0) for r in rows) / (1024 * 1024)
+
+        period_label = 'all' if not days or days <= 0 else f'last-{days}d'
+        stamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
+        fname = f"mysterium_sessions_{period_label}_{stamp}.{fmt}"
+
+        if fmt == 'csv':
+            buf = _io.StringIO()
+            w = _csv.writer(buf)
+            w.writerow(['session_id', 'started_at', 'consumer_wallet', 'country', 'service_type',
+                        'data_out_mb', 'data_in_mb', 'earned_myst', 'status'])
+            for r in rows:
+                w.writerow([
+                    r.get('id', ''), r.get('started_at', ''), r.get('consumer_id', ''),
+                    r.get('consumer_country', '') or '', r.get('service_type', '') or '',
+                    round(int(r.get('bytes_sent', 0) or 0) / (1024 * 1024), 3),
+                    round(int(r.get('bytes_received', 0) or 0) / (1024 * 1024), 3),
+                    round(int(r.get('tokens', 0) or 0) / 1e18, 6),
+                    r.get('status', '') or '',
+                ])
+            body, mime = buf.getvalue(), 'text/csv'
+        else:
+            L = []
+            L.append("Mysterium Node Toolkit — session export")
+            _flt = (f" · wallet={wallet}" if wallet else "") + (f" · service={service}" if service else "")
+            L.append(f"Period: {period_label}{_flt}")
+            L.append(f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
+            L.append(f"Sessions: {len(rows)} · Earned: {tot_earn:.6f} MYST · "
+                     f"Out: {tot_out:.2f} MB · In: {tot_in:.2f} MB")
+            L.append("-" * 104)
+            L.append(f"{'started_at':<20} {'wallet':<14} {'cc':<3} {'service':<14} "
+                     f"{'out_mb':>10} {'in_mb':>10} {'MYST':>12} status")
+            for r in rows:
+                L.append(
+                    f"{(r.get('started_at', '') or '')[:19]:<20} "
+                    f"{(r.get('consumer_id', '') or '')[:12]:<14} "
+                    f"{(r.get('consumer_country', '') or '')[:3]:<3} "
+                    f"{(r.get('service_type', '') or '')[:14]:<14} "
+                    f"{int(r.get('bytes_sent', 0) or 0) / (1024 * 1024):>10.2f} "
+                    f"{int(r.get('bytes_received', 0) or 0) / (1024 * 1024):>10.2f} "
+                    f"{int(r.get('tokens', 0) or 0) / 1e18:>12.6f} {r.get('status', '') or ''}"
+                )
+            body, mime = "\n".join(L) + "\n", 'text/plain'
+
+        return Response(body, mimetype=mime,
+                        headers={'Content-Disposition': f'attachment; filename="{fname}"'})
+    except Exception as e:
+        logger.warning(f'export/sessions error: {e}')
+        return jsonify({'error': str(e)}), 200
+
+
 @app.route('/sessions/db/country-debug', methods=['GET'])
 @require_auth
 def sessions_db_country_debug():
@@ -8172,10 +8275,46 @@ def set_wireguard_mode():
                         pass
 
                 if mode == 'off':
-                    if wg_running and wg_id:
-                        dr = requests.delete(f'{node_url}/services/{wg_id}', headers=headers, timeout=10)
-                        if dr.status_code not in (200, 202, 204):
-                            return jsonify({'success': False, 'error': f'Stop failed: HTTP {dr.status_code}'}), 200
+                    # Node-aware Off. In the standard multi-service setup, wireguard, dvpn,
+                    # scraping, data_transfer and monitoring all share ONE WireGuard subnet
+                    # and wireguard is listed in active-services. A blunt DELETE of the
+                    # wireguard service tears down that shared subnet and takes monitoring
+                    # (and the other services) down with it. So when wireguard is managed via
+                    # active-services, remove ONLY wireguard from the list and let the node's
+                    # service manager reconcile gracefully — monitoring keeps running. Only
+                    # fall back to a direct service stop when wireguard is NOT in
+                    # active-services (nodes that manage it separately).
+                    active = []
+                    wg_in_active = False
+                    try:
+                        cr = requests.get(f'{node_url}/config', headers=headers, timeout=5)
+                        if cr.status_code == 200:
+                            active_raw = (cr.json().get('data', {}) or {}).get('active-services') or ''
+                            active = [s.strip() for s in active_raw.split(',') if s.strip()]
+                            wg_in_active = 'wireguard' in active
+                    except Exception:
+                        active = []
+
+                    if wg_in_active:
+                        new_active = ','.join([s for s in active if s != 'wireguard'])
+                        try:
+                            wr = requests.post(
+                                f'{node_url}/config',
+                                headers={**headers, 'Content-Type': 'application/json'},
+                                json={'data': {'active-services': new_active}},
+                                timeout=10,
+                            )
+                            if wr.status_code not in (200, 202, 204):
+                                return jsonify({'success': False,
+                                                'error': f'Config write failed: HTTP {wr.status_code}'}), 200
+                        except Exception as _e:
+                            return jsonify({'success': False, 'error': f'Config write failed: {_e}'}), 200
+                    else:
+                        # Legacy fallback: wireguard managed separately → stop the service directly.
+                        if wg_running and wg_id:
+                            dr = requests.delete(f'{node_url}/services/{wg_id}', headers=headers, timeout=10)
+                            if dr.status_code not in (200, 202, 204):
+                                return jsonify({'success': False, 'error': f'Stop failed: HTTP {dr.status_code}'}), 200
                     # Clear access-policies via myst CLI (POST /config returns 404 for nested keys)
                     try:
                         import subprocess as _sp
@@ -8195,8 +8334,10 @@ def set_wireguard_mode():
                                 except Exception: pass
                     except Exception:
                         pass
-                    return jsonify({'success': True, 'mode': 'off',
-                                    'message': 'Public service stopped. Existing tunnels persist until natural disconnect.'}), 200
+                    _off_msg = ('Public disabled via active-services — monitoring and other services keep running.'
+                                if wg_in_active else
+                                'Public service stopped. Existing tunnels persist until natural disconnect.')
+                    return jsonify({'success': True, 'mode': 'off', 'message': _off_msg}), 200
 
                 # open / verified: set config via myst CLI (POST /config returns 404 for nested keys)
                 # then cycle the wireguard service so new access-policies takes effect
@@ -8251,6 +8392,23 @@ def set_wireguard_mode():
                                 logger.debug(f"Config write fallback error for {_cfg_path}: {_e}")
                 except Exception as e:
                     logger.warning(f"myst config set failed: {e}")
+
+                # Ensure wireguard is back in active-services so Public persists across node
+                # restarts — a previous "Off" may have removed it from the list.
+                try:
+                    cr2 = requests.get(f'{node_url}/config', headers=headers, timeout=5)
+                    if cr2.status_code == 200:
+                        act_raw = (cr2.json().get('data', {}) or {}).get('active-services') or ''
+                        act = [s.strip() for s in act_raw.split(',') if s.strip()]
+                        if 'wireguard' not in act:
+                            act.append('wireguard')
+                            requests.post(
+                                f'{node_url}/config',
+                                headers={**headers, 'Content-Type': 'application/json'},
+                                json={'data': {'active-services': ','.join(act)}}, timeout=10,
+                            )
+                except Exception as _e:
+                    logger.debug(f"re-add wireguard to active-services skipped: {_e}")
 
                 if wg_running and wg_id:
                     requests.delete(f'{node_url}/services/{wg_id}', headers=headers, timeout=10)

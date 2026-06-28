@@ -1016,6 +1016,9 @@ const MysteriumDashboard = () => {
   const [archiveLoading, setArchiveLoading] = useState(false);
   const [archiveOffset, setArchiveOffset] = useState(0);
   const [archiveSearch, setArchiveSearch] = useState('');  // wallet / session-id search (History tab)
+  const [exportFmt, setExportFmt] = useState('csv');       // CSV/TXT export format
+  const [exportDays, setExportDays] = useState(30);        // export window (0 = all)
+  const [exportBusy, setExportBusy] = useState(false);
   const ARCHIVE_PAGE = 100;
   // Pi mode state
   const [piMode, setPiMode] = useState(false);
@@ -2438,14 +2441,14 @@ const MysteriumDashboard = () => {
               </div>
               <h3 className="text-xs font-semibold text-slate-300 tracking-wide mb-2">Tunnels & Sessions</h3>
               <div className="flex items-center gap-2">
-                <div className="text-2xl font-bold mb-1">{safeNum(metrics.sessions?.vpn_tunnel_count || 0)}</div>
-                {safeNum(metrics.sessions?.vpn_tunnel_count || 0) > 0 && (
+                <div className="text-2xl font-bold mb-1">{safeNum(metrics.live_connections?.active ?? metrics.sessions?.vpn_tunnel_count ?? 0)}</div>
+                {safeNum(metrics.live_connections?.active ?? metrics.sessions?.vpn_tunnel_count ?? 0) > 0 && (
                   <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse mb-1" />
                 )}
               </div>
               <div className="text-xs text-slate-400">
                 {(() => {
-                  const tunnels  = safeNum(metrics.sessions?.vpn_tunnel_count || 0);
+                  const tunnels  = safeNum(metrics.live_connections?.active ?? metrics.sessions?.vpn_tunnel_count ?? 0);
                   const sessions = safeNum(metrics.sessions?.active || 0);
                   const clients  = safeNum(metrics.sessions?.active_unique_consumers || 0);
                   const parts = [`${tunnels} tunnel${tunnels !== 1 ? 's' : ''}`];
@@ -2846,6 +2849,60 @@ const MysteriumDashboard = () => {
                     </div>
                     {archiveSearch.trim() && (
                       <span className="text-[11px] text-slate-500 whitespace-nowrap">{archiveTotal} match{archiveTotal === 1 ? '' : 'es'}</span>
+                    )}
+                  </div>
+                  {/* Export controls — CSV/TXT of the archive (frozen tokens, read-only).
+                      If the search box holds a 0x wallet, the export is filtered to it. */}
+                  <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
+                    <span className="text-slate-500">Export:</span>
+                    <select
+                      value={exportDays}
+                      onChange={(e) => setExportDays(parseInt(e.target.value, 10))}
+                      className="bg-slate-900/60 border border-slate-700 rounded-md px-2 py-1 text-slate-200 focus:outline-none focus:border-cyan-600/60"
+                    >
+                      <option value={30}>Last 30 days</option>
+                      <option value={90}>Last 90 days</option>
+                      <option value={0}>All history</option>
+                    </select>
+                    <select
+                      value={exportFmt}
+                      onChange={(e) => setExportFmt(e.target.value)}
+                      className="bg-slate-900/60 border border-slate-700 rounded-md px-2 py-1 text-slate-200 focus:outline-none focus:border-cyan-600/60"
+                    >
+                      <option value="csv">CSV</option>
+                      <option value="txt">TXT</option>
+                    </select>
+                    <button
+                      disabled={exportBusy}
+                      onClick={async () => {
+                        setExportBusy(true);
+                        try {
+                          const term = archiveSearch.trim();
+                          const wq = term.startsWith('0x') ? `&wallet=${encodeURIComponent(term)}` : '';
+                          const res = await fetch(
+                            `${nodeAwareUrlRef.current}/export/sessions?format=${exportFmt}&days=${exportDays}${wq}`,
+                            { headers: authHeaderRef.current || {} }
+                          );
+                          if (!res.ok) throw new Error('export failed');
+                          const blob = await res.blob();
+                          const href = URL.createObjectURL(blob);
+                          const a = document.createElement('a');
+                          a.href = href;
+                          a.download = `mysterium_sessions_${exportDays === 0 ? 'all' : exportDays + 'd'}.${exportFmt}`;
+                          document.body.appendChild(a); a.click(); a.remove();
+                          URL.revokeObjectURL(href);
+                        } catch (e) {
+                          /* download failed — leave UI untouched */
+                        } finally {
+                          setExportBusy(false);
+                        }
+                      }}
+                      className="px-3 py-1 rounded-md bg-cyan-600/20 border border-cyan-600/40 text-cyan-200 hover:bg-cyan-600/30 disabled:opacity-50"
+                    >
+                      {exportBusy ? 'Exporting…' : '↓ Download'}
+                    </button>
+                    {archiveSearch.trim().startsWith('0x') && (
+                      <span className="text-[11px] text-slate-500">filtered to wallet</span>
                     )}
                   </div>
                   {archiveSearch.trim() ? null : (metrics.sessions.items && metrics.sessions.items.length > 0 ? (
@@ -3810,7 +3867,7 @@ const MysteriumDashboard = () => {
 
                 <div>
                   <h4 className="text-emerald-400 font-semibold mb-1">Sessions &amp; Consumers</h4>
-                  <p className="text-slate-400"><strong className="text-slate-300">Tunnels</strong> — WireGuard kernel interfaces (myst0, myst1…) that carried traffic in the <strong className="text-slate-300">last 5 minutes</strong>. Mysterium keeps a pool of myst* interfaces that linger after a consumer disconnects (WireGuard has no session concept), so this count is based on recent activity rather than lifetime traffic — keeping it aligned with the live consumer count instead of inflating. <strong className="text-slate-300">Active</strong> — sessions matched to live tunnels with actual traffic. <strong className="text-slate-300">History</strong> — all pages loaded at startup; use the search box to find any wallet or session ID across the whole archive. <strong className="text-slate-300">Consumers</strong> — grouped by wallet, sortable. Multiple sessions per consumer is normal — Mysterium reconnects frequently. All tabs are sortable.</p>
+                  <p className="text-slate-400"><strong className="text-slate-300">Tunnels</strong> — WireGuard kernel interfaces (myst0, myst1…) that carried traffic in the <strong className="text-slate-300">last 5 minutes</strong>. Mysterium keeps a pool of myst* interfaces that linger after a consumer disconnects (WireGuard has no session concept), so this count is based on recent activity rather than lifetime traffic — keeping it aligned with the live consumer count instead of inflating. <strong className="text-slate-300">Active</strong> — sessions matched to live tunnels with actual traffic. <strong className="text-slate-300">History</strong> — all pages loaded at startup; use the search box to find any wallet or session ID across the whole archive, and the Export controls to download the archive (or a single wallet's sessions) as CSV or TXT for the last 30/90 days or all history. <strong className="text-slate-300">Consumers</strong> — grouped by wallet, sortable. Multiple sessions per consumer is normal — Mysterium reconnects frequently. All tabs are sortable.</p>
                 </div>
 
                 <div>
@@ -3848,7 +3905,7 @@ const MysteriumDashboard = () => {
                   <h4 className="text-emerald-400 font-semibold mb-1">Node Analytics</h4>
                   <p className="text-slate-400"><strong className="text-slate-300">API cache row</strong> (grey) — live session data. Earnings are low because Mysterium zeroes token values after settlement. <strong className="text-slate-300">Archive row</strong> (green) — from sessions_history.db. Token values are frozen at fetch time before zeroing, giving accurate historical earnings. Includes service type breakdown and consumer origin. The <strong className="text-slate-300">Consumers</strong> tab, top earners and paying-consumer count also use these frozen values, so a real consumer whose sessions already settled still shows their true earnings instead of zero.</p>
                   <p className="text-slate-400 mt-1"><strong className="text-slate-300">Service types</strong> — reported directly by the Mysterium TequilAPI. <strong className="text-slate-300">B2B VPN and data transfer</strong> = B2B streaming/data traffic (access policy: mysterium). <strong className="text-slate-300">B2B Data Scraping</strong> = B2B scraping traffic including QUIC variant (access policy: mysterium). <strong className="text-slate-300">VPN</strong> = Mysterium VPN app users (access policy: mysterium). <strong className="text-slate-300">Public</strong> = wireguard service with configurable access mode — see below. <strong className="text-slate-300">Monitoring</strong> = Mysterium network probe sessions, excluded from analytics.</p>
-                  <p className="text-slate-400 mt-2"><strong className="text-slate-300">Public service modes</strong> (wireguard.access-policies config flag): <strong className="text-slate-300 text-emerald-400">Open</strong> = anyone can connect, including Mysterium Dark and 3rd party apps — flag = <code className="bg-slate-800 px-1 rounded">""</code>. <strong className="text-amber-400">Verified</strong> = only Mysterium-registered consumers with on-chain identity and MYST stake — flag = <code className="bg-slate-800 px-1 rounded">"mysterium"</code>. <strong className="text-slate-400">Off</strong> = wireguard service stopped, no new connections. Existing WireGuard tunnels stay active until consumers disconnect naturally — this is WireGuard kernel behavior, not a toolkit limitation. Individual consumer blocking is not possible at the node API level; use Verified mode to restrict to the Mysterium identity network.</p>
+                  <p className="text-slate-400 mt-2"><strong className="text-slate-300">Public service modes</strong> (wireguard.access-policies config flag): <strong className="text-slate-300 text-emerald-400">Open</strong> = anyone can connect, including Mysterium Dark and 3rd party apps — flag = <code className="bg-slate-800 px-1 rounded">""</code>. <strong className="text-amber-400">Verified</strong> = only Mysterium-registered consumers with on-chain identity and MYST stake — flag = <code className="bg-slate-800 px-1 rounded">"mysterium"</code>. <strong className="text-slate-400">Off</strong> = Public stops accepting new connections. On nodes that manage WireGuard via active-services (the standard multi-service setup, where Public shares one subnet with VPN/scraping/monitoring), Off removes only wireguard from active-services so monitoring and the other services keep running — it no longer tears down the shared subnet. Existing WireGuard tunnels stay active until consumers disconnect naturally — this is WireGuard kernel behavior, not a toolkit limitation. Individual consumer blocking is not possible at the node API level; use Verified mode to restrict to the Mysterium identity network.</p>
                   <p className="text-slate-400 mt-2"><strong className="text-slate-300">Consumer payment enforcement</strong> — consumers must have a funded Hermes payment channel (MYST tokens on Polygon) to establish a session. The node enforces this automatically via off-chain promise signing. A consumer without sufficient balance is rejected before any data flows — you cannot lose earnings from unpaid consumers. Probe sessions (Mysterium network quality bots) are exempt and identified automatically by the toolkit.</p>
                 </div>
 

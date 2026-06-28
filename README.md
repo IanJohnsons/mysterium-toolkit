@@ -1,6 +1,6 @@
 # Mysterium Node Toolkit
 
-![Version](https://img.shields.io/badge/version-1.2.31-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Version](https://img.shields.io/badge/version-1.2.32-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 
 A professional monitoring and management dashboard for [Mysterium Network](https://mysterium.network) VPN node operators. Runs fully local on your node machine — no cloud account, no third-party service, no data leaving your server.
 
@@ -588,7 +588,7 @@ The dashboard runs in your browser — on the same machine, on your phone, or fr
 
 ### Session archive
 
-Every session is saved to SQLite with token values frozen the moment the session ends — before Mysterium zeroes them after settlement. The archive survives node restarts, re-installs, and settlements. View full history, filter by country, service type, or date. A **search box** finds every session for any consumer wallet (`0x…`) or session ID across the entire archive, and every session ID is **click-to-copy** for sharing with Mysterium support.
+Every session is saved to SQLite with token values frozen the moment the session ends — before Mysterium zeroes them after settlement. The archive survives node restarts, re-installs, and settlements. View full history, filter by country, service type, or date. A **search box** finds every session for any consumer wallet (`0x…`) or session ID across the entire archive, and every session ID is **click-to-copy** for sharing with Mysterium support. **Export** the archive (or a single wallet's sessions) to **CSV or TXT** for the last 30/90 days or all history — generated from the frozen archive, so settled earnings stay accurate.
 
 ### Node quality
 
