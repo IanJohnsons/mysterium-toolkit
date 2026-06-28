@@ -4677,7 +4677,11 @@ class MetricsCollector:
                             speed_down = (tx_delta / elapsed) / (1024 * 1024)  # MB/s
                         if rx_delta >= 0:
                             speed_up = (rx_delta / elapsed) / (1024 * 1024)
-                        if tx_delta > 0 or rx_delta > 0:
+                        # Only count meaningful traffic as "recent activity" — WireGuard
+                        # keepalives (~32 bytes/25s) on idle but still-connected peers would
+                        # otherwise keep every tunnel "active" forever. 2 KB/interval is far
+                        # above keepalive level but low enough to include slow real consumers.
+                        if (tx_delta + rx_delta) > 2048:
                             last_active = now
 
                 # Update history
@@ -7335,6 +7339,7 @@ def fleet_node_proxy(node_id, endpoint):
         'system/update', 'system/update/status', 'api/update-check',
         'services/wireguard-mode',
         'sessions/live',
+        'export/sessions',
         'firewall/remove-legacy-ports',
     }
     endpoint_base = endpoint.split('?')[0]
@@ -7377,6 +7382,17 @@ def fleet_node_proxy(node_id, endpoint):
             data=body,
             timeout=30,
         )
+        # Forward non-JSON responses (e.g. CSV/TXT file downloads) raw, preserving the
+        # content type and download filename. Only JSON bodies are re-serialized.
+        ctype = resp.headers.get('Content-Type', '')
+        if 'application/json' not in ctype.lower():
+            from flask import Response as _Resp
+            passthrough = {}
+            if resp.headers.get('Content-Disposition'):
+                passthrough['Content-Disposition'] = resp.headers['Content-Disposition']
+            return _Resp(resp.content, status=resp.status_code,
+                         mimetype=(ctype.split(';')[0] or 'application/octet-stream'),
+                         headers=passthrough)
         return jsonify(resp.json()), resp.status_code
     except Exception as e:
         return jsonify({'error': f'Proxy request failed: {str(e)[:80]}'}), 502

@@ -2,6 +2,11 @@
 All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.2.34
+- fix (export via fleet): the CSV/TXT session export now works when viewing a node through the fleet master. The fleet proxy lacked export/sessions in its allowlist and force-parsed every response as JSON (which mangled file downloads); it now allowlists the endpoint and forwards non-JSON responses raw, preserving Content-Type and the download filename
+- fix (export errors): the Download button now surfaces a visible error instead of failing silently
+- fix (tunnel count): the Tunnels count no longer includes idle-but-connected interfaces kept alive only by WireGuard keepalives. A tunnel counts as active only with real traffic (>2 KB/interval) in the last 5 minutes, so the number reflects tunnels actually serving consumers instead of the full interface pool
+
 ## v1.2.33
 - fix (Public/monitoring, second path): the generic service stop now stops Public (wireguard) via the active-services rewrite instead of a blunt DELETE — closing the same monitoring-killing footgun that v1.2.32 fixed for the Open/Verified/Off toggle. Falls back to a direct stop only when wireguard is managed separately. The UI already routes Public through the mode selector, so this hardens the API path against direct or future callers
 - cleanup: removed an unreachable dead return in the stop-service route

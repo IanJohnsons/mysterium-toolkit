@@ -1019,6 +1019,7 @@ const MysteriumDashboard = () => {
   const [exportFmt, setExportFmt] = useState('csv');       // CSV/TXT export format
   const [exportDays, setExportDays] = useState(30);        // export window (0 = all)
   const [exportBusy, setExportBusy] = useState(false);
+  const [exportErr, setExportErr] = useState('');
   const ARCHIVE_PAGE = 100;
   // Pi mode state
   const [piMode, setPiMode] = useState(false);
@@ -2876,6 +2877,7 @@ const MysteriumDashboard = () => {
                       disabled={exportBusy}
                       onClick={async () => {
                         setExportBusy(true);
+                        setExportErr('');
                         try {
                           const term = archiveSearch.trim();
                           const wq = term.startsWith('0x') ? `&wallet=${encodeURIComponent(term)}` : '';
@@ -2883,8 +2885,13 @@ const MysteriumDashboard = () => {
                             `${nodeAwareUrlRef.current}/export/sessions?format=${exportFmt}&days=${exportDays}${wq}`,
                             { headers: authHeaderRef.current || {} }
                           );
-                          if (!res.ok) throw new Error('export failed');
+                          if (!res.ok) throw new Error(`HTTP ${res.status}`);
                           const blob = await res.blob();
+                          // A JSON body here means the server returned an error, not a file.
+                          if ((blob.type || '').includes('application/json')) {
+                            const txt = await blob.text();
+                            throw new Error(txt.slice(0, 120));
+                          }
                           const href = URL.createObjectURL(blob);
                           const a = document.createElement('a');
                           a.href = href;
@@ -2892,7 +2899,7 @@ const MysteriumDashboard = () => {
                           document.body.appendChild(a); a.click(); a.remove();
                           URL.revokeObjectURL(href);
                         } catch (e) {
-                          /* download failed — leave UI untouched */
+                          setExportErr('Export failed: ' + (e?.message || 'unknown error'));
                         } finally {
                           setExportBusy(false);
                         }
@@ -2903,6 +2910,9 @@ const MysteriumDashboard = () => {
                     </button>
                     {archiveSearch.trim().startsWith('0x') && (
                       <span className="text-[11px] text-slate-500">filtered to wallet</span>
+                    )}
+                    {exportErr && (
+                      <span className="text-[11px] text-rose-400 w-full">{exportErr}</span>
                     )}
                   </div>
                   {archiveSearch.trim() ? null : (metrics.sessions.items && metrics.sessions.items.length > 0 ? (
