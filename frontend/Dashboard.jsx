@@ -2730,7 +2730,12 @@ const MysteriumDashboard = () => {
                   })()}
                   {(metrics.live_connections?.peers?.length > 0 || (metrics.bandwidth.vpn_interfaces && Object.keys(metrics.bandwidth.vpn_interfaces).length > 0)) && (
                     <div className="mt-3 pt-3 border-t border-slate-700/30 flex items-center justify-between text-xs text-slate-500 flex-wrap gap-2">
-                      <span>Tunnels: {metrics.live_connections.active} active ({metrics.live_connections.transferring || 0} transferring)</span>
+                      <span>
+                        Tunnels: {metrics.live_connections.active} active ({metrics.live_connections.transferring || 0} transferring)
+                        {metrics.live_connections.handshake === false && (
+                          <span className="text-amber-500/80" title="Run setup again to allow 'wg show' in sudoers for accurate, handshake-based tunnel counts."> · estimated (run setup for exact counts)</span>
+                        )}
+                      </span>
                       <span>Service connections: {metrics.live_connections.svc_connections}</span>
                     </div>
                   )}
@@ -3877,7 +3882,7 @@ const MysteriumDashboard = () => {
 
                 <div>
                   <h4 className="text-emerald-400 font-semibold mb-1">Sessions &amp; Consumers</h4>
-                  <p className="text-slate-400"><strong className="text-slate-300">Tunnels</strong> — WireGuard kernel interfaces (myst0, myst1…) that carried traffic in the <strong className="text-slate-300">last 5 minutes</strong>. Mysterium keeps a pool of myst* interfaces that linger after a consumer disconnects (WireGuard has no session concept), so this count is based on recent activity rather than lifetime traffic — keeping it aligned with the live consumer count instead of inflating. <strong className="text-slate-300">Active</strong> — sessions matched to live tunnels with actual traffic. <strong className="text-slate-300">History</strong> — all pages loaded at startup; use the search box to find any wallet or session ID across the whole archive, and the Export controls to download the archive (or a single wallet's sessions) as CSV or TXT for the last 30/90 days or all history. <strong className="text-slate-300">Consumers</strong> — grouped by wallet, sortable. Multiple sessions per consumer is normal — Mysterium reconnects frequently. All tabs are sortable.</p>
+                  <p className="text-slate-400"><strong className="text-slate-300">Tunnels</strong> — connected consumers. Mysterium creates one WireGuard interface (myst0, myst1…) per consumer, and the count reflects interfaces whose peer handshaked in the last ~3 minutes (the true "connected now" signal), so it tracks consumers coming and going. If <code className="bg-slate-800 px-1 rounded">wg show</code> isn't permitted yet (run setup to add it to sudoers), the count falls back to recent traffic and is marked "estimated". <strong className="text-slate-300">Active</strong> — sessions matched to live tunnels with actual traffic. <strong className="text-slate-300">History</strong> — all pages loaded at startup; use the search box to find any wallet or session ID across the whole archive, and the Export controls to download the archive (or a single wallet's sessions) as CSV or TXT for the last 30/90 days or all history. <strong className="text-slate-300">Consumers</strong> — grouped by wallet, sortable. Multiple sessions per consumer is normal — Mysterium reconnects frequently. All tabs are sortable.</p>
                 </div>
 
                 <div>

@@ -1,6 +1,6 @@
 # Mysterium Node Toolkit
 
-![Version](https://img.shields.io/badge/version-1.2.34-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Version](https://img.shields.io/badge/version-1.2.35-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 
 A professional monitoring and management dashboard for [Mysterium Network](https://mysterium.network) VPN node operators. Runs fully local on your node machine — no cloud account, no third-party service, no data leaving your server.
 
@@ -599,7 +599,7 @@ Every session is saved to SQLite with token values frozen the moment the session
 
 ### Session analytics
 
-- Active tunnels — WireGuard interfaces that carried traffic in the last 5 minutes (recent activity, not lifetime), kept aligned with the live consumer count. Mysterium network quality monitoring bots are automatically detected and labelled with 🔧, separated from paying consumers in the Consumers tab
+- Active tunnels — connected consumers. Mysterium creates one WireGuard interface per consumer, and the count reflects interfaces whose peer handshaked in the last ~3 minutes (true "connected now" signal, via `wg show`), falling back to recent traffic when `wg` isn't permitted in sudoers. Mysterium network quality monitoring bots are automatically detected and labelled with 🔧, separated from paying consumers in the Consumers tab
 - Consumer breakdown by country and service type. The Consumers tab, top earners and paying-consumer count use the **frozen archive earnings**, so a real consumer whose sessions already settled still shows their true earnings instead of zero
 - Full session history with duration, data transferred, earnings per session, and **MYST/GB efficiency** per session (shown for sessions >1 MB to avoid misleading values on tiny sessions)
 - **Service Split Over Time** — stacked bar chart of daily earnings by service type (7d / 30d / 90d / 1y / All). Reveals trends in scraping vs VPN vs Public traffic over time

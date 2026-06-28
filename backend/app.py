@@ -4636,12 +4636,51 @@ class MetricsCollector:
     _prev_iface_stats = {}   # {iface_name: {'rx': bytes, 'tx': bytes, 'time': timestamp}}
 
     @staticmethod
+    def _wg_recent_handshake_ifaces(max_age=180):
+        """Return the set of WireGuard interfaces whose peer handshaked within
+        max_age seconds — i.e. genuinely connected consumers — or None if
+        `sudo wg show` is unavailable (no sudoers entry, wg not installed) so
+        the caller can fall back to byte-based detection.
+
+        WireGuard renegotiates a handshake roughly every 2 minutes while a peer
+        is connected, so a recent handshake is the true 'tunnel is live' signal —
+        more accurate than byte deltas, which miss connected-but-idle consumers
+        and over-count interfaces kept warm only by keepalives.
+        """
+        try:
+            import subprocess as _sp
+            r = _sp.run(['sudo', '-n', 'wg', 'show', 'all', 'latest-handshakes'],
+                        capture_output=True, text=True, timeout=5)
+            if r.returncode != 0 or not r.stdout.strip():
+                return None
+            now = time.time()
+            active = set()
+            for line in r.stdout.splitlines():
+                parts = line.split('\t')
+                if len(parts) < 3:
+                    parts = line.split()
+                if len(parts) < 3:
+                    continue
+                iface = parts[0]
+                try:
+                    ts = int(parts[-1])
+                except (ValueError, TypeError):
+                    continue
+                if ts > 0 and (now - ts) <= max_age:
+                    active.add(iface)
+            return active
+        except Exception:
+            return None
+
+    @staticmethod
     def get_live_connections():
         """Get REAL-TIME active connections from VPN interfaces + services.
 
-        Each myst*/wg*/tun* network interface IS a live consumer tunnel.
-        Mysterium uses wireguard-go (userspace) so `wg show` can't see them.
-        Instead we read per-interface traffic from psutil — this is ground truth.
+        Each myst*/wg*/tun* network interface is one consumer tunnel (Mysterium
+        creates a separate WireGuard interface per consumer). Liveness is taken
+        from the WireGuard handshake recency via `sudo wg show` when available
+        (the true connected-consumer signal), falling back to per-interface
+        traffic from psutil when wg/sudo is not accessible.
 
         NOTE on in/out perspective for PROVIDER dashboard:
         - Consumer downloads content → data flows OUT of node → node tx_bytes
@@ -4652,6 +4691,9 @@ class MetricsCollector:
         """
         live = []
         now = time.time()
+        # True liveness signal: WireGuard handshake recency (falls back to None when
+        # `sudo wg show` is unavailable, e.g. wg not in sudoers yet on older installs).
+        hs_active = MetricsCollector._wg_recent_handshake_ifaces()
 
         try:
             per_nic = psutil.net_io_counters(pernic=True)
@@ -4693,7 +4735,12 @@ class MetricsCollector:
                 # 5 minutes — not merely if it ever had traffic since boot. Mysterium keeps
                 # a pool of myst* interfaces that linger after a session closes, which made
                 # "Tunnels (N)" wildly overcount vs the live consumer count.
-                is_active = bool(total > 0 and last_active and (now - last_active) <= 300)
+                # Prefer WireGuard handshake recency (true connected-consumer signal).
+                # Fall back to recent meaningful traffic when `wg show` is unavailable.
+                if hs_active is not None:
+                    is_active = iface_name in hs_active
+                else:
+                    is_active = bool(total > 0 and last_active and (now - last_active) <= 300)
                 has_speed = (speed_down + speed_up) > 0.0001  # > 0.1 KB/s
 
                 # Try to get interface uptime from /sys
@@ -4752,6 +4799,7 @@ class MetricsCollector:
             'active': active_count,
             'transferring': with_speed,
             'total': len(live),
+            'handshake': hs_active is not None,
             'svc_connections': max(api_svc_connections, active_count),
         }
 

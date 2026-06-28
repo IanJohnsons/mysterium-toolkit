@@ -2,6 +2,11 @@
 All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.2.35
+- fix (tunnel count): tunnels are now counted from WireGuard handshake recency via `sudo wg show` — an interface counts as a live tunnel when its peer handshaked in the last ~3 minutes. Mysterium creates one interface per consumer, so this reflects genuinely connected consumers (including connected-but-idle ones) and tracks clients coming and going, instead of byte-based heuristics that under- or over-counted. Falls back to the previous traffic-based estimate (marked "estimated" in the UI) when wg/sudo is unavailable
+- feat (setup): setup adds read-only `wg show` to the toolkit sudoers (both /usr/bin and /usr/sbin paths) so the handshake-based count works on hardened installs. Existing users get exact counts after re-running setup; until then the estimated fallback is used
+- docs: corrected the live-connections note (wg show IS used now) and updated Help/README for handshake-based tunnel counts
+
 ## v1.2.34
 - fix (export via fleet): the CSV/TXT session export now works when viewing a node through the fleet master. The fleet proxy lacked export/sessions in its allowlist and force-parsed every response as JSON (which mangled file downloads); it now allowlists the endpoint and forwards non-JSON responses raw, preserving Content-Type and the download filename
 - fix (export errors): the Download button now surfaces a visible error instead of failing silently

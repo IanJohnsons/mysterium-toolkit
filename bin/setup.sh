@@ -1544,6 +1544,7 @@ $_REAL_USER ALL=(ALL) NOPASSWD: \
   /sbin/sysctl, \
   /usr/sbin/ethtool, \
   /usr/sbin/conntrack, \
+  /usr/bin/wg show*, /usr/sbin/wg show*, \
   /sbin/modprobe, /usr/sbin/modprobe, \
   /bin/bash, /usr/bin/bash, \
   /bin/cat, /usr/bin/cat, \
