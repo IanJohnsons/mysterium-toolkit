@@ -1650,6 +1650,207 @@ class SessionDB:
         return updated
 
 
+class RollupDB:
+    """Permanent per-day aggregate of session earnings/data/counts, decoupled from
+    the prunable raw session list (finding G1).
+
+    Once a day is rolled up it survives session pruning forever, so 'lifetime'
+    totals never shrink when old sessions are pruned. One row per
+    (date, provider_id, service_type). This table is NEVER pruned — it is only
+    cleared by an explicit user reset via /data/delete (full wipe).
+    """
+    _db_path = Path(__file__).parent / 'databases' / 'earnings_rollup.db'
+    _lock = Lock()
+    _backfilled = False
+
+    @classmethod
+    def _conn(cls):
+        conn = sqlite3.connect(str(cls._db_path), timeout=30)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+        return conn
+
+    @classmethod
+    def init(cls):
+        cls._db_path.parent.mkdir(parents=True, exist_ok=True)
+        with cls._lock:
+            conn = cls._conn()
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS daily_totals (
+                    date           TEXT    NOT NULL,
+                    provider_id    TEXT    NOT NULL DEFAULT '',
+                    service_type   TEXT    NOT NULL DEFAULT 'unknown',
+                    sessions       INTEGER NOT NULL DEFAULT 0,
+                    bytes_sent     INTEGER NOT NULL DEFAULT 0,
+                    bytes_received INTEGER NOT NULL DEFAULT 0,
+                    tokens         INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (date, provider_id, service_type)
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_rollup_date ON daily_totals(date)")
+            conn.commit()
+            conn.close()
+
+    @staticmethod
+    def _aggregate(rows):
+        """Aggregate raw session rows into {(date, provider_id, service_type): totals}."""
+        agg = {}
+        for r in rows:
+            d = (r.get('started_at') or '')[:10]   # YYYY-MM-DD (UTC)
+            if not d:
+                continue
+            key = (d, r.get('provider_id', '') or '',
+                   r.get('service_type', 'unknown') or 'unknown')
+            a = agg.setdefault(key, {'sessions': 0, 'bs': 0, 'br': 0, 'tok': 0})
+            a['sessions'] += 1
+            a['bs']  += int(r.get('bytes_sent', 0) or 0)
+            a['br']  += int(r.get('bytes_received', 0) or 0)
+            a['tok'] += int(r.get('tokens', 0) or 0)
+        return agg
+
+    @classmethod
+    def _upsert(cls, agg):
+        if not agg:
+            return
+        with cls._lock:
+            conn = cls._conn()
+            for (d, prov, svc), a in agg.items():
+                conn.execute("""
+                    INSERT INTO daily_totals
+                        (date, provider_id, service_type, sessions, bytes_sent, bytes_received, tokens)
+                    VALUES (?,?,?,?,?,?,?)
+                    ON CONFLICT(date, provider_id, service_type) DO UPDATE SET
+                        sessions=excluded.sessions, bytes_sent=excluded.bytes_sent,
+                        bytes_received=excluded.bytes_received, tokens=excluded.tokens
+                """, (d, prov, svc, a['sessions'], a['bs'], a['br'], a['tok']))
+            conn.commit()
+            conn.close()
+
+    @classmethod
+    def backfill_if_empty(cls):
+        """One-time: build the full rollup from all current sessions, only when empty."""
+        cls.init()
+        try:
+            with cls._lock:
+                conn = cls._conn()
+                n = conn.execute("SELECT COUNT(*) FROM daily_totals").fetchone()[0]
+                conn.close()
+            if n > 0:
+                cls._backfilled = True
+                return
+            rows = SessionDB.get_range(limit=10_000_000, offset=0)
+            cls._upsert(cls._aggregate(rows))
+            cls._backfilled = True
+            logger.info(f"RollupDB backfill: aggregated {len(rows)} sessions into daily_totals")
+        except Exception as e:
+            logger.warning(f"RollupDB backfill failed: {e}")
+
+    @classmethod
+    def refresh_recent(cls, days=3):
+        """Recompute only the last `days` days from current sessions.
+        Older rollup rows are never touched, so they survive session pruning."""
+        cls.init()
+        if not cls._backfilled:
+            cls.backfill_if_empty()
+            return
+        try:
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime('%Y-%m-%dT%H:%M:%SZ')
+            with SessionDB._lock:
+                sconn = SessionDB._conn()
+                rows = [dict(r) for r in sconn.execute(
+                    "SELECT * FROM sessions WHERE started_at >= ?", (cutoff,)).fetchall()]
+                sconn.close()
+            agg = cls._aggregate(rows)
+            since_date = cutoff[:10]
+            # Clear then re-insert recent days so deleted sessions don't leave stale rows.
+            with cls._lock:
+                conn = cls._conn()
+                conn.execute("DELETE FROM daily_totals WHERE date >= ?", (since_date,))
+                conn.commit()
+                conn.close()
+            cls._upsert(agg)
+        except Exception as e:
+            logger.warning(f"RollupDB refresh_recent failed: {e}")
+
+    @classmethod
+    def clear(cls):
+        """Wipe the rollup entirely — only on an explicit user reset (start from zero)."""
+        cls.init()
+        try:
+            with cls._lock:
+                conn = cls._conn()
+                conn.execute("DELETE FROM daily_totals")
+                conn.commit()
+                conn.close()
+            cls._backfilled = False
+            logger.info("RollupDB cleared (user reset)")
+        except Exception as e:
+            logger.warning(f"RollupDB clear failed: {e}")
+
+    @classmethod
+    def get_totals(cls, provider_id=None):
+        """Permanent lifetime totals + per-service breakdown from the rollup.
+        Excludes internal service types (monitoring/noop). Merges quic_scraping
+        into scraping to match the live analytics. Returns None on failure so the
+        caller can fall back to the live computation."""
+        cls.init()
+        try:
+            where = "service_type NOT IN ('monitoring', 'noop', '')"
+            params = []
+            if provider_id:
+                where += " AND provider_id = ?"
+                params.append(provider_id)
+            with cls._lock:
+                conn = cls._conn()
+                rows = conn.execute(
+                    f"SELECT service_type AS svc, SUM(sessions) AS s, "
+                    f"SUM(bytes_sent + bytes_received) AS b, SUM(tokens) AS t "
+                    f"FROM daily_totals WHERE {where} GROUP BY service_type", params
+                ).fetchall()
+                conn.close()
+            svc_map = {}
+            tot_s = 0
+            tot_b = 0
+            tot_t = 0
+            for r in rows:
+                st = r['svc'] or 'unknown'
+                if st == 'quic_scraping':
+                    st = 'scraping'
+                e = svc_map.setdefault(st, {'sessions': 0, 'bytes': 0, 'tokens': 0})
+                e['sessions'] += int(r['s'] or 0)
+                e['bytes']    += int(r['b'] or 0)
+                e['tokens']   += int(r['t'] or 0)
+                tot_s += int(r['s'] or 0)
+                tot_b += int(r['b'] or 0)
+                tot_t += int(r['t'] or 0)
+            tot_earn = tot_t / 1e18
+            tot_mb   = tot_b / (1024 * 1024)
+            breakdown = []
+            for st, e in sorted(svc_map.items(), key=lambda x: -x[1]['tokens']):
+                earn = e['tokens'] / 1e18
+                mb   = e['bytes'] / (1024 * 1024)
+                breakdown.append({
+                    'service_type':  st,
+                    'sessions':      e['sessions'],
+                    'earnings_myst': round(earn, 6),
+                    'data_mb':       round(mb, 2),
+                    'pct_earnings':  round(earn / tot_earn * 100, 1) if tot_earn > 0 else 0.0,
+                    'pct_sessions':  round(e['sessions'] / tot_s * 100, 1) if tot_s > 0 else 0.0,
+                    'pct_data':      round(mb / tot_mb * 100, 1) if tot_mb > 0 else 0.0,
+                })
+            return {
+                'sessions':      tot_s,
+                'earnings_myst': round(tot_earn, 6),
+                'data_mb':       round(tot_mb, 2),
+                'service_breakdown': breakdown,
+            }
+        except Exception as e:
+            logger.warning(f"RollupDB get_totals failed: {e}")
+            return None
+
+
 class EarningsDB:
     """Permanent SQLite storage for earnings snapshots.
 
@@ -2879,30 +3080,60 @@ class MetricsCollector:
             active_count = sum(1 for s in sessions if s['is_active'])
 
             # ===== CONSUMER ANALYTICS (Items 4-6) =====
+            # A: build per-consumer stats from the FROZEN merge (SessionDB tokens preserved
+            # before settlement) instead of live tokens, which Mysterium zeroes after
+            # settlement. Live-only would mark settled real payers as 0-earning / non-paying.
             consumer_map = {}
-            for s in sessions:
-                cid = s.get('consumer_id', 'unknown')
+            cm_db_rows = []
+            try:
+                cm_db_rows = SessionDB.get_range(limit=50000, offset=0)
+            except Exception as _cm_e:
+                logger.warning(f"SessionDB read for consumer_map failed: {_cm_e}")
+            live_active_ids = {s.get('id') for s in sessions if s.get('is_active') and s.get('id')}
+            db_seen_ids     = {r.get('id') for r in cm_db_rows if r.get('id')}
+
+            def _cm_add(cid, country, data_mb, earnings, started, svc, is_active):
                 if cid not in consumer_map:
                     consumer_map[cid] = {
                         'consumer_id': cid,
-                        'consumer_country': s.get('consumer_country', ''),
+                        'consumer_country': country or '',
                         'sessions': 0,
                         'active_sessions': 0,
                         'total_data_mb': 0,
                         'total_earnings': 0,
-                        'last_seen': s.get('started', ''),
+                        'last_seen': '',
                         '_service_types': set(),
                     }
                 c = consumer_map[cid]
                 c['sessions'] += 1
-                if s['is_active']:
+                if is_active:
                     c['active_sessions'] += 1
-                c['total_data_mb'] += s.get('data_total', 0)
-                c['total_earnings'] += s.get('earnings_myst', 0)
-                if s.get('consumer_country') and not c['consumer_country']:
-                    c['consumer_country'] = s['consumer_country']
-                if s.get('service_type'):
-                    c['_service_types'].add(s['service_type'])
+                c['total_data_mb'] += data_mb
+                c['total_earnings'] += earnings
+                if country and not c['consumer_country']:
+                    c['consumer_country'] = country
+                if svc:
+                    c['_service_types'].add(svc)
+                if started and started > c['last_seen']:
+                    c['last_seen'] = started
+
+            # Durable, settlement-safe source: every archived session with frozen tokens.
+            for row in cm_db_rows:
+                cid = row.get('consumer_id', '') or 'unknown'
+                data_mb = ((row.get('bytes_sent', 0) or 0) + (row.get('bytes_received', 0) or 0)) / (1024 * 1024)
+                earn = (row.get('tokens', 0) or 0) / 1e18
+                _cm_add(cid, row.get('consumer_country', '') or '', data_mb, earn,
+                        row.get('started_at', '') or '', row.get('service_type', '') or '',
+                        row.get('id') in live_active_ids)
+
+            # Add live in-flight sessions not yet written to the DB.
+            for s in sessions:
+                if s.get('id') in db_seen_ids:
+                    continue
+                cid = s.get('consumer_id', 'unknown')
+                _cm_add(cid, s.get('consumer_country', '') or '', s.get('data_total', 0),
+                        s.get('earnings_myst', 0), s.get('started', '') or '',
+                        s.get('service_type', '') or '', s.get('is_active', False))
 
             # Sort consumers by earnings descending, convert sets to lists for JSON
             for c in consumer_map.values():
@@ -3015,6 +3246,21 @@ class MetricsCollector:
                     'pct_sessions':  pct_sess,
                     'pct_data':      pct_data,
                 })
+
+            # G1: override the lifetime money figures with the PERMANENT rollup so they
+            # survive session pruning. The loop above (live + retained DB sessions) is the
+            # fallback when the rollup is empty/unavailable. monitoring_sessions, session
+            # time and the country breakdown intentionally keep using the live merge
+            # (recent, retention-bound by design).
+            try:
+                _rollup = RollupDB.get_totals(provider_id=(_local_node_id or None))
+                if _rollup and _rollup.get('sessions', 0) > 0:
+                    total_sessions_all = _rollup['sessions']
+                    total_earnings_all = _rollup['earnings_myst']
+                    total_data_all_mb  = _rollup['data_mb']
+                    service_breakdown  = _rollup['service_breakdown']
+            except Exception as _rl_e:
+                logger.debug(f"RollupDB totals override skipped: {_rl_e}")
 
             # ===== COUNTRY BREAKDOWN =====
             # IMPORTANT: scan ALL sessions for countries — not just analytics_sessions.
@@ -4421,6 +4667,7 @@ class MetricsCollector:
                 speed_down = 0.0  # Consumer download speed (our tx delta)
                 speed_up = 0.0    # Consumer upload speed (our rx delta)
                 prev = MetricsCollector._prev_iface_stats.get(iface_name)
+                last_active = prev.get('last_active', 0) if prev else 0
                 if prev:
                     elapsed = now - prev['time']
                     if elapsed > 0:
@@ -4430,14 +4677,19 @@ class MetricsCollector:
                             speed_down = (tx_delta / elapsed) / (1024 * 1024)  # MB/s
                         if rx_delta >= 0:
                             speed_up = (rx_delta / elapsed) / (1024 * 1024)
+                        if tx_delta > 0 or rx_delta > 0:
+                            last_active = now
 
                 # Update history
                 MetricsCollector._prev_iface_stats[iface_name] = {
-                    'rx': rx, 'tx': tx, 'time': now
+                    'rx': rx, 'tx': tx, 'time': now, 'last_active': last_active
                 }
 
-                # Consider active if any traffic at all (interface exists = tunnel is up)
-                is_active = total > 0
+                # F1: a tunnel counts as "active" only if it carried traffic in the last
+                # 5 minutes — not merely if it ever had traffic since boot. Mysterium keeps
+                # a pool of myst* interfaces that linger after a session closes, which made
+                # "Tunnels (N)" wildly overcount vs the live consumer count.
+                is_active = bool(total > 0 and last_active and (now - last_active) <= 300)
                 has_speed = (speed_down + speed_up) > 0.0001  # > 0.1 KB/s
 
                 # Try to get interface uptime from /sys
@@ -4544,6 +4796,25 @@ class MetricsCollector:
                 }
                 _tier_medium_last = now
                 logger.debug("Medium tier refreshed (TequilaCache)")
+
+                # H1: detect a node-side AUTO-settle so the dashboard balance refreshes
+                # promptly instead of lagging up to the full slow-tier interval (10 min).
+                # When the live unsettled estimate (sum of live session tokens) drops far
+                # below the last cached on-chain unsettled, a settle just happened → force
+                # the slow tier to re-poll identity earnings on the next loop. Costs no extra
+                # API calls in steady state; only fires on an actual settle event.
+                try:
+                    _cached_unsettled = float((_tier_slow_cache or {}).get('earnings', {}).get('unsettled', 0) or 0)
+                    if _cached_unsettled >= 1.0:
+                        _live_tok = sum(int(s.get('tokens', 0) or 0) for s in TequilaCache.get_all_sessions())
+                        _live_unsettled_est = _live_tok / 1e18
+                        if _live_unsettled_est < _cached_unsettled * 0.5:
+                            _tier_slow_last = 0
+                            _polygonscan_cache['timestamp'] = 0
+                            logger.info(f"H1: settle detected (live≈{_live_unsettled_est:.2f} MYST << "
+                                        f"cached unsettled {_cached_unsettled:.2f}) — forcing earnings refresh")
+                except Exception as _h1_e:
+                    logger.debug(f"H1 settle-detect skipped: {_h1_e}")
             except Exception as e:
                 logger.warning(f"Medium tier error: {e}")
 
@@ -4711,6 +4982,13 @@ class MetricsCollector:
                     'earnings_chart': earnings_chart_data,
                 }
                 _tier_slow_last = now
+
+                # G1: keep the permanent daily rollup current (last 3 days) BEFORE pruning,
+                # so lifetime totals are captured and survive any later session prune.
+                try:
+                    RollupDB.refresh_recent(days=3)
+                except Exception as _roll_e:
+                    logger.debug(f"RollupDB refresh skipped: {_roll_e}")
 
                 # Daily retention prune — runs once per calendar day
                 # Keeps databases within configured retention windows silently
@@ -5328,6 +5606,13 @@ def start_collector():
         logger.info(f"EarningsDeltaTracker: pre-loaded {len(EarningsDeltaTracker._snapshots)} snapshots at startup")
     except Exception as e:
         logger.warning(f"EarningsDeltaTracker pre-load failed: {e}")
+
+    # G1: build the permanent daily rollup from existing sessions on first start
+    # (idempotent — only runs when the rollup table is empty).
+    try:
+        RollupDB.backfill_if_empty()
+    except Exception as e:
+        logger.warning(f"RollupDB startup backfill failed: {e}")
 
     # Pre-load firewall and system health at startup so peer/data has them immediately
     # without waiting 10 minutes for the first slow tier cycle
@@ -7271,7 +7556,12 @@ def get_earnings_chart():
         validated = []
         prev_lt = None
         for entry in clean:
-            if prev_lt is None or entry['lifetime'] >= prev_lt - 0.001:
+            # Drop snapshots where lifetime goes backwards (impossible — monotonic),
+            # OR jumps forward by an absurd amount (> 50 MYST between consecutive
+            # snapshots). No node earns 50 MYST in one snapshot interval, so such a
+            # jump is a corrupt reading (wrong-node/fleet bleed) and would otherwise
+            # render as one giant daily bar. Matches the write-side guard in record().
+            if prev_lt is None or (prev_lt - 0.001) <= entry['lifetime'] <= (prev_lt + 50):
                 validated.append(entry)
                 prev_lt = entry['lifetime']
         clean = validated
@@ -8217,9 +8507,16 @@ def get_settle_history():
                                 else:
                                     myst_amt = 0.0
                             else:
-                                amt_str = str(raw_amount).split('.')[0]
-                                amt_int = int(amt_str) if amt_str else 0
-                                myst_amt = round(amt_int / 1e18, 6) if amt_int > 1e15 else round(float(raw_amount), 6)
+                                # Mysterium settle/history returns wei (a large integer).
+                                # Distinguish wei from an already-MYST value reliably:
+                                # any real settlement in wei is >= ~1e15 (0.001 MYST), while
+                                # a MYST-denominated value is small (< 1e6). Threshold 1e12
+                                # cleanly separates the two and avoids inflating tiny amounts.
+                                try:
+                                    amt_f = float(str(raw_amount))
+                                except (TypeError, ValueError):
+                                    amt_f = 0.0
+                                myst_amt = round(amt_f / 1e18, 6) if amt_f >= 1e12 else round(amt_f, 6)
                         except Exception:
                             myst_amt = 0.0
 
@@ -8339,10 +8636,13 @@ def get_settle_history():
                     wallet_balance_myst = bal
                     _polygonscan_cache.update({'balance': bal, 'timestamp': now_ts, 'address': beneficiary})
                 elif err == 'rate_limit':
-                    _polygonscan_cache.update({'balance': None, 'timestamp': now_ts, 'address': beneficiary})
-                    if _polygonscan_cache.get('balance') is not None:
-                        wallet_balance_myst = _polygonscan_cache['balance']
-                    logger.debug('Wallet balance: rate limited on both APIs — 5 min cooldown')
+                    # Keep the last good cached balance on rate-limit instead of blanking
+                    # it — overwriting with None used to leave a dead, never-true check here.
+                    _prev_bal = _polygonscan_cache.get('balance')
+                    _polygonscan_cache.update({'timestamp': now_ts, 'address': beneficiary})
+                    if _prev_bal is not None:
+                        wallet_balance_myst = _prev_bal
+                    logger.debug('Wallet balance: rate limited on both APIs — keeping last cached balance')
                 else:
                     logger.debug('Wallet balance: both APIs failed')
 
@@ -8385,7 +8685,7 @@ def get_settle_history():
                         val_myst = round(val_wei / 1e18, 6)
                         ts = int(tx.get('timeStamp', 0) or 0)
                         import datetime as _dt
-                        dt_str = _dt.datetime.utcfromtimestamp(ts).strftime('%Y-%m-%d %H:%M') if ts else '—'
+                        dt_str = _dt.datetime.fromtimestamp(ts, _dt.timezone.utc).strftime('%Y-%m-%d %H:%M') if ts else '—'
                         tx_hash = tx.get('hash', '')
                         direction = 'in' if tx.get('to', '').lower() == ben_lower else 'out'
                         onchain_txs.append({
@@ -9582,6 +9882,16 @@ def delete_data():
                     metrics_cache.pop('analytics', None)
             except Exception:
                 pass
+
+            # G1: a FULL session reset ("start from zero") must also wipe the permanent
+            # rollup, otherwise lifetime totals would linger after the user cleared
+            # everything. A dated/partial delete (keep_days/before_date set) is treated
+            # like a prune and leaves the rollup intact.
+            if keep_days is None and not before_date:
+                try:
+                    RollupDB.clear()
+                except Exception as _rc_e:
+                    logger.warning(f"RollupDB clear on reset failed: {_rc_e}")
 
             # Mirror the DB delete into SessionStore._sessions (in-memory TequilAPI cache).
             # Without this, analytics still shows deleted sessions because it merges

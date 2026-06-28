@@ -1,6 +1,6 @@
 # Mysterium Node Toolkit
 
-![Version](https://img.shields.io/badge/version-1.2.30-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Version](https://img.shields.io/badge/version-1.2.31-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 
 A professional monitoring and management dashboard for [Mysterium Network](https://mysterium.network) VPN node operators. Runs fully local on your node machine — no cloud account, no third-party service, no data leaving your server.
 
@@ -580,13 +580,15 @@ The dashboard runs in your browser — on the same machine, on your phone, or fr
 - **Lifetime gross** — all-time cumulative earnings before Hermes fee
 - **Settled balance** — MYST ready to withdraw from the payment channel
 - **Daily / Weekly / Monthly delta** — computed from SQLite snapshots taken every 10 minutes. Shows *BUILDING* until enough history exists
+- **Permanent lifetime totals** — total earnings, data, sessions and the service breakdown are kept in a daily rollup (`earnings_rollup.db`) that is never pruned, so retention pruning of old sessions never shrinks your lifetime figures. A full reset clears it too
+- **Prompt settle refresh** — after a manual or automatic settle, the unsettled balance updates within ~2 minutes instead of waiting for the next 10-minute poll
 - **Live MYST price** — EUR and USD conversion via CoinPaprika + Frankfurter ECB. Both free, no account, no API key required
 - **Earnings history chart** — Daily / Weekly / Monthly / All tabs, auto-scales to your history length
 - **Selective data cleanup** — delete earnings snapshots by date range, two-click confirmation
 
 ### Session archive
 
-Every session is saved to SQLite with token values frozen the moment the session ends — before Mysterium zeroes them after settlement. The archive survives node restarts, re-installs, and settlements. View full history, filter by country, service type, or date.
+Every session is saved to SQLite with token values frozen the moment the session ends — before Mysterium zeroes them after settlement. The archive survives node restarts, re-installs, and settlements. View full history, filter by country, service type, or date. A **search box** finds every session for any consumer wallet (`0x…`) or session ID across the entire archive, and every session ID is **click-to-copy** for sharing with Mysterium support.
 
 ### Node quality
 
@@ -597,8 +599,8 @@ Every session is saved to SQLite with token values frozen the moment the session
 
 ### Session analytics
 
-- Active tunnels — live consumer connections with identity and service type. Mysterium network quality monitoring bots are automatically detected and labelled with 🔧, separated from paying consumers in the Consumers tab
-- Consumer breakdown by country and service type
+- Active tunnels — WireGuard interfaces that carried traffic in the last 5 minutes (recent activity, not lifetime), kept aligned with the live consumer count. Mysterium network quality monitoring bots are automatically detected and labelled with 🔧, separated from paying consumers in the Consumers tab
+- Consumer breakdown by country and service type. The Consumers tab, top earners and paying-consumer count use the **frozen archive earnings**, so a real consumer whose sessions already settled still shows their true earnings instead of zero
 - Full session history with duration, data transferred, earnings per session, and **MYST/GB efficiency** per session (shown for sessions >1 MB to avoid misleading values on tiny sessions)
 - **Service Split Over Time** — stacked bar chart of daily earnings by service type (7d / 30d / 90d / 1y / All). Reveals trends in scraping vs VPN vs Public traffic over time
 - **Earnings Efficiency** — MYST per GB transferred as a daily timeseries. Detects when your node forwards more data but earns less per byte
@@ -1061,6 +1063,7 @@ The **Data Management** card (below System Health) gives full control over all p
 | Database | File | Records | Interval |
 |----------|------|---------|----------|
 | Earnings history | `backend/databases/earnings_history.db` | Daily snapshots | every 10 min |
+| Earnings rollup | `backend/databases/earnings_rollup.db` | Permanent per-day lifetime totals (never pruned) | every 10 min |
 | Traffic history | `backend/databases/traffic_history.db` | Monthly vnstat data | on import |
 | Session archive | `backend/databases/sessions_history.db` | All sessions | at startup |
 | Node quality | `backend/databases/quality_history.db` | Score, latency, bandwidth | every 10 min |

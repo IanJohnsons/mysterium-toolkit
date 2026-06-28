@@ -2,6 +2,25 @@
 All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.2.31
+- fix (G1): lifetime totals (earnings, data, sessions, service breakdown) now come from a permanent daily rollup (`earnings_rollup.db`) that survives session pruning — pruning old sessions can no longer shrink lifetime figures; a full data reset clears the rollup too
+- fix (A): Consumers tab, top earners, paying-consumer count and probe detection now use frozen archive tokens instead of live (settlement-zeroed) tokens, so settled real payers are no longer counted as 0-earning
+- fix (H1): the unsettled balance refreshes within ~2 minutes after a node-side auto-settle instead of lagging up to the 10-minute slow-tier poll
+- fix (F1): "Tunnels" now counts WireGuard interfaces active in the last 5 minutes (recent activity) instead of any interface that ever carried traffic, aligning it with the live consumer count
+- fix (E1): the earnings chart now also drops corrupt snapshots with an absurd forward jump (>50 MYST between consecutive snapshots), matching the write-side guard
+- fix (D1): hardened settle-amount parsing to reliably distinguish wei from MYST, preventing inflated amounts on tiny settlements
+- fix (D2): wallet balance keeps its last good cached value on Polygonscan rate-limit instead of blanking (removed dead branch)
+- fix (D3): replaced deprecated `datetime.utcfromtimestamp` with a timezone-aware call
+- docs: updated in-app Help/FAQ and README for the rollup, retention defaults, recent-active tunnels, frozen consumer stats and prompt settle refresh
+
+## v1.2.30
+- fix: manual settle no longer reports an error when `/transactor/settle/sync` takes long — a read-timeout is now treated as "settling on-chain" (success/pending) instead of HTTP 504, matching the official Mysterium SDK which disables the timeout on this slow on-chain call
+- fix: settle busts the balance/earnings cache after success (was dead code placed after `return`) so the dashboard refreshes promptly
+- fix: settle builds the TequilAPI URL per node inside the retry loop, adds `/transactor/settle/async` fallback, and distinguishes connect-timeout (node down) from read-timeout (node busy)
+- feat: History tab search bar — find all sessions by consumer wallet (`0x…`) or session ID, searched server-side across the entire archive (`/sessions/archive?search=`)
+- feat: session IDs are now click-to-copy with the same popup as consumer IDs, in both live and archive history rows
+- fix: removed dead duplicate `fail2ban_reload` function (orphaned definition that had no route)
+
 ## v1.2.29
 - fix: database migration in `update.sh` now correctly migrates existing data from `config/` to `backend/databases/` — previous check skipped migration when empty placeholder files existed in `backend/databases/` (affects all users who updated to v1.2.28)
 - fix: `data_manager.py` — `uptime_log.json` and `node_identity.txt` now correctly read from `config/` instead of `backend/databases/`; SQLite databases correctly use `backend/databases/`
