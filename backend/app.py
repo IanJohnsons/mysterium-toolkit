@@ -3671,6 +3671,14 @@ class MetricsCollector:
           https://discovery.mysterium.network/api/v3/proposals
             ?provider_id=<identity>
             &include_monitoring_failed=true
+            &access_policy=all
+
+        access_policy=all is required: without it, Discovery only returns
+        proposals under the default (public) access policy. When the provider
+        runs Public in Verified mode the wireguard proposal moves to the
+        'mysterium' access policy and would otherwise be omitted, making quality
+        wrongly read as 0. With access_policy=all we see the node's proposals
+        and quality regardless of mode (matches Mysterium's own troubleshooting URL).
 
         Discovery returns a list of proposals (one per service_type offered by
         the provider).  Each entry has a 'quality' sub-object:
@@ -3712,6 +3720,7 @@ class MetricsCollector:
         url = (
             'https://discovery.mysterium.network/api/v3/proposals'
             f'?provider_id={wallet_address}&include_monitoring_failed=true'
+            '&access_policy=all'
         )
 
         try:

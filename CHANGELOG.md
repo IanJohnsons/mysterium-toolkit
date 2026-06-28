@@ -2,6 +2,10 @@
 All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.2.36
+- fix (node quality in Verified mode): the Discovery query now includes access_policy=all. Without it, Discovery only returns proposals under the default public policy, so when Public ran in Verified mode the wireguard proposal (moved to the 'mysterium' policy) was omitted and quality wrongly showed 0 score / 0% uptime / 0 Mbit/s. With access_policy=all the node's proposals and quality are read correctly in every mode — verified live against the Discovery API (1 proposal without the flag vs 6 with it)
+- fix (false warning removed): dropped the inaccurate 'Verified mode blocks Mysterium monitoring agents' notice. Verified does not block monitoring — the 0% readings were caused solely by the missing query parameter above, not by Mysterium
+
 ## v1.2.35
 - fix (tunnel count): tunnels are now counted from WireGuard handshake recency via `sudo wg show` — an interface counts as a live tunnel when its peer handshaked in the last ~3 minutes. Mysterium creates one interface per consumer, so this reflects genuinely connected consumers (including connected-but-idle ones) and tracks clients coming and going, instead of byte-based heuristics that under- or over-counted. Falls back to the previous traffic-based estimate (marked "estimated" in the UI) when wg/sudo is unavailable
 - feat (setup): setup adds read-only `wg show` to the toolkit sudoers (both /usr/bin and /usr/sbin paths) so the handshake-based count works on hardened installs. Existing users get exact counts after re-running setup; until then the estimated fallback is used
