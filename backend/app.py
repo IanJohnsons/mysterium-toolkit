@@ -9328,6 +9328,33 @@ def test_node():
         return jsonify({'visible': False, 'error': str(e)}), 500
 
 
+def _classify_settle_response(status, body):
+    """Inspect a settle response and return a user-facing (error, hint) tuple when
+    the node/Hermes rejected the settlement, or None when it looks accepted.
+
+    The node can return HTTP 200/202 while the underlying Hermes settle was refused
+    (the rejection text lands in the body), so the status code alone is not enough.
+    Most common rejection: 'Limit exceeded' — a Hermes rate limit after recent
+    settlements. The earnings are safe; the node retries automatically once the
+    window clears, so the user should NOT keep clicking Settle.
+    """
+    b = (body or '').lower()
+    if 'limit exceeded' in b:
+        return ('Hermes settlement limit reached — too many settlements in a short window.',
+                'Your earnings are safe and stay recorded as unsettled. The node settles '
+                'automatically once the limit window clears (usually within a few hours). '
+                'No need to click Settle again.')
+    if 'nothing to settle' in b:
+        return ('Nothing to settle for this provider right now.', None)
+    if 'insufficient' in b:
+        return ('Settlement failed: insufficient funds to cover the on-chain fee.',
+                'The node needs a little MYST/native gas to pay the settlement fee.')
+    # NOTE: a generic non-2xx (e.g. 404 for an unsupported endpoint variant) is NOT
+    # treated as a definitive failure here — the caller falls through to the next
+    # variant/node and only surfaces an error if every attempt fails.
+    return None
+
+
 @app.route('/node/settle', methods=['POST'])
 @require_auth
 def settle_earnings():
@@ -9435,6 +9462,18 @@ def settle_earnings():
                     last_status  = resp.status_code
                     last_body    = resp.text[:300]
                     logger.info(f'Settle attempt [{variant}] -> {resp.status_code}: {url}')
+
+                    # A 2xx does not guarantee the settle succeeded — Hermes can refuse
+                    # (e.g. rate limit) with the reason in the body. Check before claiming success.
+                    rejected = _classify_settle_response(resp.status_code, resp.text)
+                    if rejected is not None:
+                        err_msg, hint = rejected
+                        logger.warning(f'Settle rejected [{variant}]: {err_msg} (body: {resp.text[:160]})')
+                        payload = {'success': False, 'error': err_msg, 'unsettled': round(unsettled, 4)}
+                        if hint:
+                            payload['hint'] = hint
+                        return jsonify(payload), 200
+
                     if resp.status_code in (200, 202):
                         _bust_balance_caches()
                         label = 'queued' if variant == 'async' else 'initiated'

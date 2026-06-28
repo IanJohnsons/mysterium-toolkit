@@ -3976,7 +3976,7 @@ const MysteriumDashboard = () => {
 
                 <div>
                   <h4 className="text-emerald-400 font-semibold mb-1">Node Control &amp; Config</h4>
-                  <p className="text-slate-400"><strong className="text-slate-300">Restart</strong> — tries systemd → service → Docker → docker-compose → TequilAPI stop. <strong className="text-slate-300">Settle</strong> — fetches hermes_id from identity endpoint, calls /transactor/settle/sync. 20% Hermes fee deducted automatically. <strong className="text-slate-300">⚙ Config</strong> — payment interval tuning. <span className="text-amber-400">Only works when the toolkit runs on the same machine as the node</span> — requires <code className="bg-slate-800 px-1 rounded">myst</code> binary in PATH and passwordless sudo. High Load preset for 50+ sessions. Node restart required after applying.</p>
+                  <p className="text-slate-400"><strong className="text-slate-300">Restart</strong> — tries systemd → service → Docker → docker-compose → TequilAPI stop. <strong className="text-slate-300">Settle</strong> — fetches hermes_id from identity endpoint, calls /transactor/settle/sync. 20% Hermes fee deducted automatically. Hermes rate-limits settlements: if you settle too often in a short window you'll see a "limit reached" notice — your earnings are safe and the node settles automatically once the window clears, so there's no need to keep clicking. <strong className="text-slate-300">⚙ Config</strong> — payment interval tuning. <span className="text-amber-400">Only works when the toolkit runs on the same machine as the node</span> — requires <code className="bg-slate-800 px-1 rounded">myst</code> binary in PATH and passwordless sudo. High Load preset for 50+ sessions. Node restart required after applying.</p>
                 </div>
 
                 <div>
@@ -6023,6 +6023,7 @@ const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, 
 
 const EarningsCard = ({ earnings, backendUrl, authHeaders }) => {
   const [settleStatus, setSettleStatus] = useState(null);
+  const [settleDetail, setSettleDetail] = useState(null);
   const [mystPrice, setMystPrice] = useState(null);
 
   // Fetch MYST token price — refreshes every 5 minutes (matches backend cache TTL)
@@ -6066,12 +6067,24 @@ const EarningsCard = ({ earnings, backendUrl, authHeaders }) => {
   const handleSettle = async () => {
     if (!backendUrl) return;
     setSettleStatus('settling...');
+    setSettleDetail(null);
     try {
       const resp = await fetch(`${backendUrl}/node/settle`, { method: 'POST', headers: authHeaders || {} });
       const data = await resp.json();
-      setSettleStatus(data.success ? `✓ ${data.message}` : `✗ ${data.error}`);
-    } catch (e) { setSettleStatus(`✗ ${e.message}`); }
-    setTimeout(() => setSettleStatus(null), 8000);
+      if (data.success) {
+        setSettleStatus('✓ sent');
+        setSettleDetail({ ok: true, text: data.message, hint: data.hint });
+      } else {
+        setSettleStatus('✗ failed');
+        setSettleDetail({ ok: false, text: data.error, hint: data.hint });
+      }
+    } catch (e) {
+      setSettleStatus('✗ failed');
+      setSettleDetail({ ok: false, text: e.message });
+    }
+    // Reset the button label sooner; keep the detail line longer so the hint can be read.
+    setTimeout(() => setSettleStatus(null), 6000);
+    setTimeout(() => setSettleDetail(null), 16000);
   };
 
   return (
@@ -6083,6 +6096,14 @@ const EarningsCard = ({ earnings, backendUrl, authHeaders }) => {
           {settleStatus || 'Settle'}
         </button>
       </div>
+      {settleDetail && (
+        <div className={`text-[11px] mb-2 leading-relaxed ${settleDetail.ok ? 'text-emerald-300/80' : 'text-amber-400'}`}>
+          {settleDetail.ok ? '✓ ' : '⚠ '}{settleDetail.text}
+          {settleDetail.hint && (
+            <span className="block text-slate-400 mt-0.5">{settleDetail.hint}</span>
+          )}
+        </div>
+      )}
       <div className="text-4xl font-bold text-emerald-400 mb-1">
         {showSessionFallback
           ? <span>{safeEarnings.session_total.toFixed(4)} <span className="text-lg text-emerald-400/60">MYST</span><span className="text-xs text-emerald-400/50 ml-2">(session tokens — TequilAPI settling)</span></span>

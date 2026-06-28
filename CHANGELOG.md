@@ -2,6 +2,10 @@
 All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.2.39
+- feat (settle feedback): the Settle button now reports the actual outcome instead of always showing 'queued'. The node can return HTTP 200 while Hermes refuses the settlement (the reason is in the body), so the response is now inspected. The most common case — Hermes 'Limit exceeded' after recent settlements — is shown as a clear notice (earnings are safe, the node settles automatically once the rate-limit window clears, no need to retry). 'Nothing to settle' and 'insufficient fee' are surfaced too; unknown endpoint variants still fall through to the async settle path
+- ui (settle): the result now shows below the button with a readable hint instead of being squeezed into the button label, and errors stay visible long enough to read
+
 ## v1.2.38
 - fix (settle detection): the dashboard now reflects a settlement (auto OR manual) within ~1 minute instead of lagging up to the 10-minute slow-tier interval. The medium tier (60s) reads the node's own unsettled earnings and, when it drops by more than 0.5 MYST (unsettled only ever falls on a settle, otherwise it climbs with accrual), forces an immediate earnings refresh. Replaces the previous heuristic that estimated unsettled from live session tokens — an unreliable signal that rarely fired
 
