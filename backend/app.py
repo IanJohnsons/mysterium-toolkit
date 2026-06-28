@@ -8066,6 +8066,34 @@ def stop_service(service_id):
         headers = MetricsCollector.get_tequilapi_headers()
         for node_url in NODE_API_URLS:
             try:
+                # Public (wireguard) owns the shared WireGuard subnet that monitoring and the
+                # other services ride on. A blunt DELETE tears that subnet down and kills
+                # monitoring. So when wireguard is managed via active-services, stop it the
+                # safe way — remove it from the list and let the node reconcile (mirrors the
+                # Off mode toggle). Only fall through to a direct stop when wireguard is
+                # managed separately (not in active-services).
+                if service_type == 'wireguard':
+                    try:
+                        cr = requests.get(f'{node_url}/config', headers=headers, timeout=5)
+                        active = []
+                        if cr.status_code == 200:
+                            active_raw = (cr.json().get('data', {}) or {}).get('active-services') or ''
+                            active = [s.strip() for s in active_raw.split(',') if s.strip()]
+                        if 'wireguard' in active:
+                            new_active = ','.join([s for s in active if s != 'wireguard'])
+                            wr = requests.post(
+                                f'{node_url}/config',
+                                headers={**headers, 'Content-Type': 'application/json'},
+                                json={'data': {'active-services': new_active}}, timeout=10)
+                            if wr.status_code not in (200, 202, 204):
+                                return jsonify({'success': False,
+                                                'error': f'Config write failed: HTTP {wr.status_code}'}), 200
+                            return jsonify({'success': True,
+                                            'message': 'Public disabled via active-services — monitoring stays running.'}), 200
+                        # wireguard managed separately → fall through to the normal stop below
+                    except Exception as _e:
+                        return jsonify({'success': False, 'error': f'Public stop failed: {_e}'}), 200
+
                 # Fetch current running services to resolve fresh UUIDs
                 current = {}
                 try:
@@ -8108,7 +8136,6 @@ def stop_service(service_id):
                     return jsonify({'success': True, 'message': f'Service stopped'}), 200
                 else:
                     return jsonify({'success': False, 'error': err_msg or f'Stop failed for {target_id}'}), 200
-                    return jsonify({'success': False, 'error': f'Stop failed for {target_id}'}), 200
             except Exception as e:
                 return jsonify({'success': False, 'error': str(e)}), 200
         return jsonify({'success': False, 'error': 'No node available'}), 200

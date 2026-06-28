@@ -2,6 +2,10 @@
 All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.2.33
+- fix (Public/monitoring, second path): the generic service stop now stops Public (wireguard) via the active-services rewrite instead of a blunt DELETE — closing the same monitoring-killing footgun that v1.2.32 fixed for the Open/Verified/Off toggle. Falls back to a direct stop only when wireguard is managed separately. The UI already routes Public through the mode selector, so this hardens the API path against direct or future callers
+- cleanup: removed an unreachable dead return in the stop-service route
+
 ## v1.2.32
 - fix (Public/monitoring): turning Public Off no longer deletes the wireguard service (which tore down the shared WireGuard subnet and killed monitoring + other services on it). On nodes that manage wireguard via active-services, Off now removes only wireguard from the list and lets the node reconcile gracefully — monitoring keeps running. Falls back to a direct stop only when wireguard is managed separately. Open/Verified re-adds wireguard to active-services so Public persists across restarts
 - fix (tunnels): the Tunnels & Sessions count now reads recent-active tunnels (traffic in the last 5 minutes) instead of the cumulative since-boot interface count, so it no longer shows idle pool interfaces (e.g. '6 tunnels / 1 session')
