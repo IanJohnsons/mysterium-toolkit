@@ -2733,7 +2733,7 @@ const MysteriumDashboard = () => {
                       <span>
                         Tunnels: {metrics.live_connections.active} active ({metrics.live_connections.transferring || 0} transferring)
                         {metrics.live_connections.handshake === false && (
-                          <span className="text-amber-500/80" title="Run setup again to allow 'wg show' in sudoers for accurate, handshake-based tunnel counts."> · estimated (run setup for exact counts)</span>
+                          <span className="text-amber-500/80" title="Exact handshake-based counts need the 'wireguard-tools' package (the 'wg' command). The sudoers permission is applied automatically on update."> · estimated (install wireguard-tools for exact counts)</span>
                         )}
                       </span>
                       <span>Service connections: {metrics.live_connections.svc_connections}</span>
