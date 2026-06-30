@@ -1807,7 +1807,7 @@ class RollupDB:
                 conn = cls._conn()
                 rows = conn.execute(
                     f"SELECT service_type AS svc, SUM(sessions) AS s, "
-                    f"SUM(bytes_sent + bytes_received) AS b, SUM(tokens) AS t "
+                    f"SUM(bytes_sent + bytes_received) AS b, SUM(CAST(tokens AS REAL)) AS t "
                     f"FROM daily_totals WHERE {where} GROUP BY service_type", params
                 ).fetchall()
                 conn.close()
