@@ -6233,13 +6233,16 @@ const SettlementHistoryCard = ({ backendUrl, authHeaders }) => {
     }
   }, [backendUrl]);
 
-  // Prefer on-chain transactions (Polygonscan) over TequilAPI settlements
-  const onchainTxs    = data?.onchain_txs || [];
+  // Prefer on-chain transactions (Polygonscan) over TequilAPI settlements.
+  // Show only incoming transfers (actual settlements into the wallet); outgoing
+  // transfers — e.g. moving MYST out to another wallet to top up a service — are not
+  // settlements and would otherwise distort the list and count.
+  const onchainTxs    = (data?.onchain_txs || []).filter(t => t.direction === 'in');
   const hasOnchain    = onchainTxs.length > 0;
   const displayTxs    = hasOnchain ? onchainTxs : (data?.settlements || []);
   const totalDisplay  = hasOnchain ? (data?.total_onchain || 0) : (data?.total_settled || 0);
   const txSource      = hasOnchain ? 'on-chain (Polygonscan)' : 'TequilAPI settle history';
-  const txCount       = hasOnchain ? (data?.onchain_count || 0) : (data?.settlements?.length || 0);
+  const txCount       = hasOnchain ? onchainTxs.length : (data?.settlements?.length || 0);
   const walletBalance = data?.wallet_balance;
   const beneficiary   = data?.beneficiary || '';
   const shortBen      = beneficiary
@@ -6329,8 +6332,8 @@ const SettlementHistoryCard = ({ backendUrl, authHeaders }) => {
             <span className="text-xs font-semibold text-violet-300">{totalRewards.toFixed(4)} MYST</span>
           </div>
           <p className="text-[10px] text-slate-500 mb-2">
-            Incoming MYST not from Hermes — MystNodes monthly reward pool, referrals, or other sources.
-            Based on Polygon transaction history. Accurate even if wallet was emptied.
+            Incoming MYST from the MystNodes monthly reward pool. Based on Polygon
+            transaction history. Accurate even if wallet was emptied.
           </p>
           <div className="space-y-1 max-h-32 overflow-y-auto">
             {rewardsTxs.map((tx, i) => (

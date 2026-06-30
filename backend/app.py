@@ -8712,6 +8712,18 @@ def get_earnings_efficiency():
                     svc_result.append({'date': day, 'myst_per_gb': myst_per_gb,
                                        'earnings_myst': round(v['earnings_myst'], 6),
                                        'data_mb': round(v['data_mb'], 2)})
+            # Noise floor: days with negligible data (a few hundred KB) divide a tiny
+            # earnings figure by a near-zero GB value, producing a meaningless MYST/GB
+            # ratio that collapses the chart line into a sharp V-drop. Clamp each day's
+            # ratio up to the 10th percentile of this service's own real days. No day is
+            # removed (low-earning nodes keep every data point); only genuine
+            # divide-by-near-zero noise is lifted into the real range.
+            if len(svc_result) >= 5:
+                ratios = sorted(p['myst_per_gb'] for p in svc_result)
+                floor = ratios[max(0, int(len(ratios) * 0.10) - 1)]
+                for p in svc_result:
+                    if p['myst_per_gb'] < floor:
+                        p['myst_per_gb'] = floor
             if svc_result:
                 by_type[svc] = svc_result
 
@@ -8972,11 +8984,20 @@ def get_settle_history():
             '0x80ed28d84792d8b153bf2f25f0c4b7a1381de4ab',  # Hermes chain 2 (Polygon)
             '0xa62a2a75949d25e17c6f08a7818e7be97c18a8d2',  # Hermes chain 1 (Ethereum)
         }
-        # Rewards = incoming transfers NOT from Hermes
+        # Known MystNodes reward pool distributor (global address, same for every node).
+        # The monthly reward pool pays out from this address around the 1st of each month.
+        REWARD_ADDRESSES = {
+            '0xb7832939438e166a84cf97fe037179ce38691f72',  # MystNodes monthly reward pool
+        }
+        # Rewards = incoming transfers from the known MystNodes reward pool only.
+        # Previously this matched any incoming non-Hermes transfer, which wrongly counted
+        # unrelated incoming MYST (e.g. a one-off transfer from a Mysterium admin wallet to
+        # help a node operator get started) as a reward. Restricting to the known reward
+        # pool address keeps the total accurate.
         rewards_txs = [
             t for t in onchain_txs
             if t['direction'] == 'in'
-            and t.get('from', '').lower() not in HERMES_ADDRESSES
+            and t.get('from', '').lower() in REWARD_ADDRESSES
         ]
         total_rewards = round(sum(t['amount_myst'] for t in rewards_txs), 6)
 

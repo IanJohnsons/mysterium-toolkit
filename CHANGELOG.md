@@ -2,6 +2,11 @@
 All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.2.42
+- fix (earnings efficiency chart): days with negligible data (a few hundred KB) divided a tiny earnings figure by a near-zero GB value, producing meaningless MYST/GB ratios that collapsed the per-service line into sharp V-drops. Each service's daily ratio is now clamped up to the 10th percentile of that service's own real days. No day is removed — low-earning nodes keep every data point — only genuine divide-by-near-zero noise is lifted into the real range
+- fix (settlement history): the on-chain settlement list now shows only incoming transfers (actual settlements into the wallet). Outgoing transfers (e.g. moving MYST out to top up a service) are no longer listed or counted, keeping the settlement total accurate
+- fix (network rewards): rewards are now matched to the known MystNodes monthly reward pool address instead of any incoming non-Hermes transfer. This prevents unrelated incoming MYST (e.g. a one-off transfer from a Mysterium admin wallet to help an operator get started) from being wrongly counted as a reward
+
 ## v1.2.41
 - fix (earnings overflow): the lifetime/service-breakdown rollup summed raw token wei with SUM(tokens), which overflows SQLite's 64-bit integer limit once lifetime earnings pass ~9.2 MYST worth of summed wei (any real node). The query now uses SUM(CAST(tokens AS REAL)), matching the other earnings queries. Without this the rollup raised 'integer overflow' and fell back to a partial live computation, so lifetime and per-service earnings could read low or incomplete
 
