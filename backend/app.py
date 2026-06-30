@@ -8498,23 +8498,52 @@ def set_wireguard_mode():
                 except Exception as e:
                     logger.warning(f"myst config set failed: {e}")
 
-                # Ensure wireguard is back in active-services so Public persists across node
-                # restarts — a previous "Off" may have removed it from the list.
+                # Determine whether wireguard is managed via active-services. On the standard
+                # multi-service setup, wireguard, dvpn, scraping, data_transfer and monitoring
+                # share ONE WireGuard subnet and wireguard is listed in active-services. A blunt
+                # DELETE of the wireguard service tears down that shared subnet and takes the B2B
+                # services + monitoring down with it (they only recover on a full node restart).
+                # So when wireguard is in active-services, cycle it via the active-services list
+                # (remove → re-add) and let the node's service manager reconcile gracefully — the
+                # restart applies the new access-policy without destroying the shared subnet.
+                wg_in_active = False
+                act = []
                 try:
                     cr2 = requests.get(f'{node_url}/config', headers=headers, timeout=5)
                     if cr2.status_code == 200:
                         act_raw = (cr2.json().get('data', {}) or {}).get('active-services') or ''
                         act = [s.strip() for s in act_raw.split(',') if s.strip()]
-                        if 'wireguard' not in act:
-                            act.append('wireguard')
+                        wg_in_active = 'wireguard' in act
+                except Exception as _e:
+                    logger.debug(f"active-services read skipped: {_e}")
+
+                if wg_in_active:
+                    # Cycle wireguard through active-services so the new policy applies without
+                    # a service DELETE. Remove wireguard, let the node stop it, then re-add it.
+                    import time as _time
+                    try:
+                        if wg_running:
                             requests.post(
                                 f'{node_url}/config',
                                 headers={**headers, 'Content-Type': 'application/json'},
-                                json={'data': {'active-services': ','.join(act)}}, timeout=10,
+                                json={'data': {'active-services': ','.join([s for s in act if s != 'wireguard'])}},
+                                timeout=10,
                             )
-                except Exception as _e:
-                    logger.debug(f"re-add wireguard to active-services skipped: {_e}")
+                            _time.sleep(1)
+                        requests.post(
+                            f'{node_url}/config',
+                            headers={**headers, 'Content-Type': 'application/json'},
+                            json={'data': {'active-services': ','.join([s for s in act if s != 'wireguard'] + ['wireguard'])}},
+                            timeout=10,
+                        )
+                    except Exception as _e:
+                        logger.debug(f"wireguard active-services cycle skipped: {_e}")
+                    label = 'verified consumers only (Mysterium network)' if mode == 'verified' else 'open to everyone'
+                    return jsonify({'success': True, 'mode': mode,
+                                    'message': f'Public service set to {mode} — {label}. Applied via active-services so the shared subnet (and B2B services) stay up.'}), 200
 
+                # wireguard managed separately (not in active-services): safe to cycle the
+                # service directly without affecting a shared subnet.
                 if wg_running and wg_id:
                     requests.delete(f'{node_url}/services/{wg_id}', headers=headers, timeout=10)
                     import time as _time; _time.sleep(1)

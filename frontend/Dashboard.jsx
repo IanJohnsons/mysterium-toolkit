@@ -4313,7 +4313,13 @@ const EarningsEfficiencyChart = ({ backendUrl, authHeaders }) => {
 
   const allDates = data.map(d => d.date);
   const combinedVals = data.map(d => d.myst_per_gb).filter(v => v != null);
-  const avg = combinedVals.length ? (combinedVals.reduce((a,b) => a+b, 0) / combinedVals.length).toFixed(4) : null;
+  // Volume-weighted blended rate: total earnings / total data across the whole window.
+  // A plain mean of per-day ratios over-weights low-volume high-rate days (e.g. a day with
+  // a few MB of Public traffic at ~3 MYST/GB counts as much as a day with 50 GB of B2B at
+  // ~0.08 MYST/GB), inflating the figure. Weighting by data reflects the true earned rate.
+  const totMyst = data.reduce((a, d) => a + (d.earnings_myst || 0), 0);
+  const totGbAvg = data.reduce((a, d) => a + (d.data_mb || 0), 0) / 1024;
+  const avg = totGbAvg > 0 ? (totMyst / totGbAvg).toFixed(4) : null;
   const last = combinedVals.length ? combinedVals[combinedVals.length - 1].toFixed(4) : null;
 
   // Build per-type polylines with shared y-scale across all types

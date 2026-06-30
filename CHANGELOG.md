@@ -2,6 +2,10 @@
 All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.2.43
+- fix (Public mode toggle — B2B services): switching Public between Open and Verified deleted and recreated the wireguard service. On the standard multi-service node, wireguard, dvpn, scraping, data_transfer and monitoring share ONE WireGuard subnet, and that DELETE tore the subnet down — taking the B2B services with it until the next full node restart. The v1.2.32 fix only covered the Off path; the Open/Verified path still did the blunt DELETE. It now cycles wireguard through the active-services list (remove then re-add) so the new access policy applies while the shared subnet — and the B2B/dvpn/monitoring services on it — stay up. A direct service cycle is used only when wireguard is managed separately (not in active-services)
+- fix (earnings efficiency — combined average): the 'Combined avg MYST/GB' was a plain mean of per-day ratios, which over-weighted low-volume high-rate days (a few MB of Public at ~3 MYST/GB counted as much as tens of GB of B2B at ~0.08 MYST/GB), inflating the figure well above the real earned rate. It is now volume-weighted (total earnings / total data across the window), so it reflects the true blended rate (e.g. ~0.12 instead of ~1.84 on a B2B-heavy node)
+
 ## v1.2.42
 - fix (earnings efficiency chart): days with negligible data (a few hundred KB) divided a tiny earnings figure by a near-zero GB value, producing meaningless MYST/GB ratios that collapsed the per-service line into sharp V-drops. Each service's daily ratio is now clamped up to the 10th percentile of that service's own real days. No day is removed — low-earning nodes keep every data point — only genuine divide-by-near-zero noise is lifted into the real range
 - fix (settlement history): the on-chain settlement list now shows only incoming transfers (actual settlements into the wallet). Outgoing transfers (e.g. moving MYST out to top up a service) are no longer listed or counted, keeping the settlement total accurate
