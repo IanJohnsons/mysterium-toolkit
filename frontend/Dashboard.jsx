@@ -2780,7 +2780,7 @@ const MysteriumDashboard = () => {
                               <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-400">
                                 <span>{s.is_probe ? <span title="Mysterium network probe">🔧</span> : (countryFlag(s.consumer_country) || '—')}</span>
                                 <span className="text-slate-300">{fmtType(s.service_type) || '—'}</span>
-                                <span>{s.duration}</span>
+                                <span>{s.duration}{s.is_idle && <span className="ml-1 text-[9px] uppercase tracking-wide text-slate-500" title="Tunnel open but no active traffic">idle</span>}</span>
                                 <span>↑{s.bytes_pending ? <span className="text-slate-600 italic">—</span> : formatDataSize(s.data_out)}</span>
                                 <span>↓{s.bytes_pending ? <span className="text-slate-600 italic">—</span> : formatDataSize(s.data_in)}</span>
                               </div>
@@ -2801,11 +2801,11 @@ const MysteriumDashboard = () => {
                           </div>
                           {sortRows((metrics.sessions?.items || []).filter(s => s.is_active), activeSort).map((s, i) => (
                             <div key={s.id || i} className="grid grid-cols-12 gap-2 text-xs px-3 py-2.5 rounded border bg-emerald-500/5 border-emerald-500/20">
-                              <div className="col-span-1"><div className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse mt-0.5" /></div>
+                              <div className="col-span-1"><div className={`w-2.5 h-2.5 rounded-full mt-0.5 ${s.is_idle ? 'bg-slate-500' : 'bg-cyan-400 animate-pulse'}`} title={s.is_idle ? 'Idle — tunnel open but no active traffic' : 'Active'} /></div>
                               <div className="col-span-3 min-w-0"><CopyableId id={s.consumer_id} /></div>
                               <div className="col-span-1 text-sm">{s.is_probe ? <span title="Mysterium network probe">🔧</span> : (countryFlag(s.consumer_country) || '—')}</div>
                               <div className="col-span-1 text-slate-300 text-xs truncate">{fmtType(s.service_type) || '—'}</div>
-                              <div className="col-span-1 text-slate-300">{s.duration}</div>
+                              <div className="col-span-1 text-slate-300">{s.duration}{s.is_idle && <span className="ml-1 text-[9px] uppercase tracking-wide text-slate-500" title="Tunnel open but no active traffic">idle</span>}</div>
                               <div className="col-span-2 text-emerald-300">
                                 {s.bytes_pending
                                   ? <span className="text-slate-600 italic" title="Bytes reported at session close by Mysterium">—</span>

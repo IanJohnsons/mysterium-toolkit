@@ -3011,6 +3011,15 @@ class MetricsCollector:
                 # The frontend shows "—" instead of "0 MB" for these sessions.
                 bytes_pending = is_active and b_in == 0 and b_out == 0
 
+                # Idle tunnel: an active session that has been open a while but is moving
+                # almost no data on average. WireGuard tunnels linger open after real
+                # traffic stops (and monitoring probes hold a tunnel briefly), so a long
+                # session with negligible average throughput is idle — the tunnel exists
+                # but is not actively transferring. Shown as "idle" in the UI so an idle
+                # probe tunnel is no longer indistinguishable from a busy consumer.
+                avg_bps = (b_in + b_out) / delta_secs if delta_secs and delta_secs > 0 else 0
+                is_idle = bool(is_active and delta_secs and delta_secs > 900 and avg_bps < 1024)
+
                 sessions.append({
                     'id': session_id,
                     'consumer_id': session.get('consumer_id', 'unknown'),
@@ -3027,6 +3036,7 @@ class MetricsCollector:
                     'earnings_myst': round(tokens / 1e18, 8),
                     'is_paid': tokens > 0,
                     'is_active': is_active,
+                    'is_idle': is_idle,
                     'bytes_pending': bytes_pending,
                     'consumer_country': consumer_country,
                 })
@@ -8912,27 +8922,9 @@ def get_settle_history():
                         except Exception as e:
                             logger.debug(f'Etherscan v2 error: {e}')
 
-                    # Strategy 2: Polygonscan API (works with Polygonscan keys or no key)
-                    try:
-                        params2 = {
-                            'module': 'account',
-                            'action': 'tokenbalance',
-                            'contractaddress': MYST_CONTRACT,
-                            'address': beneficiary,
-                            'tag': 'latest',
-                        }
-                        if api_key:
-                            params2['apikey'] = api_key
-                        r2 = requests.get('https://api.polygonscan.com/api', params=params2, timeout=10)
-                        if r2.status_code == 200:
-                            d2 = r2.json()
-                            if d2.get('status') == '1' and str(d2.get('result', '')).isdigit():
-                                return round(int(d2['result']) / 1e18, 6), None
-                            msg2 = str(d2.get('message', '')) + str(d2.get('result', ''))
-                            if 'rate limit' in msg2.lower():
-                                return None, 'rate_limit'
-                    except Exception as e:
-                        logger.debug(f'Polygonscan error: {e}')
+                    # api.polygonscan.com was removed here: since the Etherscan V2 migration
+                    # it only returns a 301 redirect (dead endpoint). Etherscan V2 above with
+                    # chainid=137 accepts both Etherscan and legacy Polygonscan API keys.
                     return None, 'error'
 
                 bal, err = _fetch_balance(_live_api_key)
@@ -8958,15 +8950,12 @@ def get_settle_history():
         if beneficiary and _live_api_key:
             try:
                 def _fetch_tokentx(api_key):
-                    # Try Etherscan v2 first (chainid=137 = Polygon)
+                    # Etherscan v2 (chainid=137 = Polygon). The legacy api.polygonscan.com
+                    # fallback was removed — it only returns a 301 redirect since the
+                    # Etherscan V2 migration. V2 accepts legacy Polygonscan keys too.
                     for url, params in [
                         ('https://api.etherscan.io/v2/api', {
                             'chainid': '137', 'module': 'account', 'action': 'tokentx',
-                            'contractaddress': MYST_CONTRACT, 'address': beneficiary,
-                            'sort': 'desc', 'apikey': api_key,
-                        }),
-                        ('https://api.polygonscan.com/api', {
-                            'module': 'account', 'action': 'tokentx',
                             'contractaddress': MYST_CONTRACT, 'address': beneficiary,
                             'sort': 'desc', 'apikey': api_key,
                         }),
