@@ -2852,9 +2852,13 @@ class MetricsCollector:
         """Get actual client sessions from ALL configured nodes (via TequilaCache).
         Filters out monitoring probes and service registration entries.
 
-        CRITICAL: TequilAPI marks sessions as "Completed" even while tunnels are still active.
-        We use VPN interface count (psutil) as ground truth for active session count.
-        Live sessions are available via the separate /sessions/live endpoint.
+        NOTE: TequilAPI marks sessions "Completed" even while tunnels are still active,
+        and drops session status while a tunnel persists via keepalives. The tunnel →
+        consumer wallet mapping is not exposed by any API (it lives only in the node's
+        in-memory event bus; wg show yields only peer public keys), so we do NOT fabricate
+        active sessions from recent history. The session list reflects only what the node
+        genuinely reports; the tunnel view (live_connections) is the source of truth for
+        live throughput. See tunnels_without_session in the return.
         """
         try:
             now = datetime.now(timezone.utc)
@@ -3036,25 +3040,19 @@ class MetricsCollector:
             sessions.sort(key=lambda s: s['is_active'], reverse=True)          # active on top
             active_count = sum(1 for s in sessions if s['is_active'])
 
-            # VPN ground truth override — last resort only.
-            # WireGuard interfaces linger for minutes after a consumer disconnects.
-            # If we compared vpn_tunnel_count > active_count we would force-mark
-            # recently-completed sessions as active (causing the same consumer to
-            # appear twice when they reconnect before the stale interface is cleaned up).
-            # Only trigger when TequilAPI reports ZERO active sessions despite live
-            # tunnels existing — that is the real "API hasn't caught up yet" case.
-            effective_active = max(vpn_tunnel_count, total_svc_connections)
-            if effective_active > 0 and active_count == 0 and sessions:
-                # Mark the N most recent sessions as active
-                marked = 0
-                for s in sessions:
-                    if marked >= effective_active:
-                        break
-                    if not s['is_active']:
-                        s['is_active'] = True
-                        s['status'] = '(active — tunnel up)'
-                        marked += 1
-                active_count = sum(1 for s in sessions if s['is_active'])
+            # NOTE (honest live-session reporting):
+            # We deliberately do NOT fabricate active sessions here. When TequilAPI
+            # reports zero active sessions but WireGuard tunnels are live (a real case:
+            # the node drops session status while the tunnel persists via keepalives),
+            # the mapping tunnel → consumer wallet is NOT retrievable — it lives only in
+            # the node's in-memory event bus, is never exposed over any API, and `wg show`
+            # only yields peer public keys. Previously we guessed by promoting the most
+            # recent history rows to "active", which showed the wrong consumer (e.g. a
+            # low-traffic probe) while the real 70 GB tunnel had no visible session.
+            # Instead we surface the honest truth: the session list shows only what the
+            # node genuinely reports, and the tunnel view is the source of truth for live
+            # throughput. `tunnels_without_session` (computed in the return) tells the UI
+            # how many live tunnels exist without a reported active session.
 
             # Reconnect ghost de-duplication.
             # Mysterium only uses "New" and "Completed" statuses. When a consumer
@@ -3352,6 +3350,10 @@ class MetricsCollector:
                 'history_loaded': SessionStore.is_ready(NODE_API_URLS[0] if NODE_API_URLS else ''),
                 'active': active_count,
                 'vpn_tunnel_count': vpn_tunnel_count,
+                # Honest bridge: live tunnels the node reports NO active session for.
+                # The UI uses this to say "N live tunnels, see Tunnels tab" instead of
+                # showing an empty list (or a fabricated consumer) while traffic flows.
+                'tunnels_without_session': max(vpn_tunnel_count - active_count, 0),
                 'live_vpn_rx_mb': round(live_vpn_rx / (1024 * 1024), 2),
                 'live_vpn_tx_mb': round(live_vpn_tx / (1024 * 1024), 2),
                 'unique_consumers': unique_consumers,

@@ -2779,7 +2779,7 @@ const MysteriumDashboard = () => {
                                 </span>
                               </div>
                               <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-400">
-                                <span>{s.is_probe ? <span title="Mysterium network probe">🔧</span> : (countryFlag(s.consumer_country) || '—')}</span>
+                                <span>{s.is_probe ? <span title="Likely monitoring probe — 0 earnings, tiny sessions (behavioural inference)">🔧</span> : (countryFlag(s.consumer_country) || '—')}</span>
                                 <span className="text-slate-300">{fmtType(s.service_type) || '—'}</span>
                                 <span>{s.duration}</span>
                                 <span>↑{s.bytes_pending ? <span className="text-slate-600 italic">—</span> : formatDataSize(s.data_out)}</span>
@@ -2804,7 +2804,7 @@ const MysteriumDashboard = () => {
                             <div key={s.id || i} className="grid grid-cols-12 gap-2 text-xs px-3 py-2.5 rounded border bg-emerald-500/5 border-emerald-500/20">
                               <div className="col-span-1"><div className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse mt-0.5" /></div>
                               <div className="col-span-3 min-w-0"><CopyableId id={s.consumer_id} /></div>
-                              <div className="col-span-1 text-sm">{s.is_probe ? <span title="Mysterium network probe">🔧</span> : (countryFlag(s.consumer_country) || '—')}</div>
+                              <div className="col-span-1 text-sm">{s.is_probe ? <span title="Likely monitoring probe — 0 earnings, tiny sessions (behavioural inference)">🔧</span> : (countryFlag(s.consumer_country) || '—')}</div>
                               <div className="col-span-1 text-slate-300 text-xs truncate">{fmtType(s.service_type) || '—'}</div>
                               <div className="col-span-1 text-slate-300">{s.duration}</div>
                               <div className="col-span-2 text-emerald-300">
@@ -2824,12 +2824,26 @@ const MysteriumDashboard = () => {
                           ))}
                         </div>
                       </>
-                    ) : (
-                      <div className="text-xs text-slate-500 py-8 text-center">
-                        No active sessions — no VPN tunnels are currently connected.
-                      </div>
-                    );
-                  })()}
+                    ) : (() => {
+                      // Honest reporting: the node sometimes reports zero active sessions
+                      // while WireGuard tunnels are still live (it drops session status but
+                      // the tunnel persists via keepalives). The tunnel → wallet mapping is
+                      // not retrievable from any API, so instead of inventing a consumer we
+                      // point to the Tunnels tab, which is the source of truth for live traffic.
+                      const liveTunnels = safeNum(metrics.sessions?.tunnels_without_session
+                        ?? metrics.sessions?.vpn_tunnel_count ?? 0);
+                      return liveTunnels > 0 ? (
+                        <div className="text-xs text-slate-500 py-8 text-center">
+                          The node reports no active sessions, but {liveTunnels} live tunnel{liveTunnels === 1 ? ' is' : 's are'} carrying traffic.<br />
+                          <span className="text-slate-600">Mysterium doesn't expose which consumer is on a live tunnel once the session status is dropped — see the <span className="text-cyan-400">Tunnels</span> tab for what's actually flowing.</span>
+                        </div>
+                      ) : (
+                        <div className="text-xs text-slate-500 py-8 text-center">
+                          No active sessions — no VPN tunnels are currently connected.
+                        </div>
+                      );
+                      })()
+                    })()}
                 </>
               )}
 
