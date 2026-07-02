@@ -2663,7 +2663,7 @@ const MysteriumDashboard = () => {
                         duration: '—',
                       }));
                     }
-                    const dotColor = (p) => p.has_speed ? 'bg-emerald-400 animate-pulse' : p.is_active ? 'bg-cyan-400' : 'bg-slate-600';
+                    const dotColor = (p) => p.has_speed ? 'bg-emerald-400 animate-pulse' : p.is_idle ? 'bg-slate-500' : p.is_active ? 'bg-cyan-400' : 'bg-slate-600';
                     const rowBg = (p) => p.has_speed ? 'bg-emerald-500/5 border-emerald-500/20' : p.is_active ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-slate-900/30 border-slate-700/30 opacity-50';
                     return peers.length > 0 ? (
                       <>
@@ -2682,6 +2682,7 @@ const MysteriumDashboard = () => {
                                 <div className="flex items-center gap-2">
                                   <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${dotColor(peer)}`} />
                                   <span className="text-cyan-400 font-mono text-sm font-semibold">{peer.interface}</span>
+                                  {peer.is_idle && <span className="text-[9px] uppercase tracking-wide text-slate-500" title="Live tunnel but negligible traffic — likely a monitoring probe">idle</span>}
                                 </div>
                                 <span className="text-slate-300 text-xs">{peer.duration}</span>
                               </div>
@@ -2710,7 +2711,7 @@ const MysteriumDashboard = () => {
                               <div className="col-span-1 flex items-center">
                                 <div className={`w-2.5 h-2.5 rounded-full ${dotColor(peer)}`} />
                               </div>
-                              <div className="col-span-2 text-cyan-400 font-mono text-xs font-semibold">{peer.interface}</div>
+                              <div className="col-span-2 text-cyan-400 font-mono text-xs font-semibold">{peer.interface}{peer.is_idle && <span className="ml-1.5 text-[9px] uppercase tracking-wide text-slate-500" title="Live tunnel but negligible traffic — likely a monitoring probe">idle</span>}</div>
                               <div className="col-span-2 text-slate-400">{peer.duration}</div>
                               <div className="col-span-2 text-emerald-300">{formatDataSize(peer.download_mb)}</div>
                               <div className="col-span-2 text-slate-300">{formatDataSize(peer.upload_mb)}</div>
@@ -2780,7 +2781,7 @@ const MysteriumDashboard = () => {
                               <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-400">
                                 <span>{s.is_probe ? <span title="Mysterium network probe">🔧</span> : (countryFlag(s.consumer_country) || '—')}</span>
                                 <span className="text-slate-300">{fmtType(s.service_type) || '—'}</span>
-                                <span>{s.duration}{s.is_idle && <span className="ml-1 text-[9px] uppercase tracking-wide text-slate-500" title="Tunnel open but no active traffic">idle</span>}</span>
+                                <span>{s.duration}</span>
                                 <span>↑{s.bytes_pending ? <span className="text-slate-600 italic">—</span> : formatDataSize(s.data_out)}</span>
                                 <span>↓{s.bytes_pending ? <span className="text-slate-600 italic">—</span> : formatDataSize(s.data_in)}</span>
                               </div>
@@ -2801,11 +2802,11 @@ const MysteriumDashboard = () => {
                           </div>
                           {sortRows((metrics.sessions?.items || []).filter(s => s.is_active), activeSort).map((s, i) => (
                             <div key={s.id || i} className="grid grid-cols-12 gap-2 text-xs px-3 py-2.5 rounded border bg-emerald-500/5 border-emerald-500/20">
-                              <div className="col-span-1"><div className={`w-2.5 h-2.5 rounded-full mt-0.5 ${s.is_idle ? 'bg-slate-500' : 'bg-cyan-400 animate-pulse'}`} title={s.is_idle ? 'Idle — tunnel open but no active traffic' : 'Active'} /></div>
+                              <div className="col-span-1"><div className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse mt-0.5" /></div>
                               <div className="col-span-3 min-w-0"><CopyableId id={s.consumer_id} /></div>
                               <div className="col-span-1 text-sm">{s.is_probe ? <span title="Mysterium network probe">🔧</span> : (countryFlag(s.consumer_country) || '—')}</div>
                               <div className="col-span-1 text-slate-300 text-xs truncate">{fmtType(s.service_type) || '—'}</div>
-                              <div className="col-span-1 text-slate-300">{s.duration}{s.is_idle && <span className="ml-1 text-[9px] uppercase tracking-wide text-slate-500" title="Tunnel open but no active traffic">idle</span>}</div>
+                              <div className="col-span-1 text-slate-300">{s.duration}</div>
                               <div className="col-span-2 text-emerald-300">
                                 {s.bytes_pending
                                   ? <span className="text-slate-600 italic" title="Bytes reported at session close by Mysterium">—</span>
@@ -4320,7 +4321,6 @@ const EarningsEfficiencyChart = ({ backendUrl, authHeaders }) => {
   const totMyst = data.reduce((a, d) => a + (d.earnings_myst || 0), 0);
   const totGbAvg = data.reduce((a, d) => a + (d.data_mb || 0), 0) / 1024;
   const avg = totGbAvg > 0 ? (totMyst / totGbAvg).toFixed(4) : null;
-  const last = combinedVals.length ? combinedVals[combinedVals.length - 1].toFixed(4) : null;
 
   // Build per-type polylines with shared y-scale across all types
   const allVals = Object.values(byType).flatMap(pts => pts.map(p => p.myst_per_gb)).filter(Boolean);
@@ -4388,7 +4388,6 @@ const EarningsEfficiencyChart = ({ backendUrl, authHeaders }) => {
           {avg && (
             <div className="flex gap-4 text-xs mb-2">
               <span className="text-slate-600">Combined avg: <span className="text-slate-400 font-semibold">{avg} MYST/GB</span></span>
-              <span className="text-slate-600">Latest: <span className="text-slate-400 font-semibold">{last} MYST/GB</span></span>
             </div>
           )}
 

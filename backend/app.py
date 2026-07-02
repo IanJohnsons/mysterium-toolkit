@@ -3011,15 +3011,6 @@ class MetricsCollector:
                 # The frontend shows "—" instead of "0 MB" for these sessions.
                 bytes_pending = is_active and b_in == 0 and b_out == 0
 
-                # Idle tunnel: an active session that has been open a while but is moving
-                # almost no data on average. WireGuard tunnels linger open after real
-                # traffic stops (and monitoring probes hold a tunnel briefly), so a long
-                # session with negligible average throughput is idle — the tunnel exists
-                # but is not actively transferring. Shown as "idle" in the UI so an idle
-                # probe tunnel is no longer indistinguishable from a busy consumer.
-                avg_bps = (b_in + b_out) / delta_secs if delta_secs and delta_secs > 0 else 0
-                is_idle = bool(is_active and delta_secs and delta_secs > 900 and avg_bps < 1024)
-
                 sessions.append({
                     'id': session_id,
                     'consumer_id': session.get('consumer_id', 'unknown'),
@@ -3036,7 +3027,6 @@ class MetricsCollector:
                     'earnings_myst': round(tokens / 1e18, 8),
                     'is_paid': tokens > 0,
                     'is_active': is_active,
-                    'is_idle': is_idle,
                     'bytes_pending': bytes_pending,
                     'consumer_country': consumer_country,
                 })
@@ -4765,22 +4755,34 @@ class MetricsCollector:
 
                 # Try to get interface uptime from /sys
                 duration = '—'
+                iface_age = 0.0
                 try:
                     carrier_path = Path(f'/sys/class/net/{iface_name}/carrier')
                     if carrier_path.exists():
                         # Use file creation time as proxy for interface age
                         stat = Path(f'/sys/class/net/{iface_name}').stat()
-                        age = now - stat.st_ctime
-                        h = int(age // 3600)
-                        m = int((age % 3600) // 60)
+                        iface_age = now - stat.st_ctime
+                        h = int(iface_age // 3600)
+                        m = int((iface_age % 3600) // 60)
                         duration = f"{h}h {m}m" if h > 0 else f"{m}m"
                 except Exception:
                     pass
+
+                # Idle tunnel: a live tunnel (recent handshake) that has moved almost
+                # nothing on average over its whole lifetime — a long-lived low-traffic
+                # connection such as a monitoring probe that holds a tunnel open for hours
+                # with only keepalives. Lifetime-average throughput (total bytes / age) is
+                # stable, unlike the momentary has_speed which flickers between bursts, so a
+                # real consumer (GB over hours) is never mislabelled. This lives at the
+                # tunnel layer, where age and total bytes are known — the right place for it.
+                avg_bps = (total / iface_age) if iface_age > 60 else 0
+                is_idle = bool(is_active and iface_age > 900 and avg_bps < 1024)
 
                 live.append({
                     'interface': iface_name,
                     'is_active': is_active,
                     'has_speed': has_speed,
+                    'is_idle': is_idle,
                     # Consumer perspective: download = our tx, upload = our rx
                     'download_mb': round(tx / (1024 * 1024), 2),
                     'upload_mb': round(rx / (1024 * 1024), 2),
@@ -6315,14 +6317,19 @@ def fail2ban_unban():
         return jsonify({'ok': False, 'error': str(e)}), 200
 
 
-TOOLKIT_JAIL_FILE   = '/etc/fail2ban/jail.local'
+TOOLKIT_JAIL_FILE   = '/etc/fail2ban/jail.d/mysterium-toolkit.conf'  # standalone toolkit jail file (isolated, no user-config conflict)
+TOOLKIT_JAIL_LOCAL  = '/etc/fail2ban/jail.local'                     # legacy — only read to clean up the old managed block on migration
 TOOLKIT_FILTER_FILE = '/etc/fail2ban/filter.d/mysterium-dashboard.conf'
 TOOLKIT_BLOCK_START = '# --- Mysterium Toolkit managed jails ---'
 TOOLKIT_BLOCK_END   = '# --- End Mysterium Toolkit ---'
+# Jails the toolkit is allowed to create/modify. NEVER touch sshd, recidive or any
+# other system jail — the toolkit only protects its own dashboard port.
+TOOLKIT_JAIL_NAMES  = {'mysterium-dashboard'}
 
 
 def _f2b_get_toolkit_jail_names():
-    """Return the set of jail names managed by the toolkit in jail.local."""
+    """Return the set of jail names in the toolkit's standalone jail.d file.
+    The whole file is toolkit-owned, so every section in it is a toolkit jail."""
     import re as _re
     if not os.path.exists(TOOLKIT_JAIL_FILE):
         return set()
@@ -6330,12 +6337,41 @@ def _f2b_get_toolkit_jail_names():
         raw = open(TOOLKIT_JAIL_FILE).read()
     except Exception:
         return set()
-    if TOOLKIT_BLOCK_START not in raw:
-        return set()
-    start = raw.index(TOOLKIT_BLOCK_START)
-    end   = raw.find(TOOLKIT_BLOCK_END, start)
-    block = raw[start:end] if end != -1 else raw[start:]
-    return set(_re.findall(r'^\[([^\]]+)\]', block, _re.MULTILINE))
+    return set(_re.findall(r'^\[([^\]]+)\]', raw, _re.MULTILINE))
+
+
+def _f2b_cleanup_legacy_jail_local():
+    """Migration: remove the old toolkit-managed block from jail.local.
+
+    Earlier versions wrote toolkit jails into a delimited block inside
+    /etc/fail2ban/jail.local. We now use a standalone jail.d file, so the old
+    block must be stripped to avoid duplicate jail definitions. User content
+    outside the block is preserved untouched. Safe to call repeatedly."""
+    if not os.path.exists(TOOLKIT_JAIL_LOCAL):
+        return
+    try:
+        raw = open(TOOLKIT_JAIL_LOCAL).read()
+    except Exception:
+        return
+    if TOOLKIT_BLOCK_START not in raw or TOOLKIT_BLOCK_END not in raw:
+        return  # nothing to migrate
+    try:
+        bi = raw.index(TOOLKIT_BLOCK_START)
+        ei = raw.index(TOOLKIT_BLOCK_END) + len(TOOLKIT_BLOCK_END)
+        cleaned = (raw[:bi].rstrip('\n') + '\n' + raw[ei:].lstrip('\n')).strip() + '\n'
+        if not cleaned.strip():
+            cleaned = ''  # file had only our block — leave it empty
+        for prefix in [[], ['sudo', '-n']]:
+            try:
+                r = subprocess.run(prefix + ['tee', TOOLKIT_JAIL_LOCAL],
+                                   input=cleaned, capture_output=True, text=True, timeout=5)
+                if r.returncode == 0:
+                    logger.info('fail2ban: migrated — removed legacy toolkit block from jail.local')
+                    return
+            except Exception:
+                continue
+    except Exception as e:
+        logger.debug(f'jail.local migration skipped: {e}')
 
 
 def _f2b_read_conf(path):
@@ -6502,34 +6538,29 @@ def _f2b_get_external_jail_names():
 
 
 def _f2b_write_toolkit_conf(jails_data):
-    """Write toolkit jails into the managed block inside jail.local.
-    Does nothing when fail2ban_managed is disabled — toolkit is read-only then.
+    """Write toolkit jails to the standalone jail.d file.
+
+    This file is fully toolkit-owned (isolated from the user's jail.local), so we
+    write it wholesale — no block markers, no user content to preserve. This avoids
+    any conflict with an existing jail.local. Does nothing when fail2ban_managed is
+    disabled — the toolkit is read-only then.
     """
     if not FAIL2BAN_MANAGED:
-        logger.info('fail2ban_managed=false — skipping jail.local write')
+        logger.info('fail2ban_managed=false — skipping jail.d write')
         return True
-    # Read existing jail.local — preserve user content outside our block
-    user_before, user_after = '', ''
-    if os.path.exists(TOOLKIT_JAIL_FILE):
-        try:
-            raw = open(TOOLKIT_JAIL_FILE).read()
-            if TOOLKIT_BLOCK_START in raw and TOOLKIT_BLOCK_END in raw:
-                bi = raw.index(TOOLKIT_BLOCK_START)
-                ei = raw.index(TOOLKIT_BLOCK_END) + len(TOOLKIT_BLOCK_END)
-                user_before = raw[:bi].rstrip('\n')
-                user_after  = raw[ei:].lstrip('\n')
-            else:
-                user_before = raw.rstrip('\n')  # no toolkit block yet
-        except Exception:
-            pass
 
-    # Build the toolkit block
+    # Clean up any legacy block left in jail.local by older versions.
+    _f2b_cleanup_legacy_jail_local()
+
+    # Only toolkit-owned jails may be written — never system jails (sshd, recidive…).
+    safe_jails = [j for j in jails_data if j.get('name') in TOOLKIT_JAIL_NAMES]
+
     lines = [
-        f'{TOOLKIT_BLOCK_START}\n',
-        '# Managed by Mysterium Toolkit — do not edit this block manually.\n',
-        '# To customize, add or override settings outside this block.\n\n',
+        '# Mysterium Toolkit — managed jail file.\n',
+        '# This entire file is owned by the toolkit; edit jails via the dashboard.\n',
+        '# The toolkit never touches sshd, recidive or any system jail.\n\n',
     ]
-    for jail in jails_data:
+    for jail in safe_jails:
         lines.append(f'[{jail["name"]}]\n')
         lines.append(f'enabled  = {"true" if jail.get("enabled", True) else "false"}\n')
         if jail.get('port'):
@@ -6542,12 +6573,7 @@ def _f2b_write_toolkit_conf(jails_data):
         lines.append(f'bantime  = {jail.get("bantime", 3600)}\n')
         lines.append(f'findtime = {jail.get("findtime", 600)}\n')
         lines.append('\n')
-    lines.append(f'{TOOLKIT_BLOCK_END}\n')
-    toolkit_block = ''.join(lines)
-
-    # Assemble full jail.local content
-    parts = [p for p in [user_before, toolkit_block, user_after] if p.strip()]
-    content = '\n\n'.join(parts) + '\n'
+    content = ''.join(lines)
 
     for prefix in [[], ['sudo', '-n']]:
         try:
@@ -6694,11 +6720,15 @@ def fail2ban_save_jails():
         jails = data.get('jails', [])
         if not isinstance(jails, list):
             return jsonify({'ok': False, 'error': 'jails must be a list'}), 200
-        # Validate
+        # Validate: name format AND toolkit ownership. The toolkit may only manage
+        # its own jails — never sshd, recidive or any system jail.
         import re as _re
         for j in jails:
-            if not _re.match(r'^[\w\-]+$', j.get('name', '')):
-                return jsonify({'ok': False, 'error': f'Invalid jail name: {j.get("name")}'}), 200
+            name = j.get('name', '')
+            if not _re.match(r'^[\w\-]+$', name):
+                return jsonify({'ok': False, 'error': f'Invalid jail name: {name}'}), 200
+            if name not in TOOLKIT_JAIL_NAMES:
+                return jsonify({'ok': False, 'error': f'Refusing to manage non-toolkit jail: {name}'}), 200
         ok = _f2b_write_toolkit_conf(jails)
         if not ok:
             return jsonify({'ok': False, 'error': 'Could not write jail config — check sudo permissions'}), 200
@@ -6739,24 +6769,6 @@ def fail2ban_install():
         f2b_conf   = TOOLKIT_JAIL_FILE  # /etc/fail2ban/jail.local
         f2b_filter = TOOLKIT_FILTER_FILE
 
-        # Detect banaction/backend for this system
-        banaction_line = ''
-        backend_line   = ''
-        try:
-            deb_conf = '/etc/fail2ban/jail.d/defaults-debian.conf'
-            if os.path.exists(deb_conf) and 'nftables' in open(deb_conf).read():
-                pass  # inherited from defaults-debian.conf
-            elif subprocess.run(['which', 'nft'], capture_output=True).returncode == 0                     and subprocess.run(['which', 'iptables'], capture_output=True).returncode != 0:
-                banaction_line = 'banaction = nftables\n'
-        except Exception:
-            pass
-        try:
-            if subprocess.run(['which', 'rsyslog'], capture_output=True).returncode != 0:
-                backend_line = 'backend  = systemd\n'
-        except Exception:
-            pass
-
-        sshd_extras = banaction_line + backend_line
         # Write filter file
         filter_content = '[Definition]\nfailregex = ^<HOST> -.*".*" 401\nignoreregex =\n'
         for prefix in [[], ['sudo', '-n']]:
@@ -6769,32 +6781,18 @@ def fail2ban_install():
                     break
             except Exception:
                 continue
-        # Remove old jail.d conf if present (migration)
-        _old_jail_d = '/etc/fail2ban/jail.d/mysterium-toolkit.conf'
-        for prefix in [[], ['sudo', '-n']]:
-            try:
-                if subprocess.run(prefix + ['test', '-f', _old_jail_d], timeout=3).returncode == 0:
-                    subprocess.run(prefix + ['rm', '-f', _old_jail_d], timeout=5)
-                break
-            except Exception:
-                continue
-        # Write toolkit jails into jail.local managed block.
-        # Only mysterium-dashboard is always created — it exists nowhere else.
-        # sshd is only added if not already managed by another tool (ServerGuardian etc.).
-        _external = _f2b_get_external_jail_names()
+        # Migration: strip the old toolkit block from jail.local (older versions
+        # wrote there). We now use the standalone jail.d file instead.
+        _f2b_cleanup_legacy_jail_local()
+
+        # Write the toolkit jail. Only mysterium-dashboard is created — it protects
+        # the toolkit's own dashboard port and exists nowhere else. The toolkit
+        # never creates or rebuilds sshd/recidive or any system jail.
         _install_jails = [
-            {'name': 'mysterium-dashboard', 'enabled': True, 'port': '5000',
+            {'name': 'mysterium-dashboard', 'enabled': True, 'port': str(PORT),
              'filter': 'mysterium-dashboard', 'logpath': f'{toolkit_dir}/logs/backend.log',
              'maxretry': 5, 'bantime': 86400, 'findtime': 600},
         ]
-        if 'sshd' not in _external:
-            _install_jails.append(
-                {'name': 'sshd', 'enabled': True, 'port': 'ssh', 'filter': 'sshd',
-                 'maxretry': 5, 'bantime': 86400, 'findtime': 600,
-                 'logpath': '', 'backend_type': 'systemd' if backend_line else ''}
-            )
-        else:
-            logger.info('fail2ban install: sshd jail already managed elsewhere — skipping')
         _f2b_write_toolkit_conf(_install_jails)
 
         for cmd in [

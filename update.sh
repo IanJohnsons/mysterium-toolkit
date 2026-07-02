@@ -243,11 +243,17 @@ UNIT_EOF
 
 fi
 
-# ── Migrate: remove old jail.d/mysterium-toolkit.conf ────────────────────────
-_OLD_JAIL_D="/etc/fail2ban/jail.d/mysterium-toolkit.conf"
-if [ -f "$_OLD_JAIL_D" ] || $SUDO test -f "$_OLD_JAIL_D" 2>/dev/null; then
-    $SUDO rm -f "$_OLD_JAIL_D" 2>/dev/null || true
-    echo -e "  ${GREEN}✓ Migrated: removed old jail.d/mysterium-toolkit.conf${NC}"
+# ── Migrate: move toolkit jail from jail.local block → standalone jail.d file ──
+# Older versions wrote a managed block into jail.local. We now use an isolated
+# jail.d file that cannot conflict with a user's jail.local. Strip the old block;
+# the jail.d file itself is (re)written by the backend/setup when fail2ban is used.
+_F2B_LOCAL="/etc/fail2ban/jail.local"
+_BLOCK_START="# --- Mysterium Toolkit managed jails ---"
+_BLOCK_END="# --- End Mysterium Toolkit ---"
+if [ -f "$_F2B_LOCAL" ] && $SUDO grep -q "$_BLOCK_START" "$_F2B_LOCAL" 2>/dev/null; then
+    $SUDO sed -i "/$_BLOCK_START/,/$_BLOCK_END/d" "$_F2B_LOCAL" 2>/dev/null || true
+    $SUDO fail2ban-client reload >/dev/null 2>&1 || true
+    echo -e "  ${GREEN}✓ Migrated: moved toolkit jail out of jail.local (now in jail.d)${NC}"
 fi
 
 # ── Sudoers update — always runs, regardless of autostart ─────────────────
@@ -320,7 +326,7 @@ ${_REAL_USER} ALL=(ALL) NOPASSWD: \
   /usr/bin/tee /sys/devices/system/cpu/*/cpufreq/scaling_governor, \
   /usr/bin/cpupower, \
   /usr/bin/fail2ban-client, /usr/local/bin/fail2ban-client, /bin/fail2ban-client, \
-  /usr/bin/tee /etc/fail2ban/jail.local, \
+  /usr/bin/tee /etc/fail2ban/jail.d/mysterium-toolkit.conf, \
   /usr/bin/tee /etc/fail2ban/filter.d/*, \
   /usr/bin/tee /etc/sudoers.d/mysterium-toolkit, \
   /usr/bin/chmod 440 /etc/sudoers.d/mysterium-toolkit, \

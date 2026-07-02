@@ -1048,26 +1048,56 @@ if command -v vnstat &>/dev/null; then
 fi
 
 
+_detect_ssh_ports() {
+    # Echo space-separated SSH port(s) from sshd_config (+ sshd_config.d). Default 22.
+    # Not everyone runs SSH on 22 — we must never lock the real SSH port(s).
+    local ports=""
+    if [ -r /etc/ssh/sshd_config ]; then
+        ports=$(grep -iE '^[[:space:]]*Port[[:space:]]+[0-9]+' /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}')
+    fi
+    if [ -d /etc/ssh/sshd_config.d ]; then
+        local extra
+        extra=$(grep -hiE '^[[:space:]]*Port[[:space:]]+[0-9]+' /etc/ssh/sshd_config.d/*.conf 2>/dev/null | awk '{print $2}')
+        ports=$(printf '%s\n%s\n' "$ports" "$extra")
+    fi
+    ports=$(printf '%s\n' "$ports" | grep -E '^[0-9]+$' | sort -un | tr '\n' ' ')
+    [ -z "${ports// /}" ] && ports="22"
+    echo "$ports"
+}
+
+_whitelist_ssh() {
+    # Always allow the detected SSH port(s) BEFORE any other firewall change,
+    # so the toolkit can never lock the user out of their own machine.
+    local p
+    for p in $(_detect_ssh_ports); do
+        _open_port "$p" tcp "SSH (keep access)"
+    done
+}
+
 _apply_firewall_rules() {
 # ── Apply rules ────────────────────────────────────────────────────────────
-# Detect firewall, enable ufw if inactive
 _FW_TYPE=$(_detect_firewall)
 echo -e "  ${DIM}Firewall: ${_FW_TYPE}${NC}"
-if [ "$_FW_TYPE" = "ufw" ]; then
-    _ufw_state=$(_sudo ufw status 2>/dev/null || echo "")
-    if echo "$_ufw_state" | grep -qi "inactive"; then
-        _sudo ufw --force enable &>/dev/null 2>&1 && \
-            echo -e "  ${GREEN}✓ ufw enabled${NC}" || \
-            echo -e "  ${YELLOW}⚠ ufw enable failed${NC}"
-        _UFW_STATUS_CACHE=""
-    fi
-fi
 
-# Always open toolkit dashboard port
-_open_port "${DASHBOARD_PORT:-5000}" tcp "Toolkit dashboard"
+# SAFETY: never auto-enable a default-deny firewall — that can lock out SSH.
+# Only add allow-rules to a firewall that is ALREADY active. When none is active,
+# the required ports are already reachable and we leave it that way.
+case "$_FW_TYPE" in
+    none|"")
+        echo -e "  ${YELLOW}No active firewall detected — required ports are already open.${NC}"
+        echo -e "  ${DIM}  Not enabling one automatically (avoids locking out SSH).${NC}"
+        echo -e "  ${DIM}  To secure later: enable ufw/firewalld yourself, then re-run setup${NC}"
+        echo -e "  ${DIM}  to add the node + dashboard rules, or use Tailscale (asked below).${NC}"
+        ;;
+    *)
+        # A firewall is active. Whitelist the real SSH port(s) FIRST — never lock out.
+        _whitelist_ssh
 
-# Open Mysterium node ports if node is local
-TOOLKIT_MODE=$(python3 -c "
+        # Toolkit dashboard port
+        _open_port "${DASHBOARD_PORT:-5000}" tcp "Toolkit dashboard"
+
+        # Open Mysterium node ports if node is local
+        TOOLKIT_MODE=$(python3 -c "
 import json, pathlib
 cfg = pathlib.Path('config/setup.json')
 if cfg.exists():
@@ -1077,18 +1107,20 @@ else:
     print('local')
 " 2>/dev/null || echo "local")
 
-if [ "$TOOLKIT_MODE" = "local" ]; then
-    _open_range 10000 60000 udp  # P2P / NAT hole punching (myst --udp.ports default 10000:60000)
-    echo -e "  ${GREEN}✓ Mysterium P2P ports configured (10000-60000/udp)${NC}"
-    echo -e "  ${DIM}  Note: the Node UI (4449/tcp) is intentionally NOT opened to the internet —${NC}"
-    echo -e "  ${DIM}  it stays reachable on localhost/LAN. OpenVPN (1194) and WireGuard (51820)${NC}"
-    echo -e "  ${DIM}  are NOT needed — Mysterium uses WireGuard over the UDP range via NAT hole punching.${NC}"
-fi
+        if [ "$TOOLKIT_MODE" = "local" ]; then
+            _open_range 10000 65000 udp  # P2P / NAT hole punching (myst udp.ports up to 65000)
+            echo -e "  ${GREEN}✓ Mysterium P2P ports configured (10000-65000/udp)${NC}"
+            echo -e "  ${DIM}  Note: the Node UI (4449/tcp) is intentionally NOT opened to the internet —${NC}"
+            echo -e "  ${DIM}  it stays reachable on localhost/LAN. OpenVPN (1194) and WireGuard (51820)${NC}"
+            echo -e "  ${DIM}  are NOT needed — Mysterium uses WireGuard over the UDP range via NAT hole punching.${NC}"
+        fi
 
-# Persist iptables rules if that's what we used
-case "$_FW_TYPE" in
-    iptables*) _ipt_persist ;;
-    firewalld) _firewalld_reload ;;
+        # Persist rules for the active backend
+        case "$_FW_TYPE" in
+            iptables*) _ipt_persist ;;
+            firewalld) _firewalld_reload ;;
+        esac
+        ;;
 esac
 
 echo -e "  ${DIM}Node UI: http://$(python3 -c "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.connect(('8.8.8.8',80)); print(s.getsockname()[0]); s.close()" 2>/dev/null || echo "YOUR_IP"):4449/ui  (local network only · TequilAPI on port 4050)${NC}"
@@ -1591,7 +1623,7 @@ $_REAL_USER ALL=(ALL) NOPASSWD: \
   /usr/bin/tee /sys/devices/system/cpu/*/cpufreq/scaling_governor, \
   /usr/bin/cpupower, \
   /usr/bin/fail2ban-client, /usr/local/bin/fail2ban-client, /bin/fail2ban-client, \
-  /usr/bin/tee /etc/fail2ban/jail.local, \
+  /usr/bin/tee /etc/fail2ban/jail.d/mysterium-toolkit.conf, \
   /usr/bin/tee /etc/fail2ban/filter.d/*, \
   /usr/bin/tee /etc/sudoers.d/mysterium-toolkit, \
   /usr/bin/chmod 440 /etc/sudoers.d/mysterium-toolkit, \
@@ -1621,44 +1653,39 @@ else
     if [[ "$_f2b_answer" =~ ^[Yy]$ ]]; then
         apt-get install -y -qq fail2ban >/dev/null 2>&1 || true
         if command -v fail2ban-client &>/dev/null; then
-            _F2B_CONF="/etc/fail2ban/jail.local"
+            _F2B_JAILD="/etc/fail2ban/jail.d/mysterium-toolkit.conf"
+            _F2B_LOCAL="/etc/fail2ban/jail.local"
             _F2B_FILTER="/etc/fail2ban/filter.d/mysterium-dashboard.conf"
             tee "$_F2B_FILTER" > /dev/null << 'F2B_FILTER_EOF'
 [Definition]
 failregex = ^<HOST> -.*".*" 401
 ignoreregex =
 F2B_FILTER_EOF
-            # Remove old jail.d conf if it exists (migration to jail.local)
-            _OLD_JAIL_D="/etc/fail2ban/jail.d/mysterium-toolkit.conf"
-            if [ -f "$_OLD_JAIL_D" ]; then
-                $SUDO rm -f "$_OLD_JAIL_D"
-                echo -e "  ${DIM}  Migrated: removed old jail.d/mysterium-toolkit.conf${NC}"
-            fi
-            # Write toolkit block into jail.local
+            # Migration: remove the old toolkit block from jail.local (older versions
+            # wrote there). We now use an isolated jail.d file that cannot conflict
+            # with a user's existing jail.local.
             _BLOCK_START="# --- Mysterium Toolkit managed jails ---"
             _BLOCK_END="# --- End Mysterium Toolkit ---"
-            if $SUDO grep -q "$_BLOCK_START" "$_F2B_CONF" 2>/dev/null; then
-                echo -e "  ${DIM}  Toolkit block already present in jail.local${NC}"
-            else
-                {
-                    echo ""
-                    echo "$_BLOCK_START"
-                    echo "# Managed by Mysterium Toolkit — do not edit this block manually."
-                    echo "# To customize, add or override settings outside this block."
-                    echo ""
-                    echo "[mysterium-dashboard]"
-                    echo "enabled  = true"
-                    echo "port     = 5000"
-                    echo "filter   = mysterium-dashboard"
-                    echo "logpath  = $TOOLKIT_DIR/logs/backend.log"
-                    echo "maxretry = 5"
-                    echo "bantime  = 86400"
-                    echo "findtime = 600"
-                    echo ""
-                    echo "$_BLOCK_END"
-                } | $SUDO tee -a "$_F2B_CONF" > /dev/null
-                echo -e "  ${DIM}  Created mysterium-dashboard jail (protects toolkit login on port 5000)${NC}"
+            if [ -f "$_F2B_LOCAL" ] && $SUDO grep -q "$_BLOCK_START" "$_F2B_LOCAL" 2>/dev/null; then
+                $SUDO sed -i "/$_BLOCK_START/,/$_BLOCK_END/d" "$_F2B_LOCAL" 2>/dev/null || true
+                echo -e "  ${DIM}  Migrated: removed old toolkit block from jail.local${NC}"
             fi
+            # Write the standalone toolkit jail file (dashboard port only — never sshd).
+            {
+                echo "# Mysterium Toolkit — managed jail file."
+                echo "# This entire file is owned by the toolkit; edit jails via the dashboard."
+                echo "# The toolkit never touches sshd, recidive or any system jail."
+                echo ""
+                echo "[mysterium-dashboard]"
+                echo "enabled  = true"
+                echo "port     = ${DASHBOARD_PORT:-5000}"
+                echo "filter   = mysterium-dashboard"
+                echo "logpath  = $TOOLKIT_DIR/logs/backend.log"
+                echo "maxretry = 5"
+                echo "bantime  = 86400"
+                echo "findtime = 600"
+            } | $SUDO tee "$_F2B_JAILD" > /dev/null
+            echo -e "  ${DIM}  Created mysterium-dashboard jail in jail.d (protects dashboard on port ${DASHBOARD_PORT:-5000})${NC}"
 
             systemctl enable fail2ban >/dev/null 2>&1 || true
             systemctl restart fail2ban >/dev/null 2>&1 || true
@@ -1669,6 +1696,42 @@ F2B_FILTER_EOF
     else
         echo -e "  ${DIM}  Skipped${NC}"
     fi
+fi
+
+# ============ STEP 12.6: OPTIONAL TAILSCALE ============
+echo
+echo "Step 12.6: Tailscale (optional private access)..."
+echo -e "  Tailscale lets you reach the dashboard over a private mesh network,"
+echo -e "  so you don't have to expose port ${DASHBOARD_PORT:-5000} to the internet at all."
+echo -e "  ${DIM}  This is optional — the dashboard works fine without it.${NC}"
+echo
+printf "  Use Tailscale for private access? [y/N]: "
+read -r _ts_answer </dev/tty
+if [[ "$_ts_answer" =~ ^[Yy]$ ]]; then
+    if command -v tailscale &>/dev/null; then
+        _ts_ip=$(tailscale ip -4 2>/dev/null | head -1)
+        if [ -n "$_ts_ip" ]; then
+            echo -e "  ${GREEN}✓ Tailscale detected — reach the dashboard at http://${_ts_ip}:${DASHBOARD_PORT:-5000}${NC}"
+        else
+            echo -e "  ${YELLOW}⚠ Tailscale installed but not connected. Run: sudo tailscale up${NC}"
+        fi
+    else
+        echo -e "  ${DIM}  Tailscale is not installed. Install it from https://tailscale.com/download${NC}"
+        echo -e "  ${DIM}  then run: sudo tailscale up${NC}"
+    fi
+    # Store the preference (no bind change here — that stays a deliberate manual step
+    # so the dashboard can never become unreachable from a setup run).
+    python3 -c "
+import json, pathlib
+p = pathlib.Path('config/setup.json')
+d = json.loads(p.read_text()) if p.exists() else {}
+d['use_tailscale'] = True
+p.write_text(json.dumps(d, indent=2))
+" 2>/dev/null || true
+    echo -e "  ${DIM}  Preference saved. To restrict the dashboard to Tailscale only, bind it to your${NC}"
+    echo -e "  ${DIM}  Tailscale IP in config and add a firewall rule — see the docs.${NC}"
+else
+    echo -e "  ${DIM}  Skipped — dashboard stays reachable as configured.${NC}"
 fi
 
 # Fix permissions on logs/ — sudo install makes files root-owned
