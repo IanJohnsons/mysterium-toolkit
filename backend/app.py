@@ -1531,6 +1531,60 @@ class SessionDB:
                 'total_myst': 0, 'total_gb': 0, 'oldest': None, 'newest': None}
 
     @classmethod
+    def get_observed_active(cls, window_secs=600):
+        """Return sessions we observed active recently, from the local session log.
+
+        The Mysterium node never exposes live-active sessions over the API — they
+        live only in the node's in-memory map. But every time the node DOES surface a
+        session (on open/update), upsert_sessions records it here with the real consumer
+        wallet, time and bytes. This returns those records whose last_seen is within the
+        window and that are not yet marked Completed — i.e. sessions we genuinely saw
+        active and that are likely still running while the tunnel persists. This is
+        observed node data, not a guess: we only ever return wallets the node actually
+        reported. Once the node reports the session Completed, upsert updates the row and
+        it drops out of this list (its final bytes/tokens land in the archive).
+        """
+        cls.init()
+        try:
+            cutoff = (datetime.now(timezone.utc) - timedelta(seconds=window_secs)).isoformat()
+            conn = cls._conn()
+            rows = conn.execute("""
+                SELECT id, consumer_id, service_type, status, started_at,
+                       duration_secs, bytes_sent, bytes_received, tokens,
+                       consumer_country, first_seen, last_seen
+                FROM sessions
+                WHERE service_type != 'monitoring'
+                  AND last_seen >= ?
+                  AND LOWER(status) NOT IN ('completed', 'closed', '')
+                ORDER BY last_seen DESC
+                LIMIT 50
+            """, (cutoff,)).fetchall()
+            conn.close()
+            out = []
+            for r in rows:
+                tokens = int(r['tokens'] or 0)
+                out.append({
+                    'id':               r['id'],
+                    'consumer_id':      r['consumer_id'] or 'unknown',
+                    'service_type':     r['service_type'] or '',
+                    'status':           r['status'] or '',
+                    'started':          r['started_at'] or '',
+                    'duration_secs':    int(r['duration_secs'] or 0),
+                    'data_out':         round(int(r['bytes_sent'] or 0) / (1024 * 1024), 2),
+                    'data_in':          round(int(r['bytes_received'] or 0) / (1024 * 1024), 2),
+                    'data_total':       round((int(r['bytes_sent'] or 0) + int(r['bytes_received'] or 0)) / (1024 * 1024), 2),
+                    'tokens':           tokens,
+                    'earnings_myst':    round(tokens / 1e18, 8),
+                    'consumer_country': r['consumer_country'] or '',
+                    'last_seen':        r['last_seen'] or '',
+                    'observed_active':  True,
+                })
+            return out
+        except Exception as e:
+            logger.warning(f"SessionDB get_observed_active failed: {e}")
+            return []
+
+    @classmethod
     def get_range(cls, limit=500, offset=0, service_type=None, search=None):
         """Return sessions sorted newest first.
 
@@ -3369,6 +3423,10 @@ class MetricsCollector:
                 'history_loaded': SessionStore.is_ready(NODE_API_URLS[0] if NODE_API_URLS else ''),
                 'active': active_count,
                 'recently_closed_count': sum(1 for s in sessions if s.get('recently_closed')),
+                # Observed-active: sessions we saw active in the node's own log within the
+                # last 10 min that aren't Completed yet — real wallets, shown while the node
+                # temporarily drops live session status but the tunnel keeps running.
+                'observed_active': SessionDB.get_observed_active(600),
                 'vpn_tunnel_count': vpn_tunnel_count,
                 # Honest bridge: live tunnels the node reports NO active session for.
                 # The UI uses this to say "N live tunnels, see Tunnels tab" instead of
