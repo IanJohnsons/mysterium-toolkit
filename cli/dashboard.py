@@ -1559,6 +1559,66 @@ class CLIDashboard:
 
         y = self._spacer(y)
 
+        # ── Consumers (observed active) ───────────────────────────────────
+        # Real consumer wallets seen in the node's session log within the last
+        # 10 min — the same observed-active data the web UI shows. The Mysterium
+        # node never exposes live sessions over the API, so this is the honest way
+        # to show who is currently using the node (no guessing).
+        observed = sess.get('observed_active', []) if 'sessions' in m else []
+        if observed and y < ymax:
+            y = self._section(stdscr, y, w, 'CONSUMERS (observed active)', ACCENT, DIM, BOLD)
+            shown = 0
+            for s in observed:
+                if y >= ymax or shown >= 12:
+                    break
+                wallet = short_addr(s.get('consumer_id', '') or '?')
+                stype  = fmt_svc(s.get('service_type', '') or '')
+                dsecs  = int(s.get('duration_secs', 0) or 0)
+                dur    = f"{dsecs // 3600:02d}:{(dsecs % 3600) // 60:02d}:{dsecs % 60:02d}" if dsecs else '—'
+                out_mb = s.get('data_out', 0) or 0
+                in_mb  = s.get('data_in', 0) or 0
+                earn   = s.get('earnings_myst', 0) or 0
+                self._safe_addstr(stdscr, y, 4,  '●', GREEN | BOLD)
+                self._safe_addstr(stdscr, y, 6,  wallet, WHITE | BOLD)
+                self._safe_addstr(stdscr, y, 24, stype[:14], DIM)
+                self._safe_addstr(stdscr, y, 40, dur, ACCENT)
+                if not compact and w > 70:
+                    self._safe_addstr(stdscr, y, 52, f"↑{format_size(out_mb)} ↓{format_size(in_mb)}", DIM)
+                if not compact and w > 96:
+                    etxt = f"{earn:.6f} MYST" if earn > 0 else '—'
+                    self._safe_addstr(stdscr, y, 80, etxt, GREEN if earn > 0 else DIM)
+                y += 1
+                shown += 1
+            if len(observed) > shown and y < ymax:
+                self._safe_addstr(stdscr, y, 6, f"… +{len(observed) - shown} more", DIM)
+                y += 1
+            y = self._spacer(y)
+
+        # ── Tunnels (with idle status) ────────────────────────────────────
+        tunnels = (m.get('live_connections', {}) or {}).get('peers', []) if m else []
+        if tunnels and y < ymax:
+            n_idle = sum(1 for t in tunnels if t.get('is_idle'))
+            n_xfer = sum(1 for t in tunnels if t.get('has_speed'))
+            y = self._section(stdscr, y, w, f'TUNNELS ({len(tunnels)} · {n_xfer} transferring · {n_idle} idle)', ACCENT, DIM, BOLD)
+            for t in tunnels:
+                if y >= ymax:
+                    break
+                iface = t.get('interface', '?')
+                spd   = t.get('speed_total', 0) or 0
+                tot   = t.get('total_mb', 0) or 0
+                is_idle = t.get('is_idle')
+                dot_c = DIM if is_idle else (GREEN if t.get('has_speed') else WHITE)
+                self._safe_addstr(stdscr, y, 4, '●', dot_c | BOLD)
+                self._safe_addstr(stdscr, y, 6, iface, ACCENT | BOLD)
+                if is_idle:
+                    self._safe_addstr(stdscr, y, 14, 'idle', DIM)
+                self._safe_addstr(stdscr, y, 22, format_size(tot), WHITE)
+                if not compact and w > 60:
+                    self._safe_addstr(stdscr, y, 40, format_speed(spd) if spd > 0 else '—',
+                                      GREEN if spd > 0 else DIM)
+                y += 1
+            y = self._spacer(y)
+
         # ── Resources ─────────────────────────────────────────────────────
         y = self._section(stdscr, y, w, 'RESOURCES', ACCENT, DIM, BOLD)
 

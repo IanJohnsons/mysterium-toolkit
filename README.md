@@ -1,6 +1,6 @@
 # Mysterium Node Toolkit
 
-![Version](https://img.shields.io/badge/version-1.2.50-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Version](https://img.shields.io/badge/version-1.3.0-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 
 A professional monitoring and management dashboard for [Mysterium Network](https://mysterium.network) VPN node operators. Runs fully local on your node machine — no cloud account, no third-party service, no data leaving your server.
 
@@ -560,9 +560,11 @@ python cli/dashboard.py
 python cli/dashboard.py --url http://remote-node:5000 --interval 10
 ```
 
-Lightweight terminal UI using curses — no browser needed.
+Lightweight terminal UI using curses — no browser needed. Ideal for slow laptops or older Raspberry Pi devices. It reads the same backend `/metrics` API as the web dashboard, so its data is always in sync.
 
-**Pages:** `1` Status (node info, resources, quality) · `2` Earnings (unsettled, net earned, fiat value, history chart)
+**Pages:** `1` Status (node info, resources, quality, **observed-active consumers with wallets, and tunnels with idle status**) · `2` Earnings (unsettled, net earned, fiat value, history chart)
+
+The Status page shows the same observed-active consumers as the web UI — the real consumer wallets seen in the node's session log within the last 10 minutes — plus the live tunnels with their idle/transferring state. Mysterium never exposes live sessions over any API, so this is the honest, non-guessed view of who is currently using the node.
 
 **Keys:** `Tab`/`1-2` page · `r` refresh · `t` theme · `T` test node · `h` health · `c` config · `w` restart node · `$` settle · `?` help · `q` quit · `+/-` adjust interval
 
@@ -604,7 +606,8 @@ Every session is saved to SQLite with token values frozen the moment the session
 ### Session analytics
 
 - Active tunnels — connected consumers. Mysterium creates one WireGuard interface per consumer, and the count reflects interfaces whose peer handshaked in the last ~3 minutes (true "connected now" signal, via `wg show`), falling back to recent traffic when `wg` isn't permitted in sudoers. Mysterium network quality monitoring bots are detected behaviourally (0 earnings, tiny sessions) and labelled with 🔧 as a likely probe, separated from paying consumers in the Consumers tab
-- Honest live reporting — the node sometimes reports no active sessions while WireGuard tunnels are still carrying traffic (it drops session status while the tunnel persists via keepalives). Which consumer is on a live tunnel is not exposed by any Mysterium API, so the toolkit does not guess: the session list shows only what the node reports, and the **Tunnels** tab (with its idle indicator) is the source of truth for what is actually flowing right now
+- Honest live reporting — the node sometimes reports no active sessions while WireGuard tunnels are still carrying traffic (it drops session status while the tunnel persists via keepalives). Which consumer is on a live tunnel is not exposed by any Mysterium API, so the toolkit does not guess. Instead it shows **observed-active consumers**: every time the node surfaces a session, the toolkit records it in the local session log with the real consumer wallet, time and bytes, and the connections list shows those seen active within the last 10 minutes — real wallets the node actually reported, never fabricated. Once a session closes, its final bytes/earnings land in the archive and it moves to "recently closed"
+- Idle tunnel indicator — a connected tunnel that has carried no meaningful traffic in the last 60 seconds is marked **idle**. This reflects the real moment-to-moment state (connected but quiet right now) and is consistent for every tunnel: a consumer that moved gigabytes earlier but is quiet now shows idle, and a quiet tunnel that bursts stops showing idle during the burst
 - Consumer breakdown by country and service type. The Consumers tab, top earners and paying-consumer count use the **frozen archive earnings**, so a real consumer whose sessions already settled still shows their true earnings instead of zero
 - Full session history with duration, data transferred, earnings per session, and **MYST/GB efficiency** per session (shown for sessions >1 MB to avoid misleading values on tiny sessions)
 - **Service Split Over Time** — stacked bar chart of daily earnings by service type (7d / 30d / 90d / 1y / All). Reveals trends in scraping vs VPN vs Public traffic over time
