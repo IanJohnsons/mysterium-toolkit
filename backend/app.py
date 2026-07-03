@@ -3151,7 +3151,11 @@ class MetricsCollector:
                     seen_active.add(key)
             active_count = sum(1 for s in sessions if s['is_active'])
 
-            # ===== CONSUMER ANALYTICS (Items 4-6) =====
+            # Observed-active (computed once): sessions we genuinely saw active in the
+            # node's own session log within the last 10 min that aren't Completed yet.
+            # Used both for the list and to make the "Active" counter match that list
+            # when the node's live API reports zero (Option A).
+            _observed_active = SessionDB.get_observed_active(600)
             # A: build per-consumer stats from the FROZEN merge (SessionDB tokens preserved
             # before settlement) instead of live tokens, which Mysterium zeroes after
             # settlement. Live-only would mark settled real payers as 0-earning / non-paying.
@@ -3421,12 +3425,14 @@ class MetricsCollector:
                 'total_in_store': len(sessions),
                 'total_items_api': SessionStore._total_items.get(NODE_API_URLS[0] if NODE_API_URLS else '', 0),
                 'history_loaded': SessionStore.is_ready(NODE_API_URLS[0] if NODE_API_URLS else ''),
-                'active': active_count,
+                'active': active_count if active_count > 0 else len(_observed_active),
+                'active_api': active_count,
                 'recently_closed_count': sum(1 for s in sessions if s.get('recently_closed')),
                 # Observed-active: sessions we saw active in the node's own log within the
                 # last 10 min that aren't Completed yet — real wallets, shown while the node
                 # temporarily drops live session status but the tunnel keeps running.
-                'observed_active': SessionDB.get_observed_active(600),
+                'observed_active': _observed_active,
+                'observed_active_count': len(_observed_active),
                 'vpn_tunnel_count': vpn_tunnel_count,
                 # Honest bridge: live tunnels the node reports NO active session for.
                 # The UI uses this to say "N live tunnels, see Tunnels tab" instead of

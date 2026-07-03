@@ -2,6 +2,9 @@
 All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.2.49
+- fix (Active counter matches the observed-active list): the connections 'Active (N)' counter previously showed 0 whenever the node's live API reported no active sessions, even while the Observed-active list below it showed real consumers — the counter and the list contradicted each other. The counter now falls back to the observed-active count (the real wallets seen in the node's session log within the last 10 min) when the API reports zero, so 'Active' matches what is shown. This does not double-count tunnels: observed-active are wallets from the session log, a separate source from the Tunnels tab. The raw API value is still available as active_api for reference
+
 ## v1.2.48
 - feat (sessions — observed-active consumers, real node data, no guessing): the connections list now shows 'Observed active' consumers when the node temporarily stops reporting live sessions while the tunnel keeps running. Every time the node surfaces a session, the toolkit already records it in the local session log (sessions_history.db) with the real consumer wallet, time and bytes. A new SessionDB.get_observed_active() returns the sessions we genuinely saw active within the last 10 minutes that are not yet Completed — real wallets the node actually reported, shown with a cyan dot and clearly labelled. Once the node reports the session Completed, its final bytes/tokens land in the archive and it drops out of the observed list. This restores the operator's view of who is currently using the node across the window where Mysterium drops live session status, without fabricating anything. Works on all three install types (full, fleet master, lightweight) — the data is stored locally and forwarded to the master via /peer/data
 
