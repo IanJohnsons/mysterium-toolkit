@@ -4854,15 +4854,14 @@ class MetricsCollector:
                 except Exception:
                     pass
 
-                # Idle tunnel: a live tunnel (recent handshake) that has moved almost
-                # nothing on average over its whole lifetime — a long-lived low-traffic
-                # connection such as a monitoring probe that holds a tunnel open for hours
-                # with only keepalives. Lifetime-average throughput (total bytes / age) is
-                # stable, unlike the momentary has_speed which flickers between bursts, so a
-                # real consumer (GB over hours) is never mislabelled. This lives at the
-                # tunnel layer, where age and total bytes are known — the right place for it.
+                # Idle tunnel: a live tunnel (recent handshake) that is moving almost
+                # nothing — both over its whole lifetime AND right now. Lifetime-average
+                # throughput (total bytes / age) catches long low-traffic connections like
+                # monitoring probes; the extra `not has_speed` guard makes sure a tunnel
+                # that is transferring at this moment is never labelled idle, even if its
+                # lifetime average is low (e.g. a fresh burst on an old quiet tunnel).
                 avg_bps = (total / iface_age) if iface_age > 60 else 0
-                is_idle = bool(is_active and iface_age > 900 and avg_bps < 1024)
+                is_idle = bool(is_active and iface_age > 900 and avg_bps < 1024 and not has_speed)
 
                 live.append({
                     'interface': iface_name,

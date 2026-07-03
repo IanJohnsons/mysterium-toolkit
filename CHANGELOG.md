@@ -2,6 +2,11 @@
 All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.2.50
+- fix (idle label no longer wrong on active tunnels): a tunnel is now only marked 'idle' when it is moving almost nothing BOTH over its lifetime AND right now. Previously the label used only the lifetime-average throughput, so a tunnel transferring at this moment (e.g. 315 B/s) but with a low lifetime average was wrongly shown as idle. Added a not-has-speed guard so a currently-transferring tunnel is never labelled idle
+- fix (System Health — duplicate Uptime row and recurring false warning): the Mysterium Service health check assessed every myst process, so a second process (e.g. a separately started noop service) added its own Uptime/Memory row and its fresh start raised a 'recent restart' warning that Fix & Lock couldn't clear. The check now assesses only the main (oldest) node process, so there is a single Uptime row and no spurious restart warning
+- fix (mobile — connections rows no longer overlap): the observed-active and recently-closed session rows used a fixed 12-column grid that overflowed on narrow phone screens, overlapping time and byte columns. They now stack cleanly on mobile (wallet + flag on top, service/duration/data/earnings wrapping below) and keep the 12-column layout on desktop
+
 ## v1.2.49
 - fix (Active counter matches the observed-active list): the connections 'Active (N)' counter previously showed 0 whenever the node's live API reported no active sessions, even while the Observed-active list below it showed real consumers — the counter and the list contradicted each other. The counter now falls back to the observed-active count (the real wallets seen in the node's session log within the last 10 min) when the API reports zero, so 'Active' matches what is shown. This does not double-count tunnels: observed-active are wallets from the session log, a separate source from the Tunnels tab. The raw API value is still available as active_api for reference
 

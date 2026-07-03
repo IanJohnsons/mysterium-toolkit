@@ -2843,17 +2843,21 @@ const MysteriumDashboard = () => {
                             <>
                               <div className="text-xs text-cyan-500/80 px-1 pt-1">Observed active (seen in the node's session log, last 10 min) — real consumers, likely still connected:</div>
                               {observed.map((s, i) => (
-                                <div key={s.id || `obs${i}`} className="grid grid-cols-12 gap-2 text-xs px-3 py-2.5 rounded border bg-cyan-500/5 border-cyan-500/20">
-                                  <div className="col-span-1"><div className="w-2.5 h-2.5 rounded-full bg-cyan-400 mt-0.5" title="Observed active — seen in the node's session log within the last 10 minutes" /></div>
-                                  <div className="col-span-3 min-w-0"><CopyableId id={s.consumer_id} /></div>
-                                  <div className="col-span-1 text-sm">{s.is_probe ? <span title="Likely monitoring probe — 0 earnings, tiny sessions (behavioural inference)">🔧</span> : (countryFlag(s.consumer_country) || '—')}</div>
-                                  <div className="col-span-1 text-slate-300 text-xs truncate">{fmtType(s.service_type) || '—'}</div>
-                                  <div className="col-span-1 text-slate-400">{s.duration_secs ? `${Math.floor(s.duration_secs/3600).toString().padStart(2,'0')}:${Math.floor((s.duration_secs%3600)/60).toString().padStart(2,'0')}:${(s.duration_secs%60).toString().padStart(2,'0')}` : '—'}</div>
-                                  <div className="col-span-2 text-cyan-300">{formatDataSize(s.data_out)}</div>
-                                  <div className="col-span-1 text-slate-300">{formatDataSize(s.data_in)}</div>
-                                  <div className="col-span-2 text-cyan-400">{s.earnings_myst > 0
-                                    ? s.earnings_myst < 0.00001 ? '< 0.00001 MYST' : `${(s.earnings_myst || 0).toFixed(6)} MYST`
-                                    : '—'}</div>
+                                <div key={s.id || `obs${i}`} className="flex flex-col sm:grid sm:grid-cols-12 gap-1 sm:gap-2 text-xs px-3 py-2.5 rounded border bg-cyan-500/5 border-cyan-500/20">
+                                  <div className="flex items-center gap-2 sm:contents">
+                                    <div className="sm:col-span-1"><div className="w-2.5 h-2.5 rounded-full bg-cyan-400" title="Observed active — seen in the node's session log within the last 10 minutes" /></div>
+                                    <div className="sm:col-span-3 min-w-0 flex-1"><CopyableId id={s.consumer_id} /></div>
+                                    <div className="sm:col-span-1 text-sm">{s.is_probe ? <span title="Likely monitoring probe — 0 earnings, tiny sessions (behavioural inference)">🔧</span> : (countryFlag(s.consumer_country) || '—')}</div>
+                                  </div>
+                                  <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-slate-400 pl-6 sm:pl-0 sm:contents">
+                                    <div className="sm:col-span-1 text-slate-300 truncate">{fmtType(s.service_type) || '—'}</div>
+                                    <div className="sm:col-span-1">{s.duration_secs ? `${Math.floor(s.duration_secs/3600).toString().padStart(2,'0')}:${Math.floor((s.duration_secs%3600)/60).toString().padStart(2,'0')}:${(s.duration_secs%60).toString().padStart(2,'0')}` : '—'}</div>
+                                    <div className="sm:col-span-2 text-cyan-300">↑ {formatDataSize(s.data_out)}</div>
+                                    <div className="sm:col-span-1 text-slate-300">↓ {formatDataSize(s.data_in)}</div>
+                                    <div className="sm:col-span-2 text-cyan-400">{s.earnings_myst > 0
+                                      ? s.earnings_myst < 0.00001 ? '< 0.00001 MYST' : `${(s.earnings_myst || 0).toFixed(6)} MYST`
+                                      : '—'}</div>
+                                  </div>
                                 </div>
                               ))}
                             </>
@@ -2868,17 +2872,21 @@ const MysteriumDashboard = () => {
                             <>
                               <div className="text-xs text-slate-500 px-1 pt-1">Recently closed (last 10 min) — real consumers from the node's session log:</div>
                               {sortRows(recent, activeSort).map((s, i) => (
-                                <div key={s.id || i} className="grid grid-cols-12 gap-2 text-xs px-3 py-2.5 rounded border bg-slate-900/40 border-slate-700/40">
-                                  <div className="col-span-1"><div className="w-2.5 h-2.5 rounded-full bg-slate-500 mt-0.5" title="Recently closed session (from the node's session log)" /></div>
-                                  <div className="col-span-3 min-w-0"><CopyableId id={s.consumer_id} /></div>
-                                  <div className="col-span-1 text-sm">{s.is_probe ? <span title="Likely monitoring probe — 0 earnings, tiny sessions (behavioural inference)">🔧</span> : (countryFlag(s.consumer_country) || '—')}</div>
-                                  <div className="col-span-1 text-slate-300 text-xs truncate">{fmtType(s.service_type) || '—'}</div>
-                                  <div className="col-span-1 text-slate-400">{s.duration}</div>
-                                  <div className="col-span-2 text-slate-300">{formatDataSize(s.data_out)}</div>
-                                  <div className="col-span-1 text-slate-400">{formatDataSize(s.data_in)}</div>
-                                  <div className="col-span-2 text-slate-400">{s.earnings_myst > 0
-                                    ? s.earnings_myst < 0.00001 ? '< 0.00001 MYST' : `${(s.earnings_myst || 0).toFixed(6)} MYST`
-                                    : '—'}</div>
+                                <div key={s.id || i} className="flex flex-col sm:grid sm:grid-cols-12 gap-1 sm:gap-2 text-xs px-3 py-2.5 rounded border bg-slate-900/40 border-slate-700/40">
+                                  <div className="flex items-center gap-2 sm:contents">
+                                    <div className="sm:col-span-1"><div className="w-2.5 h-2.5 rounded-full bg-slate-500" title="Recently closed session (from the node's session log)" /></div>
+                                    <div className="sm:col-span-3 min-w-0 flex-1"><CopyableId id={s.consumer_id} /></div>
+                                    <div className="sm:col-span-1 text-sm">{s.is_probe ? <span title="Likely monitoring probe — 0 earnings, tiny sessions (behavioural inference)">🔧</span> : (countryFlag(s.consumer_country) || '—')}</div>
+                                  </div>
+                                  <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-slate-400 pl-6 sm:pl-0 sm:contents">
+                                    <div className="sm:col-span-1 text-slate-300 truncate">{fmtType(s.service_type) || '—'}</div>
+                                    <div className="sm:col-span-1">{s.duration}</div>
+                                    <div className="sm:col-span-2 text-slate-300">↑ {formatDataSize(s.data_out)}</div>
+                                    <div className="sm:col-span-1">↓ {formatDataSize(s.data_in)}</div>
+                                    <div className="sm:col-span-2">{s.earnings_myst > 0
+                                      ? s.earnings_myst < 0.00001 ? '< 0.00001 MYST' : `${(s.earnings_myst || 0).toFixed(6)} MYST`
+                                      : '—'}</div>
+                                  </div>
                                 </div>
                               ))}
                             </>

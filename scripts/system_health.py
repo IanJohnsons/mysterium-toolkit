@@ -870,7 +870,19 @@ class ServiceWatchdog:
         except Exception:
             system_uptime = 99999
 
-        for proc in myst_procs:
+        # Only assess the MAIN node process — the oldest myst process. Extra myst
+        # processes (e.g. a separately started 'noop' service, or short-lived children)
+        # would otherwise each add their own Uptime/Memory row and a fresh one would raise
+        # a spurious "recent restart" warning that Fix & Lock can't clear (it's not a
+        # misconfiguration). The oldest process is the actual long-running node.
+        main_procs = []
+        try:
+            oldest = min(myst_procs, key=lambda p: p.info.get('create_time', time.time()))
+            main_procs = [oldest]
+        except (ValueError, psutil.NoSuchProcess, psutil.AccessDenied):
+            main_procs = myst_procs[:1]
+
+        for proc in main_procs:
             try:
                 uptime = time.time() - proc.info['create_time']
                 h, m = int(uptime // 3600), int((uptime % 3600) // 60)
