@@ -3015,6 +3015,24 @@ class MetricsCollector:
                 # The frontend shows "—" instead of "0 MB" for these sessions.
                 bytes_pending = is_active and b_in == 0 and b_out == 0
 
+                # recently_closed: a Completed session that started within the last 10 minutes.
+                # The Mysterium node never exposes live-active sessions over the API (they live
+                # only in the node's in-memory map); /sessions returns only closed sessions from
+                # storage. A just-closed session still carries the real consumer wallet, time,
+                # bytes and service — so we surface these as "recent" (clearly labelled, not
+                # disguised as live) to restore the operator's view of who used the node, using
+                # genuine node data rather than any guess.
+                recently_closed = False
+                if not is_active and started:
+                    try:
+                        _st = datetime.fromisoformat(started.replace('Z', '+00:00'))
+                        if _st.tzinfo is None:
+                            _st = _st.replace(tzinfo=timezone.utc)
+                        if 0 <= (now - _st).total_seconds() < 600:
+                            recently_closed = True
+                    except (ValueError, TypeError):
+                        pass
+
                 sessions.append({
                     'id': session_id,
                     'consumer_id': session.get('consumer_id', 'unknown'),
@@ -3031,6 +3049,7 @@ class MetricsCollector:
                     'earnings_myst': round(tokens / 1e18, 8),
                     'is_paid': tokens > 0,
                     'is_active': is_active,
+                    'recently_closed': recently_closed,
                     'bytes_pending': bytes_pending,
                     'consumer_country': consumer_country,
                 })
@@ -3349,6 +3368,7 @@ class MetricsCollector:
                 'total_items_api': SessionStore._total_items.get(NODE_API_URLS[0] if NODE_API_URLS else '', 0),
                 'history_loaded': SessionStore.is_ready(NODE_API_URLS[0] if NODE_API_URLS else ''),
                 'active': active_count,
+                'recently_closed_count': sum(1 for s in sessions if s.get('recently_closed')),
                 'vpn_tunnel_count': vpn_tunnel_count,
                 # Honest bridge: live tunnels the node reports NO active session for.
                 # The UI uses this to say "N live tunnels, see Tunnels tab" instead of
@@ -7483,7 +7503,7 @@ def get_myst_price():
 
     Sources — both completely free, no registration:
       USD: CoinPaprika public API (api.coinpaprika.com)
-      EUR: Frankfurter ECB exchange rates (api.frankfurter.app) applied to USD price
+      EUR: Frankfurter ECB exchange rates (api.frankfurter.dev) applied to USD price
 
     Returns {usd, eur, cached, stale?} — never errors, returns nulls on failure.
     """
@@ -7506,11 +7526,12 @@ def get_myst_price():
         resp.raise_for_status()
         usd = float(resp.json()['quotes']['USD']['price'])
 
-        # Step 2: USD→EUR rate from Frankfurter (ECB data) — free, no key needed
+        # Step 2: USD→EUR rate from Frankfurter (ECB data) — free, no key needed.
+        # The old api.frankfurter.app host now 301-redirects; api.frankfurter.dev/v1 is current.
         eur = None
         try:
             fx = requests.get(
-                'https://api.frankfurter.app/latest',
+                'https://api.frankfurter.dev/v1/latest',
                 params={'from': 'USD', 'to': 'EUR'},
                 timeout=5,
             )

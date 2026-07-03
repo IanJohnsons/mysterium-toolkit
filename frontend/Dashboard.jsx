@@ -2830,16 +2830,43 @@ const MysteriumDashboard = () => {
                       // the tunnel persists via keepalives). The tunnel → wallet mapping is
                       // not retrievable from any API, so instead of inventing a consumer we
                       // point to the Tunnels tab, which is the source of truth for live traffic.
+                      // We DO show recently-closed sessions (real node data: wallet, time,
+                      // bytes) clearly labelled as recent — not disguised as live — so the
+                      // operator keeps a view of who just used the node.
                       const liveTunnels = safeNum(metrics.sessions?.tunnels_without_session
                         ?? metrics.sessions?.vpn_tunnel_count ?? 0);
-                      return liveTunnels > 0 ? (
-                        <div className="text-xs text-slate-500 py-8 text-center">
-                          The node reports no active sessions, but {liveTunnels} live tunnel{liveTunnels === 1 ? ' is' : 's are'} carrying traffic.<br />
-                          <span className="text-slate-600">Mysterium doesn't expose which consumer is on a live tunnel once the session status is dropped — see the <span className="text-cyan-400">Tunnels</span> tab for what's actually flowing.</span>
-                        </div>
-                      ) : (
-                        <div className="text-xs text-slate-500 py-8 text-center">
-                          No active sessions — no VPN tunnels are currently connected.
+                      const recent = (metrics.sessions?.items || []).filter(s => s.recently_closed);
+                      return (
+                        <div className="space-y-2">
+                          {liveTunnels > 0 && (
+                            <div className="text-xs text-slate-500 py-3 text-center">
+                              The node reports no active sessions, but {liveTunnels} live tunnel{liveTunnels === 1 ? ' is' : 's are'} carrying traffic.<br />
+                              <span className="text-slate-600">Mysterium doesn't expose which consumer is on a live tunnel once the session status is dropped — see the <span className="text-cyan-400">Tunnels</span> tab for what's actually flowing.</span>
+                            </div>
+                          )}
+                          {recent.length > 0 ? (
+                            <>
+                              <div className="text-xs text-slate-500 px-1 pt-1">Recently closed (last 10 min) — real consumers from the node's session log:</div>
+                              {sortRows(recent, activeSort).map((s, i) => (
+                                <div key={s.id || i} className="grid grid-cols-12 gap-2 text-xs px-3 py-2.5 rounded border bg-slate-900/40 border-slate-700/40">
+                                  <div className="col-span-1"><div className="w-2.5 h-2.5 rounded-full bg-slate-500 mt-0.5" title="Recently closed session (from the node's session log)" /></div>
+                                  <div className="col-span-3 min-w-0"><CopyableId id={s.consumer_id} /></div>
+                                  <div className="col-span-1 text-sm">{s.is_probe ? <span title="Likely monitoring probe — 0 earnings, tiny sessions (behavioural inference)">🔧</span> : (countryFlag(s.consumer_country) || '—')}</div>
+                                  <div className="col-span-1 text-slate-300 text-xs truncate">{fmtType(s.service_type) || '—'}</div>
+                                  <div className="col-span-1 text-slate-400">{s.duration}</div>
+                                  <div className="col-span-2 text-slate-300">{formatDataSize(s.data_out)}</div>
+                                  <div className="col-span-1 text-slate-400">{formatDataSize(s.data_in)}</div>
+                                  <div className="col-span-2 text-slate-400">{s.earnings_myst > 0
+                                    ? s.earnings_myst < 0.00001 ? '< 0.00001 MYST' : `${(s.earnings_myst || 0).toFixed(6)} MYST`
+                                    : '—'}</div>
+                                </div>
+                              ))}
+                            </>
+                          ) : liveTunnels === 0 && (
+                            <div className="text-xs text-slate-500 py-8 text-center">
+                              No active sessions — no VPN tunnels are currently connected.
+                            </div>
+                          )}
                         </div>
                       );
                       })()
