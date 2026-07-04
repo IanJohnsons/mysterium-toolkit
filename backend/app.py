@@ -5002,7 +5002,7 @@ class MetricsCollector:
                 # read per minute; fires the refresh only on a real drop.
                 global _last_medium_unsettled
                 try:
-                    _e = MetricsCollector.get_identity_earnings(headers)
+                    _e = MetricsCollector._get_identity_earnings(headers)
                     _cur_unsettled = float(_e.get('unsettled', 0) or 0)
                     if (_e.get('reachable')
                             and _last_medium_unsettled is not None
@@ -5014,7 +5014,7 @@ class MetricsCollector:
                     if _e.get('reachable'):
                         _last_medium_unsettled = _cur_unsettled
                 except Exception as _se:
-                    logger.debug(f"settle-detect skipped: {_se}")
+                    logger.warning(f"settle-detect skipped: {_se}")
             except Exception as e:
                 logger.warning(f"Medium tier error: {e}")
 

@@ -2,6 +2,10 @@
 All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.3.2
+- fix (unsettled earnings display lagged behind after a settle): the medium-tier settle detector called a method name that does not exist (get_identity_earnings instead of _get_identity_earnings), so every check raised an AttributeError that was silently swallowed by its debug-level except. As a result the detector never ran: after the node auto-settled in the background, the dashboard kept showing the climbing pre-settle unsettled balance (e.g. ~13 MYST) until the regular 10-minute slow-tier poll happened to refresh, or until a manual Settle click forced a refresh. Fixing the method name restores prompt (~1 min) reflection of both auto and manual settles. Regression introduced in v1.2.38; node payments themselves were always correct — only the toolkit display was affected. No routes, config keys, or fleet logic touched; behaves identically on solo and fleet-master
+- fix (settle-detect failures were invisible): the except around the settle detector logged at debug level, so the AttributeError above never surfaced in the journal at the default log level. It now logs at warning level, so any future failure of the settle detector is visible without enabling debug logging
+
 ## v1.3.1
 - fix (data retention — auto-prune is now opt-in, never deletes on defaults): the daily automatic prune previously used built-in default retention windows (sessions 90d, system/services 30d, etc.), so it would eventually delete history the operator never chose to expire. It now prunes ONLY the data types for which the operator explicitly set a retention in the Data Manager (config/setup.json -> data_retention). With nothing configured, all history is kept indefinitely. Manual delete and retention settings in the Data Manager keep working exactly as before. This matches the rule that a purge must only happen when set or executed via the Data Manager
 
