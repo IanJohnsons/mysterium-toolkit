@@ -2,6 +2,9 @@
 All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.3.1
+- fix (data retention — auto-prune is now opt-in, never deletes on defaults): the daily automatic prune previously used built-in default retention windows (sessions 90d, system/services 30d, etc.), so it would eventually delete history the operator never chose to expire. It now prunes ONLY the data types for which the operator explicitly set a retention in the Data Manager (config/setup.json -> data_retention). With nothing configured, all history is kept indefinitely. Manual delete and retention settings in the Data Manager keep working exactly as before. This matches the rule that a purge must only happen when set or executed via the Data Manager
+
 ## v1.3.0
 - feat (CLI — consumers and tunnels): the terminal dashboard (cli/dashboard.py) now shows, on the Status page, the observed-active consumers with their real wallets (service, duration, data, earnings) and the live tunnels with their idle/transferring status — the same honest data as the web UI. The CLI reads the backend /metrics API so it stays in sync automatically, and it stays light enough for slow laptops and older Raspberry Pi devices. Previously the CLI only showed an active-sessions counter with no consumer or tunnel detail
 - fix (idle tunnel indicator — option B, consistent for every tunnel): a tunnel is now marked idle when it is connected but has carried no meaningful traffic in the last 60 seconds, instead of being judged on its lifetime-average throughput. The old average-based test wrongly kept high-volume tunnels from ever going idle (a consumer that moved gigabytes but is now quiet stayed 'active') and pinned low-volume tunnels as permanently idle even during a burst. The 60-second window uses real traffic only (never keepalives) so the label reflects the actual moment-to-moment state without flickering each refresh

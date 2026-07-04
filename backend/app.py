@@ -624,16 +624,49 @@ def _get_retention_config() -> dict:
     return dict(_DEFAULT_RETENTION)
 
 
+def _get_user_retention_config() -> dict:
+    """Return ONLY the retention windows the user explicitly set in setup.json.
+
+    Used by the daily auto-prune. Unlike _get_retention_config (which merges in the
+    built-in defaults for the Data Manager UI), this returns an empty dict when the
+    user has set nothing — so the automatic prune never deletes data the operator
+    didn't ask to expire. Data is kept forever by default; pruning only happens for
+    a data type once the operator sets a retention for it in the Data Manager, or via
+    an explicit manual delete.
+    """
+    try:
+        cfg_path = Path('config/setup.json')
+        if cfg_path.exists():
+            d = json.loads(cfg_path.read_text())
+            user_ret = d.get('data_retention', {})
+            if isinstance(user_ret, dict):
+                return {k: v for k, v in user_ret.items()
+                        if k in _DEFAULT_RETENTION and isinstance(v, int) and v > 0}
+    except Exception:
+        pass
+    return {}
+
+
 def _prune_old_data():
-    """Delete rows older than the configured retention window. Runs once per day."""
+    """Delete rows older than the retention window the USER configured. Runs once a day.
+
+    Only prunes data types the operator explicitly set a retention for in the Data
+    Manager (config/setup.json → data_retention). With nothing configured, nothing is
+    deleted — all history is kept indefinitely. This matches the rule that a purge must
+    only happen when set/executed via the Data Manager, never automatically on defaults.
+    """
     global _last_prune_date
     today = local_today()
     if _last_prune_date == today:
         return
     if DataManager is None:
         return
+    retention = _get_user_retention_config()
+    if not retention:
+        _last_prune_date = today  # nothing configured — skip, but don't recheck all day
+        logger.debug("Daily retention prune: no user-configured retention — keeping all data")
+        return
     node_id = _local_node_id if _local_node_id else None
-    retention = _get_retention_config()
     pruned = {}
     for data_type, keep_days in retention.items():
         try:
@@ -653,7 +686,7 @@ def _prune_old_data():
             logger.debug(f"Retention prune {data_type}: {_pe}")
     _last_prune_date = today
     if pruned:
-        logger.info(f"Daily retention prune: {pruned}")
+        logger.info(f"Daily retention prune (user-configured): {pruned}")
     else:
         logger.debug("Daily retention prune: nothing to remove")
 
