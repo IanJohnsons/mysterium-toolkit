@@ -625,19 +625,25 @@ def _get_retention_config() -> dict:
 
 
 def _get_user_retention_config() -> dict:
-    """Return ONLY the retention windows the user explicitly set in setup.json.
+    """Return retention windows ONLY when the operator explicitly enabled pruning.
 
-    Used by the daily auto-prune. Unlike _get_retention_config (which merges in the
-    built-in defaults for the Data Manager UI), this returns an empty dict when the
-    user has set nothing — so the automatic prune never deletes data the operator
-    didn't ask to expire. Data is kept forever by default; pruning only happens for
-    a data type once the operator sets a retention for it in the Data Manager, or via
-    an explicit manual delete.
+    Used by the daily auto-prune. Requires BOTH:
+      1. `data_retention_enabled: true` in setup.json — set only when the operator
+         saves retention via the Data Manager (POST /data/retention), and
+      2. a `data_retention` dict with positive integer values.
+
+    The enabled flag exists because the setup wizard used to pre-write a
+    `data_retention` block with defaults into setup.json at install time, which made
+    every install look "user-configured" and defeated the v1.3.1 opt-in — the daily
+    prune kept deleting history nobody asked to expire. With this gate, data is kept
+    forever until the operator explicitly saves retention in the Data Manager.
     """
     try:
         cfg_path = Path('config/setup.json')
         if cfg_path.exists():
             d = json.loads(cfg_path.read_text())
+            if not d.get('data_retention_enabled'):
+                return {}
             user_ret = d.get('data_retention', {})
             if isinstance(user_ret, dict):
                 return {k: v for k, v in user_ret.items()
@@ -8163,6 +8169,82 @@ def export_sessions():
         return jsonify({'error': str(e)}), 200
 
 
+@app.route('/sessions/by-wallet', methods=['GET'])
+@require_auth
+def sessions_by_wallet():
+    """Return all archived sessions for one consumer wallet, for in-UI display.
+
+    Query params:
+      wallet   consumer_id (0x...) exact-match — required
+      limit    max rows to return (default 500, cap 2000)
+
+    Read-only from sessions_history.db. Complements /export/sessions (which returns a
+    downloadable CSV/TXT); this returns JSON with a per-wallet summary so the dashboard
+    can show a wallet's full history inline (audit view — who used the node and when).
+    """
+    try:
+        wallet = (request.args.get('wallet', '') or '').strip()
+        if not wallet:
+            return jsonify({'error': 'wallet parameter required', 'items': [], 'summary': {}}), 200
+        try:
+            limit = min(max(int(request.args.get('limit', 500)), 1), 2000)
+        except (TypeError, ValueError):
+            limit = 500
+
+        rows = []
+        try:
+            with SessionDB._lock:
+                conn = SessionDB._conn()
+                rows = [dict(r) for r in conn.execute(
+                    "SELECT id, started_at, consumer_id, consumer_country, service_type, "
+                    "bytes_sent, bytes_received, tokens, status, first_seen, last_seen "
+                    "FROM sessions WHERE consumer_id = ? "
+                    "ORDER BY started_at DESC LIMIT ?", (wallet, limit)).fetchall()]
+                conn.close()
+        except Exception as e:
+            return jsonify({'error': f'query failed: {e}', 'items': [], 'summary': {}}), 200
+
+        items = []
+        tot_out = tot_in = 0
+        tot_tokens = 0
+        by_service = {}
+        for r in rows:
+            b_out = int(r.get('bytes_sent', 0) or 0)
+            b_in  = int(r.get('bytes_received', 0) or 0)
+            tok   = int(r.get('tokens', 0) or 0)
+            tot_out += b_out; tot_in += b_in; tot_tokens += tok
+            svc = r.get('service_type', '') or ''
+            by_service[svc] = by_service.get(svc, 0) + 1
+            items.append({
+                'id':               r.get('id', ''),
+                'started':          r.get('started_at', ''),
+                'consumer_id':      r.get('consumer_id', ''),
+                'consumer_country': r.get('consumer_country', '') or '',
+                'service_type':     svc,
+                'data_out':         round(b_out / (1024 * 1024), 2),
+                'data_in':          round(b_in / (1024 * 1024), 2),
+                'data_total':       round((b_out + b_in) / (1024 * 1024), 2),
+                'earnings_myst':    round(tok / 1e18, 8),
+                'status':           r.get('status', '') or '',
+            })
+
+        summary = {
+            'wallet':          wallet,
+            'sessions':        len(items),
+            'data_out_mb':     round(tot_out / (1024 * 1024), 2),
+            'data_in_mb':      round(tot_in / (1024 * 1024), 2),
+            'data_total_mb':   round((tot_out + tot_in) / (1024 * 1024), 2),
+            'earnings_myst':   round(tot_tokens / 1e18, 8),
+            'by_service':      by_service,
+            'first_session':   items[-1]['started'] if items else '',
+            'last_session':    items[0]['started'] if items else '',
+        }
+        return jsonify({'items': items, 'summary': summary}), 200
+    except Exception as e:
+        logger.warning(f'sessions/by-wallet error: {e}')
+        return jsonify({'error': str(e), 'items': [], 'summary': {}}), 200
+
+
 @app.route('/sessions/db/country-debug', methods=['GET'])
 @require_auth
 def sessions_db_country_debug():
@@ -9687,72 +9769,53 @@ def settle_earnings():
 # TOML config file path (same on all standard installs)
 NODE_CONFIG_TOML = Path('/etc/mysterium-node/config-mainnet.toml')
 
-# Canonical config keys and their metadata
-# dual_key: if set, a second key is written simultaneously (balance-check-interval quirk)
+# Canonical config keys and their metadata.
+# VERIFIED against the Mysterium node source at the exact running version (v1.38.3,
+# full-source grep): only keys that the node actually reads are listed here. Keys the
+# node accepts via TequilAPI SetUserConfig but never consumes ("phantom" keys —
+# payments.settle.min-amount, payments.min_promise_amount, pingpong.balance-check-interval,
+# session.pingpong.balance-check-interval, pingpong.promise-wait-timeout) were removed in
+# v1.3.3: the node stores any key it is given (tequilapi/endpoints/config.go SetUserConfig
+# loops req.Data without validation) but no code path ever reads those names, and the
+# provider-side promise wait is a hardcoded constant (PromiseWaitTimeout = 50s in
+# session/pingpong/factory.go).
 NODE_CONFIG_KEYS = {
     'payments.zero-stake-unsettled-amount': {
         'toml_section': 'payments', 'toml_key': 'zero-stake-unsettled-amount',
         'unit': 'MYST', 'type': 'float', 'node_default': '5.0',
         'description': 'Auto-settle threshold (zero-stake)',
     },
-    'payments.unsettled-max-amount': {
-        'toml_section': 'payments', 'toml_key': 'unsettled-max-amount',
-        'unit': 'MYST', 'type': 'float', 'node_default': '10.0',
-        'description': 'Maximum unsettled MYST before forced settlement',
-    },
-    'payments.min_promise_amount': {
-        'toml_section': 'payments', 'toml_key': 'min_promise_amount',
-        'unit': 'MYST', 'type': 'float', 'node_default': '0.05',
-        'description': 'Minimum promise value to accept a session',
+    'payments.unsettled.max-amount': {
+        # NOTE the dots: the node flag is payments.unsettled.max-amount
+        # (config/flags_payments.go). v1.3.2 and earlier wrote
+        # payments.unsettled-max-amount (dash), which the node never reads.
+        'toml_section': 'payments.unsettled', 'toml_key': 'max-amount',
+        'unit': 'MYST', 'type': 'float', 'node_default': '20.0',
+        'description': 'Maximum unsettled MYST before the node always tries to settle',
     },
     'payments.provider.invoice-frequency': {
         'toml_section': 'payments.provider', 'toml_key': 'invoice-frequency',
         'unit': 'seconds', 'type': 'int', 'node_default': '60',
         'description': 'How often to send payment invoices during a session',
     },
-    'pingpong.balance-check-interval': {
-        'toml_section': 'pingpong', 'toml_key': 'balance-check-interval',
-        'unit': 'seconds', 'type': 'int', 'node_default': '90',
-        'description': 'Consumer balance poll interval (promise settler)',
-        # Also writes session.pingpong.balance-check-interval as Go duration
-        'dual_key': 'session.pingpong.balance-check-interval',
-    },
-    'pingpong.promise-wait-timeout': {
-        'toml_section': 'pingpong', 'toml_key': 'promise-wait-timeout',
-        'unit': 'seconds', 'type': 'int', 'node_default': '180',
-        'description': 'How long to wait for a consumer promise before timeout',
-    },
-    'payments.settle.min-amount': {
-        'toml_section': 'payments.settle', 'toml_key': 'min-amount',
-        'unit': 'MYST', 'type': 'float', 'node_default': '1.0',
-        'description': 'Minimum balance required for manual settlement',
-    },
 }
 
-# Presets
+# Presets — only real, node-consumed keys.
 NODE_CONFIG_PRESETS = {
     'defaults': {
         'label': 'Node Defaults',
         'values': {
             'payments.zero-stake-unsettled-amount': '5.0',
-            'payments.unsettled-max-amount': '10.0',
-            'payments.min_promise_amount': '0.05',
+            'payments.unsettled.max-amount': '20.0',
             'payments.provider.invoice-frequency': '60',
-            'pingpong.balance-check-interval': '90',
-            'pingpong.promise-wait-timeout': '180',
-            'payments.settle.min-amount': '1.0',
         }
     },
     'high-traffic': {
         'label': 'High Load · 50+ Sessions (rate limiting relief)',
         'values': {
             'payments.zero-stake-unsettled-amount': '10',
-            'payments.unsettled-max-amount': '25',
-            'payments.min_promise_amount': '0.01',
+            'payments.unsettled.max-amount': '25',
             'payments.provider.invoice-frequency': '300',
-            'pingpong.balance-check-interval': '300',
-            'pingpong.promise-wait-timeout': '600',
-            'payments.settle.min-amount': '0.01',
         }
     },
 }
@@ -9890,7 +9953,8 @@ def get_node_config():
 @require_auth
 def set_node_config():
     """Set one payment config key via myst config set.
-    Handles dual-write for balance-check-interval automatically.
+    Generic dual_key support kept for future keys that need a companion write
+    (no current key uses it — the phantom balance-check pair was removed in v1.3.3).
     Body: {key, value}"""
     try:
         data = request.get_json() or {}
@@ -9923,7 +9987,7 @@ def set_node_config():
         ok, method, err = _run_myst_config_set(key, value)
         results.append({'key': key, 'value': value, 'success': ok, 'error': err})
 
-        # Dual write for balance-check-interval
+        # Generic companion write (no current key defines dual_key)
         if ok and meta.get('dual_key'):
             dual_key = meta['dual_key']
             dual_value = _seconds_to_duration(value)
@@ -9968,7 +10032,7 @@ def reset_node_config():
             ok, method, err = _run_myst_config_set(k, default_val)
             results.append({'key': k, 'value': default_val, 'success': ok, 'error': err})
 
-            # Dual write for balance-check-interval
+            # Generic companion write (no current key defines dual_key)
             if ok and meta.get('dual_key'):
                 dual_val = _seconds_to_duration(default_val)
                 ok2, _, err2 = _run_myst_config_set(meta['dual_key'], dual_val)
@@ -10272,6 +10336,9 @@ def save_data_retention():
             existing = {}
         existing.update(accepted)
         current['data_retention'] = existing
+        # Explicit opt-in: saving retention via the Data Manager is the ONLY action
+        # that enables the daily auto-prune (see _get_user_retention_config).
+        current['data_retention_enabled'] = True
         cfg_path.write_text(json.dumps(current, indent=2))
 
         logger.info(f"data/retention updated: {accepted}")

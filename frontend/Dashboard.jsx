@@ -377,13 +377,20 @@ const countryFlag = (code) => {
   return String.fromCodePoint(...[...code.toUpperCase()].map(c => c.charCodeAt(0) + offset));
 };
 
-const ConsumerCard = ({ c }) => (
+const ConsumerCard = ({ c, onHistory }) => (
   <div className={`p-3 rounded border ${c.active_sessions > 0 ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-slate-900/30 border-slate-700/30'}`}>
     <div className="flex items-center justify-between mb-1">
       <CopyableId id={c.consumer_id} />
-      <span className={`text-xs font-semibold ${c.total_earnings > 0 ? 'text-emerald-400' : 'text-slate-500'}`}>
-        {c.total_earnings > 0 ? `${(c.total_earnings || 0).toFixed(4)} MYST` : '—'}
-      </span>
+      <div className="flex items-center gap-2">
+        {onHistory && (
+          <button onClick={() => onHistory(c.consumer_id)}
+                  title="View this wallet's full session history"
+                  className="text-[11px] text-sky-400 hover:text-sky-300">history ↗</button>
+        )}
+        <span className={`text-xs font-semibold ${c.total_earnings > 0 ? 'text-emerald-400' : 'text-slate-500'}`}>
+          {c.total_earnings > 0 ? `${(c.total_earnings || 0).toFixed(4)} MYST` : '—'}
+        </span>
+      </div>
     </div>
     <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-400">
       <span>{c.is_probe ? '🔧' : (countryFlag(c.consumer_country) || '—')}</span>
@@ -395,9 +402,16 @@ const ConsumerCard = ({ c }) => (
   </div>
 );
 
-const ConsumerRow = ({ c }) => (
+const ConsumerRow = ({ c, onHistory }) => (
   <div className={`grid grid-cols-12 gap-2 text-xs px-3 py-2 rounded border transition ${c.active_sessions > 0 ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-slate-900/30 border-slate-700/30'}`}>
-    <div className="col-span-3 min-w-0"><CopyableId id={c.consumer_id} /></div>
+    <div className="col-span-3 min-w-0 flex items-center gap-2">
+      <CopyableId id={c.consumer_id} />
+      {onHistory && (
+        <button onClick={() => onHistory(c.consumer_id)}
+                title="View this wallet's full session history"
+                className="text-[11px] text-sky-400 hover:text-sky-300 shrink-0">↗</button>
+      )}
+    </div>
     <div className="col-span-1 text-sm">{c.is_probe ? '🔧' : (countryFlag(c.consumer_country) || '—')}</div>
     <div className="col-span-2 text-slate-300 text-xs truncate">{(c.service_types || []).map(t => fmtType(t)).join(', ') || '—'}</div>
     <div className="col-span-1 text-slate-300">{c.sessions}{c.active_sessions > 0 ? ` (${c.active_sessions} live)` : ''}</div>
@@ -1011,6 +1025,9 @@ const MysteriumDashboard = () => {
   const [consumerSort, setConsumerSort] = useState({ key: 'total_earnings', dir: 'desc' });
   const [historySort, setHistorySort] = useState({ key: 'started', dir: 'desc' });
   const [showProbes, setShowProbes] = useState(false);
+  // Wallet history modal (audit view): shows all archived sessions for one consumer wallet.
+  const [walletHistory, setWalletHistory] = useState(null);   // { wallet, items, summary } | null
+  const [walletHistoryLoading, setWalletHistoryLoading] = useState(false);
   const [archiveSessions, setArchiveSessions] = useState([]);
   const [archiveTotal, setArchiveTotal] = useState(0);
   const [archiveLoading, setArchiveLoading] = useState(false);
@@ -1416,6 +1433,25 @@ const MysteriumDashboard = () => {
   // fetchArchive uses this ref to avoid the stale-closure bug with useCallback([])
   useEffect(() => { nodeAwareUrlRef.current = getNodeAwareUrl(); });
   useEffect(() => { archiveSearchRef.current = archiveSearch; });
+
+  // Open the wallet-history modal: fetch all archived sessions for one wallet.
+  const openWalletHistory = useCallback((wallet) => {
+    if (!wallet) return;
+    setWalletHistory({ wallet, items: [], summary: {} });
+    setWalletHistoryLoading(true);
+    const base = nodeAwareUrlRef.current || getNodeAwareUrl();
+    fetch(`${base}/sessions/by-wallet?wallet=${encodeURIComponent(wallet)}`, {
+      headers: authHeaderRef.current || {},
+    })
+      .then(r => r.json())
+      .then(d => {
+        setWalletHistory({ wallet, items: d.items || [], summary: d.summary || {} });
+      })
+      .catch(() => {
+        setWalletHistory({ wallet, items: [], summary: {}, error: true });
+      })
+      .finally(() => setWalletHistoryLoading(false));
+  }, []);
 
   // Fetch archive sessions from SessionDB when History tab is opened
   const fetchArchive = useCallback((offset = 0, replace = true) => {
@@ -3230,10 +3266,10 @@ const MysteriumDashboard = () => {
                       <div className="mb-3 p-2 rounded border border-slate-700/40 bg-slate-900/20">
                         <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1.5 px-1">🔧 Network probes — Mysterium quality monitoring · never pay</div>
                         <div className="sm:hidden space-y-1.5">
-                          {probeList.map((c, i) => <ConsumerCard key={c.consumer_id || i} c={c} />)}
+                          {probeList.map((c, i) => <ConsumerCard key={c.consumer_id || i} c={c} onHistory={openWalletHistory} />)}
                         </div>
                         <div className="hidden sm:block space-y-1">
-                          {probeList.map((c, i) => <ConsumerRow key={c.consumer_id || i} c={c} />)}
+                          {probeList.map((c, i) => <ConsumerRow key={c.consumer_id || i} c={c} onHistory={openWalletHistory} />)}
                         </div>
                       </div>
                     )}
@@ -3245,7 +3281,7 @@ const MysteriumDashboard = () => {
                             { key: 'total_data_mb',  label: 'Data' },
                             { key: 'sessions',       label: 'Sessions' },
                           ]} />
-                          {sortRows(realConsumers, consumerSort).map((c, i) => <ConsumerCard key={c.consumer_id || i} c={c} />)}
+                          {sortRows(realConsumers, consumerSort).map((c, i) => <ConsumerCard key={c.consumer_id || i} c={c} onHistory={openWalletHistory} />)}
                         </div>
                         <div className="hidden sm:block space-y-1.5">
                           {desktopHeader}
@@ -3254,7 +3290,7 @@ const MysteriumDashboard = () => {
                             const av = a[consumerSort.key] ?? 0;
                             const bv = b[consumerSort.key] ?? 0;
                             return av > bv ? -mul : av < bv ? mul : 0;
-                          }).map((c, i) => <ConsumerRow key={c.consumer_id || i} c={c} />)}
+                          }).map((c, i) => <ConsumerRow key={c.consumer_id || i} c={c} onHistory={openWalletHistory} />)}
                         </div>
                       </>
                     ) : (
@@ -3884,6 +3920,62 @@ const MysteriumDashboard = () => {
               ))}
             </div>
           </div>
+
+          {/* Wallet history modal — all archived sessions for one consumer wallet.
+              Uses the emerald/sky/cyan Tailwind families, which the theme engine remaps,
+              so the modal follows whatever dashboard theme is active. */}
+          {walletHistory && (
+          <div className="fixed inset-0 z-[300] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
+               onClick={() => setWalletHistory(null)}>
+            <div className="w-full max-w-3xl max-h-[85vh] flex flex-col bg-slate-900 border border-emerald-500/20 rounded-xl shadow-2xl"
+                 onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-emerald-400">Consumer history</div>
+                  <div className="text-xs text-slate-400 font-mono truncate">{walletHistory.wallet}</div>
+                </div>
+                <button onClick={() => setWalletHistory(null)}
+                        className="text-slate-400 hover:text-slate-200 text-sm px-2 py-1">✕ Close</button>
+              </div>
+
+              {walletHistoryLoading ? (
+                <div className="px-5 py-10 text-center text-sm text-slate-500">Loading history…</div>
+              ) : walletHistory.error ? (
+                <div className="px-5 py-10 text-center text-sm text-slate-500">Could not load history for this wallet.</div>
+              ) : (
+                <>
+                  {/* Summary */}
+                  <div className="px-5 py-3 border-b border-slate-800 flex flex-wrap gap-x-6 gap-y-1 text-xs">
+                    <span className="text-slate-400">Sessions: <span className="text-slate-200 font-semibold">{walletHistory.summary?.sessions ?? 0}</span></span>
+                    <span className="text-slate-400">Total data: <span className="text-sky-400 font-semibold">{formatDataSize(walletHistory.summary?.data_total_mb || 0)}</span></span>
+                    <span className="text-slate-400">Earned: <span className="text-emerald-400 font-semibold">{(walletHistory.summary?.earnings_myst || 0) > 0 ? `${(walletHistory.summary.earnings_myst).toFixed(6)} MYST` : '—'}</span></span>
+                    {walletHistory.summary?.first_session && (
+                      <span className="text-slate-400">Since: <span className="text-slate-300">{String(walletHistory.summary.first_session).slice(0,10)}</span></span>
+                    )}
+                  </div>
+
+                  {/* Session rows */}
+                  <div className="overflow-y-auto px-3 py-2 space-y-1">
+                    {walletHistory.items.length === 0 ? (
+                      <div className="px-3 py-8 text-center text-sm text-slate-500">No sessions found for this wallet in the archive.</div>
+                    ) : walletHistory.items.map((s, i) => (
+                      <div key={s.id || i} className="flex flex-col sm:grid sm:grid-cols-12 gap-1 sm:gap-2 text-xs px-3 py-2 rounded border bg-slate-900/40 border-slate-700/40">
+                        <div className="sm:col-span-3 text-slate-300">{s.started ? String(s.started).slice(0,19).replace('T',' ') : '—'}</div>
+                        <div className="sm:col-span-1 text-sm">{s.consumer_country ? countryFlag(s.consumer_country) : '—'}</div>
+                        <div className="sm:col-span-2 text-slate-300 truncate">{fmtType(s.service_type) || '—'}</div>
+                        <div className="sm:col-span-2 text-sky-300">↑ {formatDataSize(s.data_out)}</div>
+                        <div className="sm:col-span-2 text-slate-300">↓ {formatDataSize(s.data_in)}</div>
+                        <div className="sm:col-span-2 text-emerald-400">{(s.earnings_myst || 0) > 0
+                          ? (s.earnings_myst < 0.00001 ? '< 0.00001 MYST' : `${s.earnings_myst.toFixed(6)} MYST`)
+                          : '—'}</div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+          )}
 
           {/* Logs — expandable below the footer bar */}
           {showLogs && (
@@ -5564,8 +5656,20 @@ const NodeQualityCard = ({ nodeQuality: q, nodeStatus, backendUrl, authHeaders, 
         <div className="mt-3 pt-3 border-t border-slate-700/50">
           <div className="text-xs text-slate-500 mb-2">Per service</div>
           <div className="flex flex-wrap gap-2">
-            {services.map((s, i) => (
-              <div key={i} className="text-xs bg-slate-800 border border-slate-700 rounded px-2 py-1">
+            {(() => {
+              // Discovery returns separate proposals for service types that share one
+              // display name (e.g. 'scraping' and 'quic_scraping' both render as
+              // "B2B Data Scraping"), which showed as duplicate chips. Dedupe on the
+              // display label, keeping the first (values are identical per node).
+              const seen = new Set();
+              return services.filter(s => {
+                const label = fmtType(s.service_type);
+                if (seen.has(label)) return false;
+                seen.add(label);
+                return true;
+              });
+            })().map((s, i) => (
+              <div key={fmtType(s.service_type) || i} className="text-xs bg-slate-800 border border-slate-700 rounded px-2 py-1">
                 <span className="text-slate-400 mr-1">{fmtType(s.service_type)}</span>
                 {s.quality_score != null && <span className={`font-medium mr-1 ${s.quality_score >= 1.8 ? 'text-green-400' : s.quality_score >= 1 ? 'text-amber-400' : 'text-red-400'}`}>{s.quality_score.toFixed(2)}</span>}
                 {s.latency_ms != null && s.latency_ms > 0 && <span className="text-slate-500">{Math.round(s.latency_ms)}ms</span>}
@@ -5590,49 +5694,21 @@ const NODE_CONFIG_KEYS_META = [
     label: 'Auto-Settle Threshold',
     unit: 'MYST',
     group: 'settlement',
-    desc: 'Unsettled MYST required to trigger automatic settlement. Default: 5. Higher = fewer blockchain transactions, more MYST at risk if daemon crashes.',
+    desc: 'Unsettled MYST at which the node starts trying to settle automatically. Node default: 5. The node settles once this is reached AND the transaction fee is below ~5% of the amount, so the exact settle moment varies slightly. A 20% Hermes fee is deducted at settlement (e.g. 12.5 gross → ~10 MYST received).',
   },
   {
-    key: 'payments.unsettled-max-amount',
+    key: 'payments.unsettled.max-amount',
     label: 'Max Unsettled Amount',
     unit: 'MYST',
     group: 'settlement',
-    desc: 'Hard ceiling on unsettled balance before forced settlement. Default: ~10. High-load recommended: 25.',
-  },
-  {
-    key: 'payments.settle.min-amount',
-    label: 'Manual Settle Min',
-    unit: 'MYST',
-    group: 'settlement',
-    desc: 'Minimum balance for the Settle button to work. Default: 1. Set to 0.01 to allow settling at any balance.',
-  },
-  {
-    key: 'payments.min_promise_amount',
-    label: 'Min Promise Amount',
-    unit: 'MYST',
-    group: 'session',
-    desc: 'Minimum MYST in consumer\'s first promise before your node accepts the session. Lower = accepts more short/micro sessions.',
+    desc: 'Hard ceiling on unsettled MYST — above this the node always tries to settle, regardless of fees. Node default: 20. High-load recommended: 25. Fixed in v1.3.3: earlier versions wrote this under a key name the node never read.',
   },
   {
     key: 'payments.provider.invoice-frequency',
     label: 'Invoice Frequency',
     unit: 'seconds',
     group: 'timing',
-    desc: 'How often to send payment invoices to the consumer during a session. Default: 60s. Higher = fewer API calls per session. At 300s with 50+ sessions: ~5× less API traffic.',
-  },
-  {
-    key: 'pingpong.balance-check-interval',
-    label: 'Balance Check Interval',
-    unit: 'seconds',
-    group: 'timing',
-    desc: 'How often to poll consumer channel balance. PRIMARY rate-limit fix. Default: ~90s. Do not exceed 600s (consumer-side timeout is 10 min). Also writes session.pingpong.balance-check-interval automatically.',
-  },
-  {
-    key: 'pingpong.promise-wait-timeout',
-    label: 'Promise Wait Timeout',
-    unit: 'seconds',
-    group: 'timing',
-    desc: 'How long to wait for a consumer promise before abandoning the session. Default: 180s (3m). Higher = more patient with slow consumers. Do not exceed 600s.',
+    desc: 'How often the node sends payment invoices to the consumer during a session. Node default: 60s. Higher = fewer payment exchanges per session. At 300s with 50+ sessions: ~5× less payment traffic.',
   },
 ];
 
@@ -5642,12 +5718,8 @@ const PRESETS = {
     color: 'slate',
     values: {
       'payments.zero-stake-unsettled-amount': '5.0',
-      'payments.unsettled-max-amount': '10.0',
-      'payments.min_promise_amount': '0.05',
+      'payments.unsettled.max-amount': '20.0',
       'payments.provider.invoice-frequency': '60',
-      'pingpong.balance-check-interval': '90',
-      'pingpong.promise-wait-timeout': '180',
-      'payments.settle.min-amount': '1.0',
     }
   },
   'high-traffic': {
@@ -5655,12 +5727,8 @@ const PRESETS = {
     color: 'emerald',
     values: {
       'payments.zero-stake-unsettled-amount': '10',
-      'payments.unsettled-max-amount': '25',
-      'payments.min_promise_amount': '0.01',
+      'payments.unsettled.max-amount': '25',
       'payments.provider.invoice-frequency': '300',
-      'pingpong.balance-check-interval': '300',
-      'pingpong.promise-wait-timeout': '600',
-      'payments.settle.min-amount': '0.01',
     }
   },
 };
@@ -5765,7 +5833,6 @@ const NodeConfigModal = ({ backendUrl, authHeaders, onClose }) => {
 
   const groups = {
     settlement: { label: 'Settlement Thresholds', keys: NODE_CONFIG_KEYS_META.filter(m => m.group === 'settlement') },
-    session: { label: 'Session Acceptance', keys: NODE_CONFIG_KEYS_META.filter(m => m.group === 'session') },
     timing: { label: 'Payment Engine Timing', keys: NODE_CONFIG_KEYS_META.filter(m => m.group === 'timing') },
   };
 
@@ -5801,33 +5868,27 @@ const NodeConfigModal = ({ backendUrl, authHeaders, onClose }) => {
 
               <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg">
                 <p className="text-amber-300 font-semibold mb-1">⚠ Read before using</p>
-                <p>These settings directly control how your node handles payments and API load. There are <strong className="text-slate-300">no hard limits enforced by the node</strong> — it will accept any value. Setting values too high can cause silent session failures. Read each section before applying.</p>
+                <p>These settings control how your node settles payments. The node accepts <strong className="text-slate-300">any</strong> value you write — even for keys it does not use — so this panel only exposes settings verified against the node source at your running version. Read each section before applying.</p>
               </div>
 
               <div className="space-y-1">
                 <p className="text-slate-300 font-semibold uppercase tracking-wider text-[10px]">Settlement Thresholds</p>
-                <p>Auto-settlement sends your unsettled MYST to your Balance when a threshold is crossed. Each settlement deducts a <strong className="text-slate-300">fixed 20% Hermes network fee</strong> — this is the only fee taken at settlement. A small Polygon transaction fee applies separately when you withdraw your Balance to an external wallet, but this is typically just a few cents on Polygon. Raising your thresholds means fewer settlements, but more MYST sitting in unconfirmed promises on the node at any time. Promises are stored locally and should survive a daemon restart — but there is no guarantee during a Hermes outage. Only raise these values if you understand the exposure.</p>
+                <p>Auto-settlement sends your unsettled MYST to your Balance. The node settles when <strong className="text-slate-300">both</strong> are true: unsettled MYST has reached the Auto-Settle Threshold, <em>and</em> the blockchain transaction fee is below ~5% of the amount (the node's fee-efficiency check). Above the Max Unsettled ceiling it always tries to settle regardless of fees. This is why settlement amounts vary slightly rather than landing on an exact number. Each settlement deducts a <strong className="text-slate-300">fixed 20% Hermes network fee</strong> — a 12.5 MYST settlement arrives as ~10 MYST. A small Polygon transaction fee applies separately when you withdraw your Balance to an external wallet (typically a few cents). Raising thresholds means fewer settlements but more MYST in unconfirmed promises on the node; promises are stored locally and should survive a daemon restart, but there is no guarantee during a Hermes outage.</p>
               </div>
 
               <div className="space-y-1">
                 <p className="text-slate-300 font-semibold uppercase tracking-wider text-[10px]">Payment Engine Timing</p>
-                <p>These control how often your node polls consumer balances and exchanges payment promises during active sessions. At node defaults (~60–90s), a node with 50+ concurrent sessions generates hundreds of API calls per minute to Polygon RPC and Hermes endpoints — this causes rate limiting. Raising intervals to 300s reduces API pressure by roughly 5×.</p>
-                <p className="mt-1 text-amber-300">Practical limits: keep <code className="bg-slate-800 px-1 rounded">balance-check-interval</code> at or below <strong>300s</strong> — beyond that offers no benefit and increases balance drift risk. Keep <code className="bg-slate-800 px-1 rounded">promise-wait-timeout</code> at or below <strong>600s</strong> — the consumer-side session timeout is 10 minutes, so values above 600s risk the consumer dropping the session before the node does.</p>
-              </div>
-
-              <div className="space-y-1">
-                <p className="text-slate-300 font-semibold uppercase tracking-wider text-[10px]">Session Acceptance</p>
-                <p><code className="bg-slate-800 px-1 rounded">min_promise_amount</code> controls the minimum value of a consumer's first payment promise before your node accepts the session. The higher the default, the more micro/short sessions get rejected. Setting it to 0.01 accepts nearly any session, increasing count at the cost of more low-earning connections.</p>
+                <p>Invoice Frequency controls how often the node exchanges payment invoices with each consumer during a session. At the 60s default, a node with 50+ concurrent sessions generates a large volume of payment traffic to Hermes; raising it to 300s reduces that by ~5×. This is the only timing knob the node exposes on the provider side — the wait for a consumer's payment promise is fixed in the node itself (50 seconds) and cannot be configured.</p>
               </div>
 
               <div className="space-y-1">
                 <p className="text-slate-300 font-semibold uppercase tracking-wider text-[10px]">About the High Load Preset</p>
-                <p>The "High Load" preset is designed for nodes handling 50+ concurrent sessions, where default polling intervals generate hundreds of RPC calls per minute to Polygon and Hermes endpoints, causing rate limiting. Raising intervals to 300s eliminates that. <strong className="text-amber-300">Only apply this preset if you are actively experiencing rate limiting</strong> — on a low or recovering node it will make balance checks too infrequent and keep broken sessions open longer than necessary.</p>
+                <p>The "High Load" preset raises the settlement thresholds and sets Invoice Frequency to 300s for nodes handling 50+ concurrent sessions, where the default payment-exchange rate causes rate limiting. <strong className="text-amber-300">Only apply this preset if you are actively experiencing rate limiting</strong> — on a low-traffic node the defaults are better.</p>
               </div>
 
               <div className="space-y-1">
                 <p className="text-slate-300 font-semibold uppercase tracking-wider text-[10px]">How changes are applied</p>
-                <p>Settings are written via <code className="bg-slate-800 px-1 rounded">myst config set</code> to <code className="bg-slate-800 px-1 rounded">{tomlPath}</code>. The <code className="bg-slate-800 px-1 rounded">balance-check-interval</code> control writes two TOML keys simultaneously (<code className="bg-slate-800 px-1 rounded">[pingpong]</code> and <code className="bg-slate-800 px-1 rounded">[session.pingpong]</code>). <strong className="text-amber-300">All changes require a node restart to take effect.</strong> Use the Restart button in the edit panel after applying.</p>
+                <p>Settings are written via <code className="bg-slate-800 px-1 rounded">myst config set</code> to <code className="bg-slate-800 px-1 rounded">{tomlPath}</code>. <strong className="text-amber-300">All changes require a node restart to take effect.</strong> Use the Restart button in the edit panel after applying. Note for upgraders: versions before v1.3.3 also wrote a few settings the node never reads (they were accepted but had no effect); those inert keys may remain in your TOML file and are harmless.</p>
               </div>
 
               {/* Scroll sentinel */}

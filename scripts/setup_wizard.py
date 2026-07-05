@@ -961,17 +961,11 @@ LOG_LEVEL={config.get('log_level', 'INFO')}
     # Save timezone
     config_json['timezone'] = config.get('timezone', 'UTC')
 
-    # Data retention defaults — written so users can edit them directly in setup.json
-    # All values are in days. Edit and restart the backend to apply changes.
-    config_json['data_retention'] = {
-        'earnings': 365,
-        'sessions': 90,
-        'traffic':  730,
-        'quality':  90,
-        'system':   30,
-        'services': 30,
-        'uptime':   90,
-    }
+    # NOTE (v1.3.3): no data_retention block is pre-written any more. All history is
+    # kept indefinitely by default; the daily auto-prune only activates after the
+    # operator explicitly saves retention in the Data Manager, which sets
+    # data_retention_enabled: true in this file. Pre-writing defaults here made every
+    # install look user-configured and re-enabled the prune nobody asked for.
 
     Path('config/setup.json').write_text(json.dumps(config_json, indent=2))
     print_success("config/setup.json created")
