@@ -380,7 +380,13 @@ const countryFlag = (code) => {
 const ConsumerCard = ({ c, onHistory }) => (
   <div className={`p-3 rounded border ${c.active_sessions > 0 ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-slate-900/30 border-slate-700/30'}`}>
     <div className="flex items-center justify-between mb-1">
-      <CopyableId id={c.consumer_id} />
+      {onHistory ? (
+        <button onClick={() => onHistory(c.consumer_id)}
+                title="Click for this wallet's full session history"
+                className="font-mono text-xs text-sky-400 hover:text-sky-300 hover:underline truncate text-left min-w-0">
+          {c.consumer_id ? `${c.consumer_id.slice(0, 10)}…${c.consumer_id.slice(-4)}` : '—'}
+        </button>
+      ) : <CopyableId id={c.consumer_id} />}
       <div className="flex items-center gap-2">
         {onHistory && (
           <button onClick={() => onHistory(c.consumer_id)}
@@ -405,7 +411,13 @@ const ConsumerCard = ({ c, onHistory }) => (
 const ConsumerRow = ({ c, onHistory }) => (
   <div className={`grid grid-cols-12 gap-2 text-xs px-3 py-2 rounded border transition ${c.active_sessions > 0 ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-slate-900/30 border-slate-700/30'}`}>
     <div className="col-span-3 min-w-0 flex items-center gap-2">
-      <CopyableId id={c.consumer_id} />
+      {onHistory ? (
+        <button onClick={() => onHistory(c.consumer_id)}
+                title="Click for this wallet's full session history"
+                className="font-mono text-xs text-sky-400 hover:text-sky-300 hover:underline truncate text-left min-w-0">
+          {c.consumer_id ? `${c.consumer_id.slice(0, 10)}…${c.consumer_id.slice(-4)}` : '—'}
+        </button>
+      ) : <CopyableId id={c.consumer_id} />}
       {onHistory && (
         <button onClick={() => onHistory(c.consumer_id)}
                 title="View this wallet's full session history"

@@ -1362,6 +1362,32 @@ class TrafficDB:
                 'oldest': None, 'newest': None, 'days': 0}
 
 
+def _node_process_start_iso():
+    """ISO-8601 start time of the oldest running myst node process (UTC).
+
+    Used as the observed-active cutoff: a live session cannot predate the node
+    process that owns it, so sessions started before the node booted are the
+    node's permanent stale 'New' rows, not live consumers. Falls back to now-7d
+    when no myst process is visible (remote/containerised nodes) — generous
+    enough for multi-day consumers, strict enough to drop months-old zombies.
+    """
+    try:
+        starts = []
+        for _p in psutil.process_iter(['name', 'create_time']):
+            try:
+                if (_p.info.get('name') or '').lower() == 'myst':
+                    ct = _p.info.get('create_time') or 0
+                    if ct:
+                        starts.append(ct)
+            except Exception:
+                continue
+        if starts:
+            return datetime.fromtimestamp(min(starts), tz=timezone.utc).isoformat()
+    except Exception:
+        pass
+    return (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+
+
 class SessionDB:
     """Persistent session history database using SQLite.
 
@@ -1570,34 +1596,44 @@ class SessionDB:
                 'total_myst': 0, 'total_gb': 0, 'oldest': None, 'newest': None}
 
     @classmethod
-    def get_observed_active(cls, window_secs=600):
+    def get_observed_active(cls, window_secs=600, min_started_iso=None):
         """Return sessions we observed active recently, from the local session log.
 
         The Mysterium node never exposes live-active sessions over the API — they
         live only in the node's in-memory map. But every time the node DOES surface a
         session (on open/update), upsert_sessions records it here with the real consumer
         wallet, time and bytes. This returns those records whose last_seen is within the
-        window and that are not yet marked Completed — i.e. sessions we genuinely saw
-        active and that are likely still running while the tunnel persists. This is
-        observed node data, not a guess: we only ever return wallets the node actually
-        reported. Once the node reports the session Completed, upsert updates the row and
-        it drops out of this list (its final bytes/tokens land in the archive).
+        window and that are not yet marked Completed.
+
+        min_started_iso (v1.3.4): the node's /sessions list permanently contains stale
+        'New' rows that were never closed (e.g. after a node crash). Every fetch
+        refreshes their last_seen, so a last_seen window alone let ~50 months-old
+        zombies through as "active". A live session cannot predate the node process
+        that owns it, so callers pass the node process start time and anything started
+        before it is excluded — real multi-day consumers (started after the last node
+        boot) still show.
         """
         cls.init()
         try:
             cutoff = (datetime.now(timezone.utc) - timedelta(seconds=window_secs)).isoformat()
+            params = [cutoff]
+            started_clause = ''
+            if min_started_iso:
+                started_clause = 'AND started_at >= ?'
+                params.append(min_started_iso)
             conn = cls._conn()
-            rows = conn.execute("""
+            rows = conn.execute(f"""
                 SELECT id, consumer_id, service_type, status, started_at,
                        duration_secs, bytes_sent, bytes_received, tokens,
                        consumer_country, first_seen, last_seen
                 FROM sessions
                 WHERE service_type != 'monitoring'
                   AND last_seen >= ?
+                  {started_clause}
                   AND LOWER(status) NOT IN ('completed', 'closed', '')
                 ORDER BY last_seen DESC
                 LIMIT 50
-            """, (cutoff,)).fetchall()
+            """, params).fetchall()
             conn.close()
             out = []
             for r in rows:
@@ -3192,9 +3228,11 @@ class MetricsCollector:
 
             # Observed-active (computed once): sessions we genuinely saw active in the
             # node's own session log within the last 10 min that aren't Completed yet.
-            # Used both for the list and to make the "Active" counter match that list
-            # when the node's live API reports zero (Option A).
-            _observed_active = SessionDB.get_observed_active(600)
+            # The started-after-node-boot cutoff drops the node's permanent stale 'New'
+            # rows (see get_observed_active docstring) — a live session cannot predate
+            # the node process that owns it.
+            _observed_active = SessionDB.get_observed_active(
+                600, min_started_iso=_node_process_start_iso())
             # A: build per-consumer stats from the FROZEN merge (SessionDB tokens preserved
             # before settlement) instead of live tokens, which Mysterium zeroes after
             # settlement. Live-only would mark settled real payers as 0-earning / non-paying.
@@ -7537,6 +7575,7 @@ def fleet_node_proxy(node_id, endpoint):
         'system/update', 'system/update/status', 'api/update-check',
         'services/wireguard-mode',
         'sessions/live',
+        'sessions/by-wallet',
         'export/sessions',
         'firewall/remove-legacy-ports',
     }
