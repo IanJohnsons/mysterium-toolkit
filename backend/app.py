@@ -3528,7 +3528,10 @@ class MetricsCollector:
                 'unique_consumers': unique_consumers,
                 'paying_consumers': paying_consumers,
                 'probe_consumers':  probe_consumers,
-                'top_consumers': top_consumers,
+                # top_consumers removed from every poll in v1.3.7 — was shipped in full
+                # (1000+ entries on an active node) on every 5s poll regardless of
+                # whether the Consumers tab was open. Now fetched on demand via
+                # GET /consumers/top, only when that tab is actually opened.
                 'service_breakdown': service_breakdown,
                 'monitoring_sessions': monitoring_sessions,
                 'country_breakdown': country_breakdown,
@@ -7584,6 +7587,7 @@ def fleet_node_proxy(node_id, endpoint):
         'services/wireguard-mode',
         'sessions/live',
         'sessions/by-wallet',
+        'consumers/top',
         'export/sessions',
         'firewall/remove-legacy-ports',
     }
@@ -8214,6 +8218,80 @@ def export_sessions():
     except Exception as e:
         logger.warning(f'export/sessions error: {e}')
         return jsonify({'error': str(e)}), 200
+
+
+@app.route('/consumers/top', methods=['GET'])
+@require_auth
+def consumers_top():
+    """On-demand consumer list for the Consumers tab — no longer sent on every poll.
+
+    Until v1.3.7, the full consumer array (top_consumers, unbounded — 1000+ entries on
+    an active node) was embedded in EVERY /metrics response (default poll: every 5s),
+    regardless of whether the Consumers tab was even open. That shipped a large,
+    repeated, mostly-unused JSON payload over the network on every single poll — real,
+    measured bandwidth waste (confirmed via nethogs on a live node). It is now computed
+    only when this endpoint is called, which the frontend does when the Consumers tab
+    is opened — the same on-demand pattern used for wallet history.
+
+    Read-only from sessions_history.db. Mirrors the consumer aggregation and probe
+    detection that used to run inline in get_metrics(), so results are identical.
+    """
+    try:
+        rows = SessionDB.get_range(limit=50000, offset=0)
+    except Exception as e:
+        return jsonify({'top_consumers': [], 'unique_consumers': 0,
+                         'paying_consumers': 0, 'probe_consumers': 0,
+                         'error': str(e)}), 200
+
+    consumer_map = {}
+
+    def _add(cid, country, data_mb, earnings, started, svc):
+        if cid not in consumer_map:
+            consumer_map[cid] = {
+                'consumer_id': cid, 'consumer_country': country or '',
+                'sessions': 0, 'active_sessions': 0,
+                'total_data_mb': 0, 'total_earnings': 0,
+                'last_seen': '', '_service_types': set(),
+            }
+        c = consumer_map[cid]
+        c['sessions'] += 1
+        c['total_data_mb'] += data_mb
+        c['total_earnings'] += earnings
+        if country and not c['consumer_country']:
+            c['consumer_country'] = country
+        if svc:
+            c['_service_types'].add(svc)
+        if started and started > c['last_seen']:
+            c['last_seen'] = started
+
+    for row in rows:
+        cid = row.get('consumer_id', '') or 'unknown'
+        data_mb = ((row.get('bytes_sent', 0) or 0) + (row.get('bytes_received', 0) or 0)) / (1024 * 1024)
+        earn = (row.get('tokens', 0) or 0) / 1e18
+        _add(cid, row.get('consumer_country', '') or '', data_mb, earn,
+             row.get('started_at', '') or '', row.get('service_type', '') or '')
+
+    for c in consumer_map.values():
+        c['service_types'] = sorted(c.pop('_service_types', set()))
+
+    top_consumers = sorted(consumer_map.values(),
+                            key=lambda c: (-c['total_earnings'], -c['total_data_mb']))
+
+    # Same probe criteria as before (Mysterium quality-monitoring agents): >=5 sessions,
+    # zero earnings, avg data < 2 MB/session.
+    probe_ids = set()
+    for c in top_consumers:
+        avg_mb = c['total_data_mb'] / c['sessions'] if c['sessions'] > 0 else 0
+        c['is_probe'] = (c['sessions'] >= 5 and c['total_earnings'] == 0 and avg_mb < 2.0)
+        if c['is_probe']:
+            probe_ids.add(c['consumer_id'])
+
+    return jsonify({
+        'top_consumers': top_consumers,
+        'unique_consumers': len(consumer_map),
+        'paying_consumers': sum(1 for c in consumer_map.values() if c['total_earnings'] > 0),
+        'probe_consumers': len(probe_ids),
+    }), 200
 
 
 @app.route('/sessions/by-wallet', methods=['GET'])

@@ -1039,6 +1039,12 @@ const MysteriumDashboard = () => {
   const [showProbes, setShowProbes] = useState(false);
   // Wallet history modal (audit view): shows all archived sessions for one consumer wallet.
   const [walletHistory, setWalletHistory] = useState(null);   // { wallet, items, summary } | null
+  // Consumers tab data (v1.3.7): fetched on demand only when the tab is opened, no
+  // longer embedded in every 5s /metrics poll (was a real, measured bandwidth cost —
+  // the full consumer array, 1000+ entries on an active node, sent on every poll
+  // regardless of whether this tab was even open).
+  const [consumersData, setConsumersData] = useState(null); // { top_consumers, unique_consumers, ... } | null
+  const [consumersLoading, setConsumersLoading] = useState(false);
   const [walletHistoryLoading, setWalletHistoryLoading] = useState(false);
   const [archiveSessions, setArchiveSessions] = useState([]);
   const [archiveTotal, setArchiveTotal] = useState(0);
@@ -1465,6 +1471,18 @@ const MysteriumDashboard = () => {
       .finally(() => setWalletHistoryLoading(false));
   }, []);
 
+  // Fetch the Consumers tab list on demand — only called when that tab is opened,
+  // not on every metrics poll (see consumersData state comment).
+  const fetchConsumers = useCallback(() => {
+    setConsumersLoading(true);
+    const base = nodeAwareUrlRef.current || getNodeAwareUrl();
+    fetch(`${base}/consumers/top`, { headers: authHeaderRef.current || {} })
+      .then(r => r.json())
+      .then(d => setConsumersData(d))
+      .catch(() => setConsumersData({ top_consumers: [], unique_consumers: 0, paying_consumers: 0, probe_consumers: 0, error: true }))
+      .finally(() => setConsumersLoading(false));
+  }, []);
+
   // Fetch archive sessions from SessionDB when History tab is opened
   const fetchArchive = useCallback((offset = 0, replace = true) => {
     if (!backendUrlRef.current) return;
@@ -1488,6 +1506,13 @@ const MysteriumDashboard = () => {
     const t = setTimeout(() => fetchArchive(0, true), archiveSearch ? 300 : 0);
     return () => clearTimeout(t);
   }, [sessionTab, fetchArchive, selectedNodeId, archiveSearch]);
+
+  // Fetch the Consumers list only when that tab is opened (v1.3.7 bandwidth fix) —
+  // re-fetches on node switch too, matching the History-tab pattern above.
+  useEffect(() => {
+    if (sessionTab !== 'consumers') return;
+    fetchConsumers();
+  }, [sessionTab, fetchConsumers, selectedNodeId]);
 
   // Auto-refresh every 5s
   useEffect(() => {
@@ -3235,11 +3260,15 @@ const MysteriumDashboard = () => {
 
               {/* ======= CONSUMERS TAB ======= */}
               {sessionTab === 'consumers' && (() => {
-                const allConsumers = metrics.sessions?.top_consumers || [];
+                const allConsumers = consumersData?.top_consumers || [];
                 const realConsumers = allConsumers.filter(c => !c.is_probe);
                 const probeList    = allConsumers.filter(c => c.is_probe);
-                const probeCount   = safeNum(metrics.sessions?.probe_consumers || probeList.length);
-                const realCount    = safeNum(metrics.sessions?.unique_consumers || 0) - probeCount;
+                const probeCount   = safeNum(consumersData?.probe_consumers || probeList.length);
+                const realCount    = safeNum(consumersData?.unique_consumers ?? metrics.sessions?.unique_consumers ?? 0) - probeCount;
+
+                if (consumersLoading && allConsumers.length === 0) {
+                  return <div className="px-3 py-10 text-center text-sm text-slate-500">Loading consumers…</div>;
+                }
 
 
 

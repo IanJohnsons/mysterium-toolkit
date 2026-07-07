@@ -2,6 +2,9 @@
 All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.3.7
+- fix (significant bandwidth reduction -- Consumers list no longer sent on every poll): the full consumer array (top_consumers, unbounded -- 1000+ entries on an active node) was embedded in every /metrics response, sent by default every 5 seconds regardless of whether the Consumers tab was even open. Confirmed via nethogs on a live node as a major contributor to sustained backend network egress. It is now fetched via a new on-demand endpoint, GET /consumers/top, called only when the Consumers tab is opened -- the same pattern already used for wallet history. The lightweight summary counts (unique/paying/probe consumer counts) still update on every poll for the tab counter; only the heavy per-consumer array moved off the polling path
+
 ## v1.3.6
 - fix (firewall UDP range narrowed to match the node's own default): setup.sh opened 10000-65000/udp, wider than the node's actual `udp.ports` default of 10000:60000 (verified against node source). Narrowed to 10000-60000 so the firewall opens exactly what the node uses by default -- no functional loss, since nothing listens above 60000 unless the node's own udp.ports is manually widened, in which case the firewall range should be widened to match on that specific node
 - feat (payment config panel): added the real key payments.settle.max-fee-percentage (node default 0.05) -- a gas-efficiency check that decides WHEN the node bothers to auto-settle below the Max Unsettled ceiling, separate from Hermes's fixed 20 percent cut. Help text rewritten to state the fixed 20 percent up front as a constant fact, clearly separated from this fee-timing setting so the two are never conflated again
