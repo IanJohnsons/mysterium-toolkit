@@ -9840,6 +9840,16 @@ NODE_CONFIG_KEYS = {
         'unit': 'MYST', 'type': 'float', 'node_default': '20.0',
         'description': 'Maximum unsettled MYST before the node always tries to settle',
     },
+    'payments.settle.max-fee-percentage': {
+        # v1.3.6: added. Flag: config/flags_payments.go, node_default 0.05 (5%). This is
+        # NOT the Hermes cut (fixed ~20%, not configurable) — it only decides WHEN the
+        # node bothers to settle: it settles once the blockchain tx fee is below this
+        # fraction of the unsettled amount, so a low value delays settling on a small
+        # balance until gas is cheap relative to it.
+        'toml_section': 'payments.settle', 'toml_key': 'max-fee-percentage',
+        'unit': 'ratio', 'type': 'float', 'node_default': '0.05',
+        'description': 'Max fraction of the unsettled amount acceptable as tx fee when auto-settling',
+    },
     'payments.provider.invoice-frequency': {
         'toml_section': 'payments.provider', 'toml_key': 'invoice-frequency',
         'unit': 'seconds', 'type': 'int', 'node_default': '60',
@@ -9850,10 +9860,11 @@ NODE_CONFIG_KEYS = {
 # Presets — only real, node-consumed keys.
 NODE_CONFIG_PRESETS = {
     'defaults': {
-        'label': 'Node Defaults',
+        'label': 'Standard · Stable Node',
         'values': {
             'payments.zero-stake-unsettled-amount': '5.0',
             'payments.unsettled.max-amount': '20.0',
+            'payments.settle.max-fee-percentage': '0.05',
             'payments.provider.invoice-frequency': '60',
         }
     },
@@ -9862,6 +9873,7 @@ NODE_CONFIG_PRESETS = {
         'values': {
             'payments.zero-stake-unsettled-amount': '10',
             'payments.unsettled.max-amount': '25',
+            'payments.settle.max-fee-percentage': '0.05',
             'payments.provider.invoice-frequency': '300',
         }
     },

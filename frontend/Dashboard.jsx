@@ -5706,14 +5706,21 @@ const NODE_CONFIG_KEYS_META = [
     label: 'Auto-Settle Threshold',
     unit: 'MYST',
     group: 'settlement',
-    desc: 'Unsettled MYST at which the node starts trying to settle automatically. Node default: 5. The node settles once this is reached AND the transaction fee is below ~5% of the amount, so the exact settle moment varies slightly. A 20% Hermes fee is deducted at settlement (e.g. 12.5 gross → ~10 MYST received).',
+    desc: 'Unsettled MYST at which the node starts trying to settle automatically. Node default: 5. Hermes always takes a fixed 20% cut at settlement — separate from and unaffected by this setting (e.g. 12.5 gross → ~10 MYST received).',
   },
   {
     key: 'payments.unsettled.max-amount',
     label: 'Max Unsettled Amount',
     unit: 'MYST',
     group: 'settlement',
-    desc: 'Hard ceiling on unsettled MYST — above this the node always tries to settle, regardless of fees. Node default: 20. High-load recommended: 25. Fixed in v1.3.3: earlier versions wrote this under a key name the node never read.',
+    desc: 'Hard ceiling on unsettled MYST — above this the node always tries to settle, regardless of transaction fees. Node default: 20. High-load recommended: 25. (Fixed in v1.3.3: earlier versions wrote this under a key name the node never read.)',
+  },
+  {
+    key: 'payments.settle.max-fee-percentage',
+    label: 'Max Settle Fee %',
+    unit: 'ratio',
+    group: 'settlement',
+    desc: 'Below the Max Unsettled ceiling, the node only bothers settling once the blockchain transaction fee is under this fraction of the unsettled amount — a gas-efficiency check, NOT the Hermes cut. Node default: 0.05 (5%). This is why settlement timing varies slightly on small balances; it has no effect on how much you receive.',
   },
   {
     key: 'payments.provider.invoice-frequency',
@@ -5731,6 +5738,7 @@ const PRESETS = {
     values: {
       'payments.zero-stake-unsettled-amount': '5.0',
       'payments.unsettled.max-amount': '20.0',
+      'payments.settle.max-fee-percentage': '0.05',
       'payments.provider.invoice-frequency': '60',
     }
   },
@@ -5740,6 +5748,7 @@ const PRESETS = {
     values: {
       'payments.zero-stake-unsettled-amount': '10',
       'payments.unsettled.max-amount': '25',
+      'payments.settle.max-fee-percentage': '0.05',
       'payments.provider.invoice-frequency': '300',
     }
   },
@@ -5879,13 +5888,13 @@ const NodeConfigModal = ({ backendUrl, authHeaders, onClose }) => {
               className="flex-1 overflow-y-auto px-5 py-4 space-y-4 text-xs text-slate-400 leading-relaxed">
 
               <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg">
-                <p className="text-amber-300 font-semibold mb-1">⚠ Read before using</p>
-                <p>These settings control how your node settles payments. The node accepts <strong className="text-slate-300">any</strong> value you write — even for keys it does not use — so this panel only exposes settings verified against the node source at your running version. Read each section before applying.</p>
+                <p className="text-amber-300 font-semibold mb-1">⚠ Hermes always takes a fixed 20%</p>
+                <p>Every settlement deducts exactly <strong className="text-slate-300">20%</strong> — a 12.5 MYST threshold arrives as ~10 MYST. This never varies and none of the settings below change it.</p>
               </div>
 
               <div className="space-y-1">
                 <p className="text-slate-300 font-semibold uppercase tracking-wider text-[10px]">Settlement Thresholds</p>
-                <p>Auto-settlement sends your unsettled MYST to your Balance. The node settles when <strong className="text-slate-300">both</strong> are true: unsettled MYST has reached the Auto-Settle Threshold, <em>and</em> the blockchain transaction fee is below ~5% of the amount (the node's fee-efficiency check). Above the Max Unsettled ceiling it always tries to settle regardless of fees. This is why settlement amounts vary slightly rather than landing on an exact number. Each settlement deducts a <strong className="text-slate-300">fixed 20% Hermes network fee</strong> — a 12.5 MYST settlement arrives as ~10 MYST. A small Polygon transaction fee applies separately when you withdraw your Balance to an external wallet (typically a few cents). Raising thresholds means fewer settlements but more MYST in unconfirmed promises on the node; promises are stored locally and should survive a daemon restart, but there is no guarantee during a Hermes outage.</p>
+                <p>The node settles once unsettled MYST reaches the Auto-Settle Threshold <em>and</em> the blockchain transaction fee is under Max Settle Fee % of that amount — a separate gas-efficiency check, unrelated to the 20% above. Above the Max Unsettled ceiling it settles regardless of fees. This is why the exact settle moment shifts slightly. Raising thresholds means fewer settlements but more MYST sitting as unconfirmed promises on the node; these are stored locally and should survive a daemon restart, but there's no guarantee during a Hermes outage. A small Polygon fee (a few cents) applies separately when withdrawing your Balance to an external wallet.</p>
               </div>
 
               <div className="space-y-1">
@@ -5895,12 +5904,12 @@ const NodeConfigModal = ({ backendUrl, authHeaders, onClose }) => {
 
               <div className="space-y-1">
                 <p className="text-slate-300 font-semibold uppercase tracking-wider text-[10px]">About the High Load Preset</p>
-                <p>The "High Load" preset raises the settlement thresholds and sets Invoice Frequency to 300s for nodes handling 50+ concurrent sessions, where the default payment-exchange rate causes rate limiting. <strong className="text-amber-300">Only apply this preset if you are actively experiencing rate limiting</strong> — on a low-traffic node the defaults are better.</p>
+                <p>Raises the settlement thresholds and sets Invoice Frequency to 300s, for nodes handling 50+ concurrent sessions where the default rate causes rate limiting. <strong className="text-amber-300">Only apply if you're actually experiencing rate limiting</strong> — on a low-traffic node the defaults are better.</p>
               </div>
 
               <div className="space-y-1">
                 <p className="text-slate-300 font-semibold uppercase tracking-wider text-[10px]">How changes are applied</p>
-                <p>Settings are written via <code className="bg-slate-800 px-1 rounded">myst config set</code> to <code className="bg-slate-800 px-1 rounded">{tomlPath}</code>. <strong className="text-amber-300">All changes require a node restart to take effect.</strong> Use the Restart button in the edit panel after applying. Note for upgraders: versions before v1.3.3 also wrote a few settings the node never reads (they were accepted but had no effect); those inert keys may remain in your TOML file and are harmless.</p>
+                <p>Written via <code className="bg-slate-800 px-1 rounded">myst config set</code> to <code className="bg-slate-800 px-1 rounded">{tomlPath}</code>. <strong className="text-amber-300">Requires a node restart to take effect</strong> — use the Restart button after applying. Upgraders: versions before v1.3.3/v1.3.6 wrote a few settings the node never reads; those inert keys may remain in your TOML file and are harmless.</p>
               </div>
 
               {/* Scroll sentinel */}

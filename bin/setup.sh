@@ -1108,8 +1108,8 @@ else:
 " 2>/dev/null || echo "local")
 
         if [ "$TOOLKIT_MODE" = "local" ]; then
-            _open_range 10000 65000 udp  # P2P / NAT hole punching (myst udp.ports up to 65000)
-            echo -e "  ${GREEN}✓ Mysterium P2P ports configured (10000-65000/udp)${NC}"
+            _open_range 10000 60000 udp  # P2P / NAT hole punching (matches node's udp.ports default of 10000:60000)
+            echo -e "  ${GREEN}✓ Mysterium P2P ports configured (10000-60000/udp)${NC}"
             echo -e "  ${DIM}  Note: the Node UI (4449/tcp) is intentionally NOT opened to the internet —${NC}"
             echo -e "  ${DIM}  it stays reachable on localhost/LAN. OpenVPN (1194) and WireGuard (51820)${NC}"
             echo -e "  ${DIM}  are NOT needed — Mysterium uses WireGuard over the UDP range via NAT hole punching.${NC}"
