@@ -383,6 +383,18 @@ DEBUG = os.getenv('DEBUG', 'false').lower() == 'true'
 _raw_interval = int(os.getenv('UPDATE_INTERVAL', 3))
 UPDATE_INTERVAL = 3 if _raw_interval >= 10 else max(_raw_interval, 2)
 
+# FLEET_POLL_INTERVAL (v1.3.8): separate from UPDATE_INTERVAL on purpose — that constant
+# governs how fast the LOCAL node's own metrics_cache refreshes for the 5s frontend poll,
+# and its "force down to 3s" logic exists specifically to override a stale .env value from
+# old setup.sh installs. Fleet peer polling (multi_node_background_collector, remote nodes
+# only) is a different concern: peer data is a monitoring summary, not live traffic, and
+# doesn't need multi-second freshness. Previously it reused UPDATE_INTERVAL (effectively
+# ~3-5s per full cycle) to fetch each remote node's FULL /peer/data — a measured, ever-
+# growing bandwidth cost (earnings_snapshots grows unbounded over a node's lifetime).
+# 60s is ample for a fleet overview; combined with the light/heavy split in
+# _collect_single_node, this cuts fleet-peer bandwidth by roughly two orders of magnitude.
+FLEET_POLL_INTERVAL = max(int(os.getenv('FLEET_POLL_INTERVAL', 60)), 30)
+
 if MULTI_NODE_MODE:
     logger.info(f"=== MULTI-NODE MODE: {len(_node_registry)} nodes from nodes.json ===")
     for n in _node_registry:
@@ -5365,6 +5377,52 @@ def _is_local_toolkit_url(url):
     return False
 
 
+# Heavy fleet-peer data (earnings_history, traffic_history, db_stats, logs) is slow-
+# changing — at most once per real day (earnings_snapshots only gains a new row roughly
+# every 10 min; the archive/traffic/log tail don't need more than daily freshness for a
+# fleet overview). Cached here per node and refreshed once per calendar day, instead of
+# being re-fetched in full on every ~poll of a remote node (v1.3.7 and earlier: every
+# ~3 seconds, unbounded payload growth as earnings_snapshots accumulates over the node's
+# lifetime — measured as tens of MB/min per node, worse over time).
+_node_heavy_cache = {}       # {node_id: {'date': 'YYYY-MM-DD', 'earnings_history', 'traffic_history', 'db_stats', 'logs', 'uptime_stats'}}
+_node_heavy_cache_lock = Lock()
+
+_NODE_HEAVY_DEFAULTS = {'date': '', 'earnings_history': [], 'traffic_history': {}, 'db_stats': {}, 'logs': [], 'uptime_stats': {}}
+
+
+def _get_node_heavy_data(node_id, toolkit_url, headers):
+    """Return this node's heavy peer data, refreshed at most once per calendar day.
+
+    On cache miss or a new day, does ONE extra full (non-light) /peer/data fetch and
+    caches the heavy fields; every other poll this calendar day reuses the cached copy
+    with zero extra network cost. Falls back to the last-known cache (even if stale) on
+    a fetch failure, rather than showing nothing.
+    """
+    today = local_today()
+    with _node_heavy_cache_lock:
+        cached = _node_heavy_cache.get(node_id)
+    if cached and cached.get('date') == today:
+        return cached
+    try:
+        resp = requests.get(f'{toolkit_url}/peer/data', headers=headers, timeout=15)
+        if resp.status_code == 200:
+            data = resp.json()
+            fresh = {
+                'date': today,
+                'earnings_history': data.get('earnings_history', []),
+                'traffic_history':  data.get('traffic_history', {}),
+                'db_stats':         data.get('db_stats', {}),
+                'logs':             data.get('logs', []),
+                'uptime_stats':     data.get('uptime_stats', {}),
+            }
+            with _node_heavy_cache_lock:
+                _node_heavy_cache[node_id] = fresh
+            return fresh
+    except Exception as e:
+        logger.debug(f"Heavy peer data refresh failed for {node_id}: {e}")
+    return cached or dict(_NODE_HEAVY_DEFAULTS)
+
+
 def _collect_single_node(node_entry):
     """Collect metrics for a single remote node.
 
@@ -5442,10 +5500,11 @@ def _collect_single_node(node_entry):
                 creds = b64.b64encode(f'{username}:{password}'.encode()).decode()
                 headers['Authorization'] = f'Basic {creds}'
 
-            resp = requests.get(f'{toolkit_url}/peer/data', headers=headers, timeout=10)
+            resp = requests.get(f'{toolkit_url}/peer/data?light=1', headers=headers, timeout=10)
             if resp.status_code == 200:
                 data = resp.json()
                 ns   = data.get('node_status', {})
+                heavy = _get_node_heavy_data(node_id, toolkit_url, headers)
                 result.update({
                     'peer_mode':        True,
                     'status':           ns.get('status', 'unknown'),
@@ -5460,13 +5519,13 @@ def _collect_single_node(node_entry):
                     'live_connections': data.get('live_connections', {}),
                     'firewall':         data.get('firewall', {}),
                     'systemHealth':     data.get('systemHealth', {}),
-                    'uptime_stats':     data.get('uptime_stats', {}),
-                    'db_stats':         data.get('db_stats', {}),
-                    'earnings_history': data.get('earnings_history', []),
+                    'uptime_stats':     data.get('uptime_stats', {}) or heavy.get('uptime_stats', {}),
+                    'db_stats':         heavy.get('db_stats', {}),
+                    'earnings_history': heavy.get('earnings_history', []),
                     'traffic':          data.get('bandwidth', {}),
-                    'traffic_history':  data.get('traffic_history', {}),
+                    'traffic_history':  heavy.get('traffic_history', {}),
                     'analytics':        data.get('analytics', {}),
-                    'logs':             data.get('logs', []),
+                    'logs':             heavy.get('logs', []),
                     'nat':              ns.get('nat', ns.get('nat_type', '')),
                     'ip':               ns.get('public_ip', ns.get('ip', '')),
                     'identity':         ns.get('identity', ''),
@@ -5696,9 +5755,15 @@ def _build_fleet_aggregate():
 
 
 def multi_node_background_collector():
-    """Background collector for multi-node mode — staggered to avoid bursts."""
+    """Background collector for multi-node mode — staggered to avoid bursts.
+
+    v1.3.8: uses FLEET_POLL_INTERVAL (default 60s), not UPDATE_INTERVAL — see that
+    constant's comment for why they're separate. Combined with the light/heavy split
+    in _collect_single_node (light poll every cycle, full/heavy data cached once a day),
+    this is the fix for the fleet peer-polling bandwidth cost.
+    """
     logger.info(f"Multi-node collector started: {len(_node_registry)} nodes, "
-                f"stagger={max(1, UPDATE_INTERVAL // max(1, len(_node_registry)))}s between nodes")
+                f"stagger={max(1, FLEET_POLL_INTERVAL // max(1, len(_node_registry)))}s between nodes")
     cycle = 0
     while True:
         try:
@@ -5708,7 +5773,7 @@ def multi_node_background_collector():
                 logger.info(f"nodes.json reloaded: {len(_node_registry)} nodes")
 
             # Stagger: spread node queries across the interval
-            stagger_delay = max(0.5, UPDATE_INTERVAL / max(1, len(_node_registry)))
+            stagger_delay = max(0.5, FLEET_POLL_INTERVAL / max(1, len(_node_registry)))
 
             for node_entry in _node_registry:
                 try:
@@ -5731,7 +5796,7 @@ def multi_node_background_collector():
         except Exception as e:
             logger.error(f"Multi-node collection error: {e}")
 
-        time.sleep(max(UPDATE_INTERVAL, 5))  # Min 5s cycle in multi-node
+        time.sleep(FLEET_POLL_INTERVAL)
 
 
 def background_collector():
@@ -10212,34 +10277,52 @@ def peer_data():
     - Session archive stats (from sessions_history.db)
     - Node quality (Discovery API)
     - Live metrics snapshot
+
+    ?light=1 (v1.3.8): skip the heavy, slow-changing fields (earnings_history — every
+    snapshot ever, unbounded; traffic_history — 30 daily rows; db_stats; logs) and
+    return only the live/summary fields. Added because the fleet background collector
+    used to fetch the FULL response (worst case: hundreds of KB, growing unbounded as
+    earnings_snapshots accumulates) every ~3 seconds per configured node — a measured,
+    significant, ever-growing bandwidth cost for fleet installations. The collector now
+    uses ?light=1 for its frequent poll and fetches the full (default, unparemeterized)
+    response only once a day, caching the heavy fields in between. Default behaviour
+    (no ?light) is UNCHANGED — existing one-off callers (node test/setup) keep working
+    exactly as before.
     """
     try:
         with metrics_lock:
             cache = copy.deepcopy(metrics_cache)
 
-        # Earnings history snapshots — read from SQLite (earnings_snapshots table)
-        # Previously read from stale earnings_history.json (last updated Mar 25).
-        # EarningsDB has 600+ live snapshots; JSON was never updated after migration.
-        # Send full earnings history — no days_back limit for fleet peers
-        # The fleet master shows this node's complete history as-is
-        earnings_history = EarningsDB.get_all_for_chart(days_back=None)
+        light = request.args.get('light', '').lower() in ('1', 'true', 'yes')
 
-        # Uptime stats
-        uptime_stats = MetricsCollector.compute_uptime_stats()
+        if light:
+            earnings_history, uptime_stats, db_stats, traffic_history, logs = {}, {}, {}, {}, []
+        else:
+            # Earnings history snapshots — read from SQLite (earnings_snapshots table)
+            # Previously read from stale earnings_history.json (last updated Mar 25).
+            # EarningsDB has 600+ live snapshots; JSON was never updated after migration.
+            # Send full earnings history — no days_back limit for fleet peers
+            # The fleet master shows this node's complete history as-is
+            earnings_history = EarningsDB.get_all_for_chart(days_back=None)
 
-        # Session archive stats
-        db_stats = SessionDB.get_stats()
+            # Uptime stats
+            uptime_stats = MetricsCollector.compute_uptime_stats()
 
-        # Bug fix: read from 'daily_traffic' (not 'monthly_traffic' which doesn't exist)
-        # Also send the live bandwidth shape so fleet master can display it correctly
-        traffic_history = {}
-        try:
-            rows = TrafficDB.get_range(days_back=30)
-            traffic_history['daily'] = rows
-            totals = TrafficDB.get_totals()
-            traffic_history['totals'] = totals
-        except Exception:
-            pass
+            # Session archive stats
+            db_stats = SessionDB.get_stats()
+
+            # Bug fix: read from 'daily_traffic' (not 'monthly_traffic' which doesn't exist)
+            # Also send the live bandwidth shape so fleet master can display it correctly
+            traffic_history = {}
+            try:
+                rows = TrafficDB.get_range(days_back=30)
+                traffic_history['daily'] = rows
+                totals = TrafficDB.get_totals()
+                traffic_history['totals'] = totals
+            except Exception:
+                pass
+
+            logs = MetricsCollector._get_logs_cached()
 
         # Send live bandwidth from metrics cache — same shape as /metrics bandwidth
         # This is what the frontend maps to 'bandwidth' in the fleet node view
@@ -10258,6 +10341,7 @@ def peer_data():
 
         return jsonify({
             'peer_mode':        True,
+            'light':            light,
             'version':          cache.get('nodeStatus', {}).get('version', 'unknown'),
             'node_status':      cache.get('nodeStatus', {}),
             'earnings':         cache.get('earnings', {}),
@@ -10275,7 +10359,7 @@ def peer_data():
             'bandwidth':        bandwidth,
             'traffic_history':  traffic_history,
             'analytics':        analytics,
-            'logs':             MetricsCollector._get_logs_cached(),
+            'logs':             logs,
             'myst_price':       _myst_price_cache.copy(),
             'timestamp':        datetime.now().isoformat(),
         }), 200
