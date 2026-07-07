@@ -603,7 +603,8 @@ _DEFAULT_RETENTION = {
     'services':  30,
     'uptime':    90,
 }
-_last_prune_date = ''   # 'YYYY-MM-DD' — retention prune runs once per calendar day
+_last_prune_date = ''         # 'YYYY-MM-DD' — date data was ACTUALLY last deleted (shown in UI)
+_last_prune_check_date = ''  # 'YYYY-MM-DD' — date the daily gate last ran (once-per-day guard only)
 
 
 def _get_retention_config() -> dict:
@@ -660,16 +661,23 @@ def _prune_old_data():
     Manager (config/setup.json → data_retention). With nothing configured, nothing is
     deleted — all history is kept indefinitely. This matches the rule that a purge must
     only happen when set/executed via the Data Manager, never automatically on defaults.
+
+    _last_prune_date (shown in the Data Manager as "Last pruned") is updated ONLY when
+    rows were actually deleted. It used to be stamped with today's date on every daily
+    check regardless of outcome, via the same variable as the once-per-day run guard —
+    so the UI showed "Last pruned: <today>" even on days nothing was configured and
+    nothing was deleted, looking exactly like an unwanted daily purge. The once-per-day
+    guard now uses its own _last_prune_check_date instead.
     """
-    global _last_prune_date
+    global _last_prune_date, _last_prune_check_date
     today = local_today()
-    if _last_prune_date == today:
+    if _last_prune_check_date == today:
         return
+    _last_prune_check_date = today
     if DataManager is None:
         return
     retention = _get_user_retention_config()
     if not retention:
-        _last_prune_date = today  # nothing configured — skip, but don't recheck all day
         logger.debug("Daily retention prune: no user-configured retention — keeping all data")
         return
     node_id = _local_node_id if _local_node_id else None
@@ -690,8 +698,8 @@ def _prune_old_data():
                 pruned[data_type] = deleted
         except Exception as _pe:
             logger.debug(f"Retention prune {data_type}: {_pe}")
-    _last_prune_date = today
     if pruned:
+        _last_prune_date = today
         logger.info(f"Daily retention prune (user-configured): {pruned}")
     else:
         logger.debug("Daily retention prune: nothing to remove")

@@ -6204,7 +6204,12 @@ const EarningsCard = ({ earnings, backendUrl, authHeaders }) => {
   const isRateLimited = earningsSource === 'rate_limited';
   const isBuilding = earningsSource === 'building' || earningsSource === 'sessions';
   const displayUnsettled = safeEarnings.unsettled;
-  const showSessionFallback = safeEarnings.unsettled <= 0 && safeEarnings.session_total > 0;
+  // Only fall back to the inflated cumulative session_total when the identity API was
+  // genuinely unreachable (rate-limited/blocked) — never on a real unsettled of 0, which
+  // is the normal, correct state right after a settlement. The previous condition
+  // (unsettled <= 0) fired on every real settle, replacing "0 MYST, just settled" with a
+  // raw 30-day token sum (can be 20, 100, 200+ MYST) labelled as if it were still owed.
+  const showSessionFallback = isRateLimited && safeEarnings.session_total > 0;
 
   const fmtEarning = (val) => val != null ? val.toFixed(4) : '—';
   const earningLabel = (val) => val != null
