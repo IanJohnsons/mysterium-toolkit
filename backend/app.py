@@ -383,17 +383,18 @@ DEBUG = os.getenv('DEBUG', 'false').lower() == 'true'
 _raw_interval = int(os.getenv('UPDATE_INTERVAL', 3))
 UPDATE_INTERVAL = 3 if _raw_interval >= 10 else max(_raw_interval, 2)
 
-# FLEET_POLL_INTERVAL (v1.3.8): separate from UPDATE_INTERVAL on purpose — that constant
-# governs how fast the LOCAL node's own metrics_cache refreshes for the 5s frontend poll,
-# and its "force down to 3s" logic exists specifically to override a stale .env value from
-# old setup.sh installs. Fleet peer polling (multi_node_background_collector, remote nodes
-# only) is a different concern: peer data is a monitoring summary, not live traffic, and
-# doesn't need multi-second freshness. Previously it reused UPDATE_INTERVAL (effectively
-# ~3-5s per full cycle) to fetch each remote node's FULL /peer/data — a measured, ever-
-# growing bandwidth cost (earnings_snapshots grows unbounded over a node's lifetime).
-# 60s is ample for a fleet overview; combined with the light/heavy split in
-# _collect_single_node, this cuts fleet-peer bandwidth by roughly two orders of magnitude.
-FLEET_POLL_INTERVAL = max(int(os.getenv('FLEET_POLL_INTERVAL', 60)), 30)
+# FLEET_POLL_INTERVAL (v1.3.8, tuned to 10s in v1.3.9): separate from UPDATE_INTERVAL on
+# purpose — that constant governs how fast the LOCAL node's own metrics_cache refreshes
+# for the 5s frontend poll, and its "force down to 3s" logic exists specifically to
+# override a stale .env value from old setup.sh installs. Fleet peer polling
+# (multi_node_background_collector, remote nodes only) is a different concern: the LIGHT
+# poll (live status, speed, temps, sessions) benefits from staying reasonably fresh for
+# anyone actively viewing a remote node's dashboard — 10s balances that against bandwidth
+# (measured: ~2 GB/month per remote node at 10s vs ~168 MB/month at 60s, still ~35x below
+# the pre-v1.3.8 cost of the OLD full-payload-every-3s design, which was ~68 GB/month and
+# growing unbounded). The heavy history fields (earnings/traffic/uptime/logs) are on a
+# separate, once-per-day cache regardless of this interval — see _get_node_heavy_data.
+FLEET_POLL_INTERVAL = max(int(os.getenv('FLEET_POLL_INTERVAL', 10)), 5)
 
 if MULTI_NODE_MODE:
     logger.info(f"=== MULTI-NODE MODE: {len(_node_registry)} nodes from nodes.json ===")
@@ -3727,8 +3728,17 @@ class MetricsCollector:
 
     @staticmethod
     def _save_uptime_log(timestamps: list):
-        """Persist uptime ping timestamps to disk, pruning entries > 31 days."""
-        cutoff = time.time() - (31 * 86400)
+        """Persist uptime ping timestamps to disk, pruning entries > 365 days.
+
+        v1.3.9: raised from 31 days. The 31-day cutoff was an intentional design choice
+        for a *reliability percentage* (not meant as a long-term archive) but was flagged
+        as an unnecessary data-loss risk once the operator wants to retain history much
+        longer, matching the retention already used for earnings (365 days default). The
+        24h/30d uptime percentages computed from this log are unaffected — only the raw
+        pings kept on disk (and thus how far back a longer-window stat could ever look)
+        are retained further.
+        """
+        cutoff = time.time() - (365 * 86400)
         pruned = [t for t in timestamps if t >= cutoff]
         try:
             UPTIME_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -5517,6 +5527,7 @@ def _collect_single_node(node_entry):
                     'performance':      data.get('performance', {}),
                     'node_quality':     data.get('node_quality', {}),
                     'live_connections': data.get('live_connections', {}),
+                    'clients':          data.get('clients', {}),
                     'firewall':         data.get('firewall', {}),
                     'systemHealth':     data.get('systemHealth', {}),
                     'uptime_stats':     data.get('uptime_stats', {}) or heavy.get('uptime_stats', {}),
@@ -10311,11 +10322,16 @@ def peer_data():
             # Session archive stats
             db_stats = SessionDB.get_stats()
 
-            # Bug fix: read from 'daily_traffic' (not 'monthly_traffic' which doesn't exist)
-            # Also send the live bandwidth shape so fleet master can display it correctly
+            # v1.3.9: send the FULL traffic history, not just 30 days. TrafficDB stores
+            # every day permanently (upsert_day, no retention limit — see class docstring:
+            # "complete from the day vnstat was first installed"); days_back=30 was an
+            # arbitrary query limit here, not a storage limit, so there was no actual risk
+            # of losing data — but it did mean the fleet view could never show more than
+            # 30 days even though the source has kept everything. Matches earnings_history
+            # (days_back=None) below: request everything the source already has.
             traffic_history = {}
             try:
-                rows = TrafficDB.get_range(days_back=30)
+                rows = TrafficDB.get_range(days_back=None)
                 traffic_history['daily'] = rows
                 totals = TrafficDB.get_totals()
                 traffic_history['totals'] = totals
@@ -10353,6 +10369,7 @@ def peer_data():
             'live_connections': cache.get('live_connections', {}),
             'firewall':         cache.get('firewall', {}),
             'systemHealth':     cache.get('systemHealth', {}),
+            'clients':          cache.get('clients', {}),
             'uptime_stats':     uptime_stats,
             'db_stats':         db_stats,
             'earnings_history': earnings_history,

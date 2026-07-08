@@ -1374,7 +1374,7 @@ const MysteriumDashboard = () => {
           resources:       raw.resources || {},
           nodeQuality:     raw.node_quality || {},
           bandwidth:       raw.traffic || {},
-          clients:         { connected: raw.sessions?.vpn_tunnel_count || raw.live_connections?.active || 0, peak: 0 },
+          clients:         { connected: raw.clients?.connected ?? raw.sessions?.vpn_tunnel_count ?? raw.live_connections?.active ?? 0, peak: raw.clients?.peak ?? 0 },
           performance:     raw.performance || { speed_total: 0, speed_in: 0, speed_out: 0, idle: true },
           firewall:        raw.firewall || { status: 'unknown', rules: 0, blocked: 0, rule_details: [], ufw_rules: [], firewalld_rules: [], fail2ban: { installed: null, running: false, jails: [] } },
           systemHealth:    raw.systemHealth || { overall: 'ok', subsystems: [] },
