@@ -6294,12 +6294,17 @@ const EarningsCard = ({ earnings, backendUrl, authHeaders }) => {
           )}
         </div>
       )}
-      <div className="text-4xl font-bold text-emerald-400 mb-1">
+      <div className={showSessionFallback ? "text-xl font-semibold text-amber-400 mb-1" : "text-4xl font-bold text-emerald-400 mb-1"}>
         {showSessionFallback
-          ? <span>{safeEarnings.session_total.toFixed(4)} <span className="text-lg text-emerald-400/60">MYST</span><span className="text-xs text-emerald-400/50 ml-2">(session tokens — TequilAPI settling)</span></span>
+          ? <span>~{safeEarnings.session_total.toFixed(4)} <span className="text-sm text-amber-400/70">MYST</span></span>
           : <span>{displayUnsettled.toFixed(4)} <span className="text-lg text-emerald-400/60">MYST</span></span>
         }
       </div>
+      {showSessionFallback && (
+        <div className="text-xs text-amber-400/80 mb-2 -mt-1">
+          ⚠ Approximate, session-based estimate — the real balance is temporarily unreachable (identity API rate-limited). This can be lower than your true earnings: sessions that never closed cleanly on the node don't get their final amount recorded. Not your real total — the real figure returns automatically once reachable.
+        </div>
+      )}
       {/* Fiat value of unsettled + live token price */}
       <div className="flex items-center gap-3 mb-3 text-xs">
         {mystPrice?.eur != null ? (

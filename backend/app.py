@@ -667,6 +667,60 @@ def _get_user_retention_config() -> dict:
     return {}
 
 
+# ── Daily data-integrity log (v1.3.10) ──────────────────────────────────────
+# Append-only, independent of any other DB/cache — a small, permanent record that
+# nobody (including this code) can silently rewrite or delete. Written once per
+# calendar day. Lets the operator verify with their own eyes whether session/consumer
+# counts ever go DOWN — hard, timestamped evidence instead of trusting any assistant's
+# word. At ~114 bytes/day this is ~40 KB/year, ~400 KB/decade — negligible even on a
+# Raspberry Pi's SD card; it never needs rotation or cleanup.
+_INTEGRITY_LOG_PATH = Path(__file__).parent / 'databases' / 'integrity_log.jsonl'
+_last_integrity_log_date = ''
+
+
+def _write_daily_integrity_log():
+    """Append one line to integrity_log.jsonl, at most once per calendar day.
+
+    Uses CAST(tokens AS REAL) for the token sum — SUM(tokens) on the raw INTEGER
+    column can raise 'integer overflow' in SQLite once a corrupted session (tokens
+    clamped to 2^63-1, a node-side artifact — see CHANGELOG v1.3.10) is summed with
+    others. corrupt_rows counts sessions stuck at exactly that clamp value, so their
+    (known-wrong) contribution to the sum is visible and can be judged separately.
+    """
+    global _last_integrity_log_date
+    today = local_today()
+    if _last_integrity_log_date == today:
+        return
+    try:
+        conn = sqlite3.connect(str(Path(__file__).parent / 'databases' / 'sessions_history.db'), timeout=10)
+        cur = conn.cursor()
+        total_sessions = cur.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+        unique_consumers = cur.execute("SELECT COUNT(DISTINCT consumer_id) FROM sessions").fetchone()[0]
+        tokens_sum = cur.execute("SELECT SUM(CAST(tokens AS REAL)) FROM sessions").fetchone()[0] or 0
+        corrupt_rows = cur.execute(
+            "SELECT COUNT(*) FROM sessions WHERE tokens = 9223372036854775807"
+        ).fetchone()[0]
+        oldest = cur.execute("SELECT MIN(started_at) FROM sessions").fetchone()[0]
+        conn.close()
+
+        line = json.dumps({
+            'date':             today,
+            'timestamp':        datetime.now(timezone.utc).isoformat(),
+            'total_sessions':   total_sessions,
+            'unique_consumers': unique_consumers,
+            'tokens_myst_safe': round(tokens_sum / 1e18, 4),
+            'corrupt_rows':     corrupt_rows,
+            'oldest_session':   oldest,
+        })
+        _INTEGRITY_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(_INTEGRITY_LOG_PATH, 'a') as f:
+            f.write(line + '\n')
+        _last_integrity_log_date = today
+        logger.info(f"Daily integrity log written: {total_sessions} sessions, {unique_consumers} consumers")
+    except Exception as e:
+        logger.warning(f"Daily integrity log failed: {e}")
+
+
 def _prune_old_data():
     """Delete rows older than the retention window the USER configured. Runs once a day.
 
@@ -5273,6 +5327,13 @@ class MetricsCollector:
                     _prune_old_data()
                 except Exception as _prune_e:
                     logger.debug(f"Retention prune skipped: {_prune_e}")
+
+                # Daily data-integrity log — runs once per calendar day, independent
+                # of prune/retention. Append-only evidence of session/consumer counts.
+                try:
+                    _write_daily_integrity_log()
+                except Exception as _log_e:
+                    logger.debug(f"Integrity log skipped: {_log_e}")
 
                 # Dynamic CPU governor + conntrack — adjust based on active sessions
                 # Runs after cache is built so we have the latest session count
@@ -10390,6 +10451,29 @@ def peer_data():
 
 
 # ============ DATA MANAGEMENT ROUTES ============
+
+@app.route('/data/integrity-log', methods=['GET'])
+@require_auth
+def get_integrity_log():
+    """Read-only view of the daily integrity log (v1.3.10) — append-only, one line per
+    calendar day: session count, unique consumers, safe token sum, corrupt-row count.
+    Exists so the operator can independently verify counts never decrease, without
+    needing SSH+Python each time. Nothing here is ever modified or deleted by the toolkit.
+    """
+    try:
+        if not _INTEGRITY_LOG_PATH.exists():
+            return jsonify({'entries': [], 'note': 'No entries yet — first one is written within a day of this version running.'}), 200
+        lines = _INTEGRITY_LOG_PATH.read_text().strip().splitlines()
+        entries = []
+        for line in lines:
+            try:
+                entries.append(json.loads(line))
+            except Exception:
+                continue
+        return jsonify({'entries': entries, 'count': len(entries)}), 200
+    except Exception as e:
+        return jsonify({'entries': [], 'error': str(e)}), 200
+
 
 @app.route('/data/stats', methods=['GET'])
 @require_auth
