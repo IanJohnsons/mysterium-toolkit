@@ -3126,7 +3126,11 @@ const MysteriumDashboard = () => {
                             <div className="col-span-2 min-w-0"><CopyableId id={session.consumer_id} /></div>
                             <div className="col-span-1 text-sm">{countryFlag(session.consumer_country) || '—'}</div>
                             <div className="col-span-2 text-slate-300 text-xs truncate">{fmtType(session.service_type)}</div>
-                            <div className="col-span-1 text-slate-400 font-mono">{session.duration}</div>
+                            <div className="col-span-1 text-slate-400 font-mono">
+                              {session.is_stale
+                                ? <span className="text-amber-400/80" title="Dead session — the node lost the final write for this session (node-side, verified in node source). Real duration and bytes were never recorded and cannot be recovered.">—</span>
+                                : session.duration}
+                            </div>
                             <div className="col-span-2 text-slate-400 text-xs">{session.started_fmt || '—'}</div>
                             <div className="col-span-1 text-slate-300">{formatDataSize(session.data_total)}</div>
                             <div className={`col-span-1 font-semibold text-xs truncate ${session.is_paid ? 'text-emerald-400' : 'text-slate-500'}`}>
@@ -4094,6 +4098,11 @@ const MysteriumDashboard = () => {
                 <div>
                   <h4 className="text-emerald-400 font-semibold mb-1">Sessions &amp; Consumers</h4>
                   <p className="text-slate-400"><strong className="text-slate-300">Tunnels</strong> — connected consumers. Mysterium creates one WireGuard interface (myst0, myst1…) per consumer, and the count reflects interfaces whose peer handshaked in the last ~3 minutes (the true "connected now" signal), so it tracks consumers coming and going. If <code className="bg-slate-800 px-1 rounded">wg show</code> isn't permitted yet (run setup to add it to sudoers), the count falls back to recent traffic and is marked "estimated". <strong className="text-slate-300">Active</strong> — sessions matched to live tunnels with actual traffic. <strong className="text-slate-300">History</strong> — all pages loaded at startup; use the search box to find any wallet or session ID across the whole archive, and the Export controls to download the archive (or a single wallet's sessions) as CSV or TXT for the last 30/90 days or all history. <strong className="text-slate-300">Consumers</strong> — grouped by wallet, sortable. Multiple sessions per consumer is normal — Mysterium reconnects frequently. All tabs are sortable.</p>
+                </div>
+
+                <div>
+                  <h4 className="text-amber-400 font-semibold mb-1">Dead Sessions &amp; Lost Data (node-side)</h4>
+                  <p className="text-slate-400">Sometimes a tunnel visibly moves data fast, yet no session shows those bytes. This is a Mysterium node characteristic, verified in the node source (v1.38.5), not a toolkit bug. The node only writes session bytes/tokens to disk at three moments: session create (0 bytes), each <em>paid</em> invoice, and a <em>clean</em> session close (consumer/session/session_storage.go). The live transfer counters exist only in node memory and the session API reads only the disk copy. If a session never pays and never closes cleanly — or its final write is silently dropped because the node's capacity-100 write queue is full — the row stays <code className="bg-slate-800 px-1 rounded">New</code> with 0 bytes forever, while the real transferred data was never recorded anywhere and cannot be recovered. The node then fabricates an ever-growing "duration" for these dead rows (now − started, computed per API call), even though its own keepalive kills unreachable consumers within ~95 seconds. The toolkit marks such rows as <span className="text-amber-400">dead — final write lost</span> after 10 minutes, freezes their stored duration, and excludes them from active counts. This is also why the session archive's token sum is structurally lower than real on-chain settlements, and why every session's first invoice is literally 1 wei (the node's hardcoded lenient first invoice) — sessions showing 1 wei paid only that.</p>
                 </div>
 
                 <div>

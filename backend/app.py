@@ -1596,7 +1596,19 @@ class SessionDB:
                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                         ON CONFLICT(id) DO UPDATE SET
                             status           = excluded.status,
-                            duration_secs    = excluded.duration_secs,
+                            -- Duration: only trust the API value for Completed sessions.
+                            -- For 'New' rows the node fabricates duration = now - Started
+                            -- on every API call (node source: consumer/session/session.go
+                            -- GetDuration — Updated is zero for New rows). Dead sessions
+                            -- with a lost final write stay 'New' forever, so accepting
+                            -- excluded.duration_secs made the stored value grow without
+                            -- bound on every poll (days of fake duration). Freeze at the
+                            -- first recorded value instead; the exact duration arrives
+                            -- with the Completed write if the session ever closes cleanly.
+                            duration_secs    = CASE
+                                WHEN excluded.status = 'Completed' THEN excluded.duration_secs
+                                ELSE sessions.duration_secs
+                            END,
                             bytes_sent       = MAX(sessions.bytes_sent,    excluded.bytes_sent),
                             bytes_received   = MAX(sessions.bytes_received, excluded.bytes_received),
                             -- Preserve tokens: only update if incoming > 0 or never frozen
@@ -3161,20 +3173,35 @@ class MetricsCollector:
                     or (not explicitly_closed and recently_updated)
                 )
 
-                # Ghost session filter:
-                # Mysterium sometimes leaves sessions as 'running' after settlement
-                # but zeros out bytes and tokens. A real idle session always has
-                # at least handshake bytes and is relatively recent.
-                # If session is 4h+ old with zero bytes AND zero tokens → ghost, mark inactive.
+                # Dead-session filter (node-source verified, node v1.38.5):
+                # A session row with status 'New' and zero bytes/tokens whose start is
+                # older than 10 minutes is a DEAD session with a lost final write, not
+                # a live one. Proof from mysteriumnetwork/node source:
+                #   - core/service/session_manager.go r86-90: provider keepalive pings
+                #     every 14s, max 5 failures -> an unreachable consumer's session is
+                #     closed within ~95 seconds. Multi-hour 'New' rows cannot be live.
+                #   - consumer/session/session_storage.go r360-366: the final
+                #     bytes/tokens write goes through a capacity-100 non-blocking queue
+                #     and is silently DROPPED when full ("Session write queue full,
+                #     dropping end-event update") -> the row stays 'New'/0-bytes forever.
+                #   - consumer/session/session.go r63-68 (GetDuration): for 'New' rows
+                #     Updated is zero, so the API fabricates duration = now - Started on
+                #     every call -> the ever-growing duration is fake, not a live tunnel.
+                # 10 minutes matches the observed-active window used elsewhere and is
+                # ~6x the keepalive death window — safely past any live edge case.
+                # Limitation: a dead session WITH partial bytes (final write lost after
+                # earlier invoice-paid writes) is indistinguishable from a live paying
+                # session and is intentionally left untouched.
+                is_stale = False
                 if is_active and b_in == 0 and b_out == 0 and tokens == 0:
                     if started:
                         try:
                             start_time = datetime.fromisoformat(started.replace('Z', '+00:00'))
                             if start_time.tzinfo is None:
                                 start_time = start_time.replace(tzinfo=timezone.utc)
-                            age_hours = (now - start_time).total_seconds() / 3600
-                            if age_hours > 4:
-                                is_active = False  # ghost — too old with no traffic at all
+                            if (now - start_time).total_seconds() > 600:
+                                is_active = False  # dead — final write lost node-side
+                                is_stale = True
                         except (ValueError, TypeError):
                             pass
 
@@ -3246,6 +3273,15 @@ class MetricsCollector:
                     except (ValueError, TypeError):
                         pass
 
+                # Stale (dead) sessions: the API-fabricated, ever-growing duration is
+                # meaningless (see dead-session filter above), and the real duration
+                # was never recorded by the node. Show '—' instead of a fake number,
+                # and label the row honestly.
+                if is_stale:
+                    duration_str = '—'
+                    delta_secs = 0
+                    status = '(dead — final write lost)'
+
                 sessions.append({
                     'id': session_id,
                     'consumer_id': session.get('consumer_id', 'unknown'),
@@ -3262,6 +3298,7 @@ class MetricsCollector:
                     'earnings_myst': round(tokens / 1e18, 8),
                     'is_paid': tokens > 0,
                     'is_active': is_active,
+                    'is_stale': is_stale,
                     'recently_closed': recently_closed,
                     'bytes_pending': bytes_pending,
                     'consumer_country': consumer_country,
