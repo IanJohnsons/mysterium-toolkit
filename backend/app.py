@@ -1463,6 +1463,15 @@ def _node_process_start_iso():
     return (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
 
 
+# Earnings below this threshold (in MYST) are treated as zero for consumer
+# classification. The node occasionally emits sessions with tokens=1 (1 wei =
+# 1e-18 MYST) — a node-side artifact, not a real payment. With strict ==0 /
+# >0 comparisons those 1-wei artifacts made probe-pattern consumers count as
+# "paying" and suppressed their 🔧 probe flag. The smallest real payment
+# observed is ~1.3e-5 MYST, so 1e-6 cleanly separates artifacts from payments.
+PROBE_EARNINGS_EPSILON = 1e-6
+
+
 class SessionDB:
     """Persistent session history database using SQLite.
 
@@ -3370,11 +3379,15 @@ class MetricsCollector:
                                    key=lambda c: (-c['total_earnings'], -c['total_data_mb']))
 
             unique_consumers = len(consumer_map)
-            paying_consumers = sum(1 for c in consumer_map.values() if c['total_earnings'] > 0)
+            paying_consumers = sum(1 for c in consumer_map.values()
+                                   if c['total_earnings'] > PROBE_EARNINGS_EPSILON)
 
             # Detect Mysterium network probes — infrastructure quality bots that test
             # node reachability. They never pay and make many short low-traffic sessions.
-            # Criteria: ≥5 sessions, zero earnings, avg data < 2 MB/session.
+            # Criteria: ≥5 sessions, near-zero earnings, avg data < 2 MB/session.
+            # Earnings use PROBE_EARNINGS_EPSILON instead of strict ==0 because the
+            # node emits occasional 1-wei artifact sessions that would otherwise flip
+            # probe-pattern consumers into "paying" (see constant definition).
             #
             # Confirmed via blockchain research: Mysterium monitoring agents have
             # 0 MYST/MATIC balance, nonce=0, are not in the whitelist, and connect
@@ -3388,7 +3401,7 @@ class MetricsCollector:
                 avg_mb = c['total_data_mb'] / c['sessions'] if c['sessions'] > 0 else 0
                 c['is_probe'] = (
                     c['sessions'] >= 5
-                    and c['total_earnings'] == 0
+                    and c['total_earnings'] <= PROBE_EARNINGS_EPSILON
                     and avg_mb < 2.0
                 )
                 if c['is_probe']:
@@ -8414,19 +8427,23 @@ def consumers_top():
     top_consumers = sorted(consumer_map.values(),
                             key=lambda c: (-c['total_earnings'], -c['total_data_mb']))
 
-    # Same probe criteria as before (Mysterium quality-monitoring agents): >=5 sessions,
-    # zero earnings, avg data < 2 MB/session.
+    # Same probe criteria as get_metrics (Mysterium quality-monitoring agents):
+    # >=5 sessions, near-zero earnings (PROBE_EARNINGS_EPSILON — filters 1-wei
+    # node artifacts), avg data < 2 MB/session.
     probe_ids = set()
     for c in top_consumers:
         avg_mb = c['total_data_mb'] / c['sessions'] if c['sessions'] > 0 else 0
-        c['is_probe'] = (c['sessions'] >= 5 and c['total_earnings'] == 0 and avg_mb < 2.0)
+        c['is_probe'] = (c['sessions'] >= 5
+                         and c['total_earnings'] <= PROBE_EARNINGS_EPSILON
+                         and avg_mb < 2.0)
         if c['is_probe']:
             probe_ids.add(c['consumer_id'])
 
     return jsonify({
         'top_consumers': top_consumers,
         'unique_consumers': len(consumer_map),
-        'paying_consumers': sum(1 for c in consumer_map.values() if c['total_earnings'] > 0),
+        'paying_consumers': sum(1 for c in consumer_map.values()
+                                if c['total_earnings'] > PROBE_EARNINGS_EPSILON),
         'probe_consumers': len(probe_ids),
     }), 200
 
@@ -8490,16 +8507,28 @@ def sessions_by_wallet():
                 'status':           r.get('status', '') or '',
             })
 
+        # Probe classification for this wallet — same criteria as /consumers/top
+        # and get_metrics, so the history modal shows the same 🔧 verdict as the
+        # consumer list (previously the modal showed no probe indicator at all,
+        # making the Mysterium monitoring agent look like a non-paying consumer).
+        total_data_mb = (tot_out + tot_in) / (1024 * 1024)
+        earnings_myst = tot_tokens / 1e18
+        avg_mb = total_data_mb / len(items) if items else 0
+        is_probe = (len(items) >= 5
+                    and earnings_myst <= PROBE_EARNINGS_EPSILON
+                    and avg_mb < 2.0)
+
         summary = {
             'wallet':          wallet,
             'sessions':        len(items),
             'data_out_mb':     round(tot_out / (1024 * 1024), 2),
             'data_in_mb':      round(tot_in / (1024 * 1024), 2),
-            'data_total_mb':   round((tot_out + tot_in) / (1024 * 1024), 2),
-            'earnings_myst':   round(tot_tokens / 1e18, 8),
+            'data_total_mb':   round(total_data_mb, 2),
+            'earnings_myst':   round(earnings_myst, 8),
             'by_service':      by_service,
             'first_session':   items[-1]['started'] if items else '',
             'last_session':    items[0]['started'] if items else '',
+            'is_probe':        is_probe,
         }
         return jsonify({'items': items, 'summary': summary}), 200
     except Exception as e:

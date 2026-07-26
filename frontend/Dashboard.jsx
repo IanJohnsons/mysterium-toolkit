@@ -3972,7 +3972,15 @@ const MysteriumDashboard = () => {
                  onClick={e => e.stopPropagation()}>
               <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800">
                 <div className="min-w-0">
-                  <div className="text-sm font-semibold text-emerald-400">Consumer history</div>
+                  <div className="text-sm font-semibold text-emerald-400 flex items-center gap-2">
+                    <span>Consumer history</span>
+                    {walletHistory.summary?.is_probe && (
+                      <span className="text-[10px] font-normal px-1.5 py-0.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-300"
+                            title="Matches the Mysterium quality-monitoring pattern: many sessions, near-zero earnings, low data per session. These infrastructure agents test node reachability and bandwidth and never pay.">
+                        🔧 Mysterium monitoring agent
+                      </span>
+                    )}
+                  </div>
                   <div className="text-xs text-slate-400 font-mono truncate">{walletHistory.wallet}</div>
                 </div>
                 <button onClick={() => setWalletHistory(null)}
