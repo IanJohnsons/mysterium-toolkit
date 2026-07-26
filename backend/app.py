@@ -3098,6 +3098,18 @@ class MetricsCollector:
             # Ground truth: count active VPN tunnel interfaces
             vpn_tunnel_count = MetricsCollector._count_vpn_tunnels()
 
+            # Node process boot time as datetime — used by the orphaned-row filter
+            # below. A session object lives only in the node's process memory, so no
+            # session can genuinely predate the current node process.
+            _boot_dt = None
+            try:
+                _boot_dt = datetime.fromisoformat(
+                    _node_process_start_iso().replace('Z', '+00:00'))
+                if _boot_dt.tzinfo is None:
+                    _boot_dt = _boot_dt.replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                _boot_dt = None
+
             # Collect live VPN interface bytes (psutil, cumulative since boot)
             # These are the REAL bytes flowing through WireGuard/myst* interfaces.
             # TequilAPI only reports bytes AFTER session completion, so for active
@@ -3173,34 +3185,32 @@ class MetricsCollector:
                     or (not explicitly_closed and recently_updated)
                 )
 
-                # Dead-session filter (node-source verified, node v1.38.5):
-                # A session row with status 'New' and zero bytes/tokens whose start is
-                # older than 10 minutes is a DEAD session with a lost final write, not
-                # a live one. Proof from mysteriumnetwork/node source:
-                #   - core/service/session_manager.go r86-90: provider keepalive pings
-                #     every 14s, max 5 failures -> an unreachable consumer's session is
-                #     closed within ~95 seconds. Multi-hour 'New' rows cannot be live.
-                #   - consumer/session/session_storage.go r360-366: the final
-                #     bytes/tokens write goes through a capacity-100 non-blocking queue
-                #     and is silently DROPPED when full ("Session write queue full,
-                #     dropping end-event update") -> the row stays 'New'/0-bytes forever.
-                #   - consumer/session/session.go r63-68 (GetDuration): for 'New' rows
-                #     Updated is zero, so the API fabricates duration = now - Started on
-                #     every call -> the ever-growing duration is fake, not a live tunnel.
-                # 10 minutes matches the observed-active window used elsewhere and is
-                # ~6x the keepalive death window — safely past any live edge case.
-                # Limitation: a dead session WITH partial bytes (final write lost after
-                # earlier invoice-paid writes) is indistinguishable from a live paying
-                # session and is intentionally left untouched.
+                # Orphaned-row filter (v1.3.13 — corrects the v1.3.12 dead-session
+                # filter, which was disproven by live debug logs).
+                # A 'New' row with 0 bytes / 0 tokens is NOT necessarily dead: the
+                # node persists provider sessions only at create and clean close
+                # (consumer/session/session_storage.go), so a live multi-day B2B
+                # session legitimately reports New/0/0 over the API for its entire
+                # lifetime while earning in memory. Verified on this very node
+                # (2026-07-26 debug log): three days-old New/0/0 sessions received
+                # consumer keepalive pings every ~5s and held 10.37 / 2.48 / 0.32
+                # MYST of in-memory SessionTokensEarned totals — live top earners,
+                # not freeloaders. The v1.3.12 10-minute rule wrongly labeled these
+                # "(dead — final write lost)" and hid them from Active.
+                # The ONLY provable-dead case from the API alone: a row whose
+                # started_at PREDATES the current node process. Session objects live
+                # in node process memory and cannot survive a restart; such rows are
+                # permanently orphaned (their final write never happened and never
+                # will). Everything started after boot is treated as live.
                 is_stale = False
                 if is_active and b_in == 0 and b_out == 0 and tokens == 0:
-                    if started:
+                    if started and _boot_dt is not None:
                         try:
                             start_time = datetime.fromisoformat(started.replace('Z', '+00:00'))
                             if start_time.tzinfo is None:
                                 start_time = start_time.replace(tzinfo=timezone.utc)
-                            if (now - start_time).total_seconds() > 600:
-                                is_active = False  # dead — final write lost node-side
+                            if start_time < _boot_dt:
+                                is_active = False  # orphaned — predates node restart
                                 is_stale = True
                         except (ValueError, TypeError):
                             pass
@@ -3273,14 +3283,14 @@ class MetricsCollector:
                     except (ValueError, TypeError):
                         pass
 
-                # Stale (dead) sessions: the API-fabricated, ever-growing duration is
-                # meaningless (see dead-session filter above), and the real duration
-                # was never recorded by the node. Show '—' instead of a fake number,
-                # and label the row honestly.
+                # Orphaned rows: the API-fabricated, ever-growing duration is
+                # meaningless (the session object died with a previous node process;
+                # Updated never came), and the real duration/bytes were never
+                # recorded. Show '—' instead of a fake number and label honestly.
                 if is_stale:
                     duration_str = '—'
                     delta_secs = 0
-                    status = '(dead — final write lost)'
+                    status = '(orphaned — predates node restart)'
 
                 sessions.append({
                     'id': session_id,
