@@ -1995,10 +1995,46 @@ class RollupDB:
                     sessions       INTEGER NOT NULL DEFAULT 0,
                     bytes_sent     INTEGER NOT NULL DEFAULT 0,
                     bytes_received INTEGER NOT NULL DEFAULT 0,
-                    tokens         INTEGER NOT NULL DEFAULT 0,
+                    tokens         TEXT    NOT NULL DEFAULT '0',
                     PRIMARY KEY (date, provider_id, service_type)
                 )
             """)
+            # v1.4.3 migration: tokens was INTEGER. Token amounts are summed in wei,
+            # and a single day of earnings exceeds SQLite's signed 64-bit ceiling of
+            # ~9.2e18 — under 10 MYST. Every insert raised OverflowError, the
+            # exception was swallowed, and the rollup never recorded a single row.
+            # TEXT keeps wei exact; REAL would round and corrupt the earnings figures.
+            try:
+                cols = conn.execute("PRAGMA table_info(daily_totals)").fetchall()
+                tokens_type = next((c[2] for c in cols if c[1] == 'tokens'), '')
+                if str(tokens_type).upper() != 'TEXT':
+                    logger.info("RollupDB: migrating tokens column from INTEGER to TEXT")
+                    conn.execute("ALTER TABLE daily_totals RENAME TO daily_totals_old")
+                    conn.execute("""
+                        CREATE TABLE daily_totals (
+                            date           TEXT    NOT NULL,
+                            provider_id    TEXT    NOT NULL DEFAULT '',
+                            service_type   TEXT    NOT NULL DEFAULT 'unknown',
+                            sessions       INTEGER NOT NULL DEFAULT 0,
+                            bytes_sent     INTEGER NOT NULL DEFAULT 0,
+                            bytes_received INTEGER NOT NULL DEFAULT 0,
+                            tokens         TEXT    NOT NULL DEFAULT '0',
+                            PRIMARY KEY (date, provider_id, service_type)
+                        )
+                    """)
+                    conn.execute("""
+                        INSERT INTO daily_totals
+                            (date, provider_id, service_type, sessions,
+                             bytes_sent, bytes_received, tokens)
+                        SELECT date, provider_id, service_type, sessions,
+                               bytes_sent, bytes_received, CAST(tokens AS TEXT)
+                        FROM daily_totals_old
+                    """)
+                    conn.execute("DROP TABLE daily_totals_old")
+                    logger.info("RollupDB: tokens column migrated to TEXT")
+            except Exception as e:
+                logger.warning(f"RollupDB tokens migration failed: {e}")
+
             conn.execute("CREATE INDEX IF NOT EXISTS idx_rollup_date ON daily_totals(date)")
             conn.commit()
             conn.close()
@@ -2024,19 +2060,25 @@ class RollupDB:
     def _upsert(cls, agg):
         if not agg:
             return
-        with cls._lock:
-            conn = cls._conn()
-            for (d, prov, svc), a in agg.items():
-                conn.execute("""
-                    INSERT INTO daily_totals
-                        (date, provider_id, service_type, sessions, bytes_sent, bytes_received, tokens)
-                    VALUES (?,?,?,?,?,?,?)
-                    ON CONFLICT(date, provider_id, service_type) DO UPDATE SET
-                        sessions=excluded.sessions, bytes_sent=excluded.bytes_sent,
-                        bytes_received=excluded.bytes_received, tokens=excluded.tokens
-                """, (d, prov, svc, a['sessions'], a['bs'], a['br'], a['tok']))
-            conn.commit()
-            conn.close()
+        try:
+            with cls._lock:
+                conn = cls._conn()
+                for (d, prov, svc), a in agg.items():
+                    conn.execute("""
+                        INSERT INTO daily_totals
+                            (date, provider_id, service_type, sessions, bytes_sent, bytes_received, tokens)
+                        VALUES (?,?,?,?,?,?,?)
+                        ON CONFLICT(date, provider_id, service_type) DO UPDATE SET
+                            sessions=excluded.sessions, bytes_sent=excluded.bytes_sent,
+                            bytes_received=excluded.bytes_received, tokens=excluded.tokens
+                    """, (d, prov, svc, a['sessions'], a['bs'], a['br'], str(a['tok'])))
+                conn.commit()
+                conn.close()
+            record_db_success('RollupDB')
+        except Exception as e:
+            # This used to propagate to a caller that only logged at debug level.
+            record_db_failure('RollupDB', e)
+            raise
 
     @classmethod
     def backfill_if_empty(cls):
@@ -2114,10 +2156,13 @@ class RollupDB:
                 params.append(provider_id)
             with cls._lock:
                 conn = cls._conn()
+                # Aggregate in Python rather than in SQL: wei amounts are stored as
+                # TEXT because they exceed SQLite's 64-bit INTEGER range, and
+                # SUM(CAST(... AS REAL)) would quietly round the earnings.
                 rows = conn.execute(
-                    f"SELECT service_type AS svc, SUM(sessions) AS s, "
-                    f"SUM(bytes_sent + bytes_received) AS b, SUM(CAST(tokens AS REAL)) AS t "
-                    f"FROM daily_totals WHERE {where} GROUP BY service_type", params
+                    f"SELECT service_type AS svc, sessions AS s, "
+                    f"(bytes_sent + bytes_received) AS b, tokens AS tok "
+                    f"FROM daily_totals WHERE {where}", params
                 ).fetchall()
                 conn.close()
             svc_map = {}
@@ -2128,13 +2173,17 @@ class RollupDB:
                 st = r['svc'] or 'unknown'
                 if st == 'quic_scraping':
                     st = 'scraping'
+                try:
+                    tok = int(r['tok'] or 0)
+                except (TypeError, ValueError):
+                    tok = 0
                 e = svc_map.setdefault(st, {'sessions': 0, 'bytes': 0, 'tokens': 0})
                 e['sessions'] += int(r['s'] or 0)
                 e['bytes']    += int(r['b'] or 0)
-                e['tokens']   += int(r['t'] or 0)
+                e['tokens']   += tok
                 tot_s += int(r['s'] or 0)
                 tot_b += int(r['b'] or 0)
-                tot_t += int(r['t'] or 0)
+                tot_t += tok
             tot_earn = tot_t / 1e18
             tot_mb   = tot_b / (1024 * 1024)
             breakdown = []
