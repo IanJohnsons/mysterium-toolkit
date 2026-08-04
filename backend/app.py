@@ -11006,6 +11006,56 @@ def get_system_history():
         return jsonify({'error': str(e)}), 500
 
 
+def _serve(wsgi_app, port):
+    """Serve the dashboard (v1.4.0).
+
+    Flask's built-in app.run() is a development server: it sends
+    'Connection: close' on every response, so each request pays for a fresh TCP
+    connection — and, once TLS is enabled, a fresh handshake as well. Measured at
+    roughly 360 ms to open the dashboard over HTTPS versus 35 ms with keep-alive.
+
+    Cheroot is a small production WSGI server (single process, thread pool, TLS
+    built in) that keeps connections alive. Debug mode still uses Flask's server
+    because the interactive reloader depends on it.
+    """
+    if DEBUG:
+        logger.warning("DEBUG is enabled — using the Flask development server. "
+                       "Never leave this on for a node that is reachable from the internet.")
+        wsgi_app.run(host='0.0.0.0', port=port, debug=True)
+        return
+
+    try:
+        from cheroot.wsgi import Server as _WSGIServer
+    except ImportError:
+        logger.warning("cheroot is not installed — falling back to the Flask development "
+                       "server. Run: pip install -r requirements.txt")
+        wsgi_app.run(host='0.0.0.0', port=port, debug=False)
+        return
+
+    server = _WSGIServer(('0.0.0.0', port), wsgi_app,
+                         numthreads=CHEROOT_THREADS,
+                         request_queue_size=CHEROOT_QUEUE,
+                         server_name='mysterium-toolkit')
+
+    if HTTPS_ENABLED:
+        cert_path, key_path = Path(TLS_CERT), Path(TLS_KEY)
+        if not cert_path.exists() or not key_path.exists():
+            logger.error(
+                f"https_enabled is true but the certificate is missing "
+                f"({TLS_CERT} / {TLS_KEY}). Starting over plain HTTP instead. "
+                f"Re-run setup.sh to generate a certificate."
+            )
+        else:
+            from cheroot.ssl.builtin import BuiltinSSLAdapter
+            server.ssl_adapter = BuiltinSSLAdapter(str(cert_path), str(key_path))
+            logger.info(f"TLS enabled — serving HTTPS using {TLS_CERT}")
+
+    try:
+        server.safe_start()
+    except KeyboardInterrupt:
+        server.stop()
+
+
 if __name__ == '__main__':
     # Handle SIGTERM cleanly (exit code 0) so systemd Restart=on-failure does not trigger.
     # Without this, Flask exits with code 1 on SIGTERM → Restart=on-failure restarts during update.
@@ -11099,52 +11149,3 @@ if __name__ == '__main__':
 
     _serve(app, PORT)
 
-
-def _serve(wsgi_app, port):
-    """Serve the dashboard (v1.4.0).
-
-    Flask's built-in app.run() is a development server: it sends
-    'Connection: close' on every response, so each request pays for a fresh TCP
-    connection — and, once TLS is enabled, a fresh handshake as well. Measured at
-    roughly 360 ms to open the dashboard over HTTPS versus 35 ms with keep-alive.
-
-    Cheroot is a small production WSGI server (single process, thread pool, TLS
-    built in) that keeps connections alive. Debug mode still uses Flask's server
-    because the interactive reloader depends on it.
-    """
-    if DEBUG:
-        logger.warning("DEBUG is enabled — using the Flask development server. "
-                       "Never leave this on for a node that is reachable from the internet.")
-        wsgi_app.run(host='0.0.0.0', port=port, debug=True)
-        return
-
-    try:
-        from cheroot.wsgi import Server as _WSGIServer
-    except ImportError:
-        logger.warning("cheroot is not installed — falling back to the Flask development "
-                       "server. Run: pip install -r requirements.txt")
-        wsgi_app.run(host='0.0.0.0', port=port, debug=False)
-        return
-
-    server = _WSGIServer(('0.0.0.0', port), wsgi_app,
-                         numthreads=CHEROOT_THREADS,
-                         request_queue_size=CHEROOT_QUEUE,
-                         server_name='mysterium-toolkit')
-
-    if HTTPS_ENABLED:
-        cert_path, key_path = Path(TLS_CERT), Path(TLS_KEY)
-        if not cert_path.exists() or not key_path.exists():
-            logger.error(
-                f"https_enabled is true but the certificate is missing "
-                f"({TLS_CERT} / {TLS_KEY}). Starting over plain HTTP instead. "
-                f"Re-run setup.sh to generate a certificate."
-            )
-        else:
-            from cheroot.ssl.builtin import BuiltinSSLAdapter
-            server.ssl_adapter = BuiltinSSLAdapter(str(cert_path), str(key_path))
-            logger.info(f"TLS enabled — serving HTTPS using {TLS_CERT}")
-
-    try:
-        server.safe_start()
-    except KeyboardInterrupt:
-        server.stop()
