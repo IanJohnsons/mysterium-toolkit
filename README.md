@@ -1,6 +1,6 @@
 # Mysterium Node Toolkit
 
-![Version](https://img.shields.io/badge/version-1.4.1-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Version](https://img.shields.io/badge/version-1.4.2-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 
 A professional monitoring and management dashboard for [Mysterium Network](https://mysterium.network) VPN node operators. Runs on your own machine — no cloud account, no telemetry, no analytics. Your session history, earnings records and consumer data live in local SQLite files and are never transmitted anywhere. A small number of public APIs are contacted for price conversion, node quality and update checks — see [Privacy and outbound connections](#privacy-and-outbound-connections).
 
@@ -1017,7 +1017,7 @@ This table applies when the toolkit runs on the node machine (`toolkit_mode=loca
 | Port | Protocol | Service |
 |------|----------|---------|
 | 5000 | TCP | Toolkit dashboard |
-| 10000–60000 | UDP | Mysterium P2P / NAT hole punching (matches the node's `udp.ports` default of `10000:60000`) |
+| 10000–60000 | UDP | Mysterium P2P / NAT hole punching. Setup reads `udp.ports` from the node's `config.toml` and opens that exact range; `10000:60000` is the node default and the fallback when no config is found. If you change `udp.ports`, re-run setup so the firewall follows — a node listening on ports the firewall blocks fails inbound connections silently |
 
 **Not opened, by design:**
 

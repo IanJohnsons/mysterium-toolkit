@@ -104,11 +104,39 @@ for _dbname in earnings_history.db sessions_history.db traffic_history.db qualit
 done
 [ "$_DB_MIGRATED" -gt 0 ] && echo -e "  ${GREEN}✓ Database migration complete ($_DB_MIGRATED files)${NC}"
 
-# ── Fix ownership on config/ — git pull runs as root and can make DB files root-owned ──
+# ── Fix ownership — git pull and sudo migrations can leave files root-owned ──
+# v1.4.2: this used to cover config/ only. The databases moved to
+# backend/databases/ in v1.2.28, and on at least one install a sudo migration
+# left them owned by root while the service ran as a normal user. SQLite could
+# not write, the database modules swallowed the error, and three databases
+# recorded nothing for six weeks without a single visible warning.
 _REAL_USER="${SUDO_USER:-$USER}"
 if [ "$_REAL_USER" != "root" ]; then
-[ "$(stat -c '%U' "$TOOLKIT_DIR/config" 2>/dev/null)" = "root" ] && $SUDO chown -R "$_REAL_USER:$_REAL_USER" "$TOOLKIT_DIR/config/" 2>/dev/null || true
-    echo -e "  ${GREEN}✓ config/ ownership corrected → $_REAL_USER${NC}"
+    for _d in "$TOOLKIT_DIR/config" "$TOOLKIT_DIR/backend"; do
+        if [ -d "$_d" ]; then
+            _bad=$(find "$_d" -user root -print -quit 2>/dev/null)
+            if [ -n "$_bad" ]; then
+                $SUDO chown -R "$_REAL_USER:$_REAL_USER" "$_d" 2>/dev/null || true
+                echo -e "  ${GREEN}✓ $(basename "$_d")/ ownership corrected → $_REAL_USER${NC}"
+            fi
+        fi
+    done
+
+    # Verify the databases are writable now — a database the service cannot write
+    # to is a silent failure, so surface it here where the operator will see it.
+    _DBDIR="$TOOLKIT_DIR/backend/databases"
+    if [ -d "$_DBDIR" ]; then
+        _unwritable=""
+        for _db in "$_DBDIR"/*.db; do
+            [ -e "$_db" ] || continue
+            $SUDO -u "$_REAL_USER" test -w "$_db" 2>/dev/null || _unwritable="$_unwritable $(basename "$_db")"
+        done
+        if [ -n "$_unwritable" ]; then
+            echo -e "  ${RED}✗ Not writable by $_REAL_USER:$_unwritable${NC}"
+            echo -e "  ${DIM}    These databases will silently record nothing.${NC}"
+            echo -e "  ${DIM}    Fix with: sudo chown -R $_REAL_USER:$_REAL_USER $_DBDIR${NC}"
+        fi
+    fi
 fi
 
 # ── Add data_retention defaults to setup.json if missing ─────────────────────

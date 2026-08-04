@@ -1108,8 +1108,32 @@ else:
 " 2>/dev/null || echo "local")
 
         if [ "$TOOLKIT_MODE" = "local" ]; then
-            _open_range 10000 60000 udp  # P2P / NAT hole punching (matches node's udp.ports default of 10000:60000)
-            echo -e "  ${GREEN}✓ Mysterium P2P ports configured (10000-60000/udp)${NC}"
+            # v1.4.2: read the range the node actually listens on instead of
+            # assuming its default. An operator who sets udp.ports to 10000:65000
+            # previously ended up with 5000 ports open on the node but blocked by
+            # ufw — inbound connections failed and p2p latency went through the
+            # roof, with nothing anywhere reporting it.
+            _UDP_FROM=10000
+            _UDP_TO=60000
+            _NODE_CFG=""
+            for _c in /etc/mysterium-node/config.toml /var/lib/mysterium-node/config.toml; do
+                [ -r "$_c" ] && _NODE_CFG="$_c" && break
+            done
+            if [ -n "$_NODE_CFG" ]; then
+                _RANGE=$(grep -A5 '^\[udp\]' "$_NODE_CFG" 2>/dev/null \
+                         | grep -m1 '^[[:space:]]*ports' \
+                         | sed 's/.*=//' | tr -d ' "'"'")
+                if echo "$_RANGE" | grep -qE '^[0-9]+:[0-9]+$'; then
+                    _UDP_FROM=${_RANGE%%:*}
+                    _UDP_TO=${_RANGE##*:}
+                    echo -e "  ${DIM}  Read udp.ports from $_NODE_CFG: ${_UDP_FROM}-${_UDP_TO}${NC}"
+                fi
+            else
+                echo -e "  ${DIM}  Node config not found — using the node default range${NC}"
+            fi
+
+            _open_range "$_UDP_FROM" "$_UDP_TO" udp  # P2P / NAT hole punching
+            echo -e "  ${GREEN}✓ Mysterium P2P ports configured (${_UDP_FROM}-${_UDP_TO}/udp)${NC}"
             echo -e "  ${DIM}  Note: the Node UI (4449/tcp) is intentionally NOT opened to the internet —${NC}"
             echo -e "  ${DIM}  it stays reachable on localhost/LAN. OpenVPN (1194) and WireGuard (51820)${NC}"
             echo -e "  ${DIM}  are NOT needed — Mysterium uses WireGuard over the UDP range via NAT hole punching.${NC}"
@@ -1656,7 +1680,12 @@ else
             _F2B_JAILD="/etc/fail2ban/jail.d/mysterium-toolkit.conf"
             _F2B_LOCAL="/etc/fail2ban/jail.local"
             _F2B_FILTER="/etc/fail2ban/filter.d/mysterium-dashboard.conf"
-            tee "$_F2B_FILTER" > /dev/null << 'F2B_FILTER_EOF'
+            # v1.4.2: this used to run without $SUDO. When setup ran as a normal
+            # user the write to /etc/fail2ban/filter.d/ failed with permission
+            # denied, the error went to stderr, and setup still reported success.
+            # fail2ban then skipped the jail entirely ("Unable to read the filter")
+            # and the dashboard showed no protection and no warning.
+            $SUDO tee "$_F2B_FILTER" > /dev/null << 'F2B_FILTER_EOF'
 [Definition]
 failregex = ^<HOST> -.*".*" 401
 ignoreregex =
@@ -1689,7 +1718,33 @@ F2B_FILTER_EOF
 
             systemctl enable fail2ban >/dev/null 2>&1 || true
             systemctl restart fail2ban >/dev/null 2>&1 || true
-            echo -e "  ${GREEN}✓ fail2ban configured — mysterium-dashboard jail active${NC}"
+
+            # v1.4.2: verify instead of assuming. Both files must exist and the
+            # jail must actually be loaded — fail2ban skips a jail whose filter is
+            # missing and reports that only in its own log, which nobody reads.
+            sleep 2
+            _F2B_OK=1
+            if [ ! -f "$_F2B_FILTER" ]; then
+                echo -e "  ${RED}✗ filter file was not created: $_F2B_FILTER${NC}"
+                _F2B_OK=0
+            fi
+            if [ ! -f "$_F2B_JAILD" ]; then
+                echo -e "  ${RED}✗ jail file was not created: $_F2B_JAILD${NC}"
+                _F2B_OK=0
+            fi
+            if [ "$_F2B_OK" = "1" ]; then
+                if $SUDO fail2ban-client status 2>/dev/null | grep -q "mysterium-dashboard"; then
+                    echo -e "  ${GREEN}✓ fail2ban configured — mysterium-dashboard jail active${NC}"
+                else
+                    echo -e "  ${RED}✗ jail files written but fail2ban did not load the jail${NC}"
+                    echo -e "  ${DIM}    Check: sudo journalctl -u fail2ban -n 20${NC}"
+                    _F2B_OK=0
+                fi
+            fi
+            if [ "$_F2B_OK" = "0" ]; then
+                echo -e "  ${DIM}    The dashboard is running WITHOUT fail2ban protection.${NC}"
+                echo -e "  ${DIM}    Re-run setup with sudo, or configure it later via ./start.sh${NC}"
+            fi
         else
             echo -e "  ${RED}✗ fail2ban installation failed${NC}"
         fi

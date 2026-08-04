@@ -16,6 +16,7 @@ import subprocess
 import requests
 import base64
 import logging
+from logging.handlers import RotatingFileHandler
 from datetime import datetime, timezone, timedelta
 from functools import wraps
 from collections import deque
@@ -81,11 +82,32 @@ class VpnTrafficSnapshot:
 # ============ LOGGING SETUP ============
 _log_level_str = os.getenv('LOG_LEVEL', 'INFO').upper()
 _log_level = getattr(logging, _log_level_str, logging.INFO)
+
+# v1.4.2: rotate the log. A plain FileHandler grows without bound — one install
+# reached 154 MB, which fail2ban then had to scan on every pass. 10 MB x 3
+# backups caps the logs directory at roughly 40 MB.
+_LOG_MAX_BYTES = int(os.getenv('LOG_MAX_BYTES', 10 * 1024 * 1024))
+_LOG_BACKUP_COUNT = int(os.getenv('LOG_BACKUP_COUNT', 3))
+Path('logs').mkdir(exist_ok=True)
+
+# One-time cleanup for installs that predate rotation: an existing oversized log
+# is rotated aside immediately rather than being appended to for another month.
+try:
+    _existing = Path('logs/backend.log')
+    if _existing.exists() and _existing.stat().st_size > _LOG_MAX_BYTES:
+        _existing.replace(Path('logs/backend.log.oversized'))
+except Exception:
+    pass
+
+_file_handler = RotatingFileHandler(
+    'logs/backend.log', maxBytes=_LOG_MAX_BYTES,
+    backupCount=_LOG_BACKUP_COUNT, encoding='utf-8')
+
 logging.basicConfig(
     level=_log_level,
     format='%(asctime)s %(levelname)s %(name)s: %(message)s',
     handlers=[
-        logging.FileHandler('logs/backend.log'),
+        _file_handler,
         logging.StreamHandler()
     ]
 )
@@ -799,6 +821,46 @@ TIER_DISCOVERY_INTERVAL = 600   # 10 minutes — same cadence as slow tier
 _discovery_cache = {}
 _discovery_last = 0
 _discovery_wallet = ''  # Track which wallet the cache belongs to
+
+# ── Database write failure tracking (v1.4.2) ─────────────────────────────────
+# Write failures used to be logged at DEBUG level and swallowed. On one install a
+# sudo migration left backend/databases/ owned by root while the service ran as a
+# normal user: three databases stopped recording for six weeks and nothing in the
+# dashboard showed it. Failures are now logged as warnings (once per database, to
+# avoid flooding the log) and exposed through /api/database-health.
+_db_write_failures = {}          # {db_name: {'error', 'first_seen', 'last_seen', 'count'}}
+_db_write_lock = Lock()
+
+
+def record_db_failure(db_name, exc):
+    """Register a database write failure and warn once per database."""
+    msg = str(exc)[:200]
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with _db_write_lock:
+        entry = _db_write_failures.get(db_name)
+        if entry is None:
+            _db_write_failures[db_name] = {
+                'error': msg, 'first_seen': now_iso, 'last_seen': now_iso, 'count': 1,
+            }
+            hint = ''
+            low = msg.lower()
+            if 'readonly' in low or 'permission' in low or 'unable to open' in low:
+                hint = (" — this usually means the database file is not writable by the "
+                        "service user. Check ownership of backend/databases/")
+            logger.warning(f"{db_name} write failed: {msg}{hint}")
+        else:
+            entry['error'] = msg
+            entry['last_seen'] = now_iso
+            entry['count'] += 1
+
+
+def record_db_success(db_name):
+    """Clear a previously recorded failure once writes succeed again."""
+    if not _db_write_failures:
+        return
+    with _db_write_lock:
+        if _db_write_failures.pop(db_name, None):
+            logger.info(f"{db_name} is writable again")
 _local_node_id = ''         # Cached local node identity for DB writes (set by slow tier)
 _identity_cache = {'address': '', 'ts': 0}  # Cache identity to reduce /identities API calls
 
@@ -3067,8 +3129,9 @@ class MetricsCollector:
             if ServiceEventsDB:
                 try:
                     ServiceEventsDB.record_services_snapshot(services, node_id=_local_node_id)
+                    record_db_success('ServiceEventsDB')
                 except Exception as e:
-                    logger.debug(f"ServiceEventsDB record failed: {e}")
+                    record_db_failure('ServiceEventsDB', e)
             return {
                 'items': services,
                 'total': len(services),
@@ -4525,11 +4588,14 @@ class MetricsCollector:
                             'sys_speed_total': _perf.get('sys_speed_total'),
                             'latency_ms':      _perf.get('latency_ms'),
                         }
-                        SystemMetricsDB.record(resources_data, node_id=_local_node_id,
-                                               performance_data=_perf_ext)
+                        if SystemMetricsDB.record(resources_data, node_id=_local_node_id,
+                                                  performance_data=_perf_ext) is False:
+                            record_db_failure('SystemMetricsDB', 'write returned False')
+                        else:
+                            record_db_success('SystemMetricsDB')
                         MetricsCollector._metrics_db_last = _now
                     except Exception as e:
-                        logger.debug(f"SystemMetricsDB record failed: {e}")
+                        record_db_failure('SystemMetricsDB', e)
             return resources_data
         except Exception as e:
             logger.warning(f"Error fetching resources: {e}")
@@ -5267,9 +5333,15 @@ class MetricsCollector:
                     if QualityDB and quality_data.get('available'):
                         try:
                             nat_type = node_status_data.get('nat_type', '') if node_status_data else ''
-                            QualityDB.record(quality_data, node_id=identity, wallet_address=wallet, nat_type=nat_type)
+                            # record() swallows its own exceptions and returns
+                            # False, so the return value is the only signal here.
+                            if QualityDB.record(quality_data, node_id=identity,
+                                                wallet_address=wallet, nat_type=nat_type):
+                                record_db_success('QualityDB')
+                            else:
+                                record_db_failure('QualityDB', 'write returned False')
                         except Exception as e:
-                            logger.debug(f"QualityDB record failed: {e}")
+                            record_db_failure('QualityDB', e)
 
                     # Periodic country backfill — use ALL sessions in SessionStore, not just page 1
                     # This catches countries from sessions that were on later pages
@@ -6219,6 +6291,67 @@ def serve_setup_config():
         return jsonify({'error': 'No config found — run setup wizard first'}), 404
 
 
+@app.route('/api/database-health', methods=['GET'])
+@require_auth
+def database_health():
+    """Report whether each database file is actually writable (v1.4.2).
+
+    Checking the files directly catches the failure that motivated this endpoint:
+    a sudo migration left backend/databases/ owned by root while the service ran
+    as a normal user, so three databases silently stopped recording for six weeks.
+    The database modules catch their own exceptions and return False, so a caller
+    that only watches for exceptions never learns anything — but an unwritable
+    file is visible from the filesystem regardless.
+    """
+    db_dir = Path(__file__).parent / 'databases'
+    databases = []
+    problems = 0
+
+    try:
+        service_uid = os.getuid()
+    except Exception:
+        service_uid = None
+
+    for db_file in sorted(db_dir.glob('*.db')):
+        entry = {'name': db_file.name, 'writable': False,
+                 'size_bytes': 0, 'last_modified': None, 'error': None}
+        try:
+            st = db_file.stat()
+            entry['size_bytes'] = st.st_size
+            entry['last_modified'] = datetime.fromtimestamp(
+                st.st_mtime, timezone.utc).isoformat()
+            entry['writable'] = os.access(db_file, os.W_OK)
+            if not entry['writable']:
+                problems += 1
+                entry['error'] = (
+                    f"not writable by the service user (uid {service_uid}); "
+                    f"file is owned by uid {st.st_uid}. "
+                    f"Fix with: sudo chown -R $USER:$USER backend/"
+                )
+        except Exception as e:
+            problems += 1
+            entry['error'] = str(e)[:200]
+        databases.append(entry)
+
+    # The directory itself must be writable too — SQLite creates journal and WAL
+    # files alongside the database.
+    dir_writable = os.access(db_dir, os.W_OK) if db_dir.exists() else False
+    if not dir_writable:
+        problems += 1
+
+    with _db_write_lock:
+        failures = {k: dict(v) for k, v in _db_write_failures.items()}
+
+    return jsonify({
+        'healthy': problems == 0 and not failures,
+        'directory': str(db_dir),
+        'directory_writable': dir_writable,
+        'databases': databases,
+        'write_failures': failures,
+        'problem_count': problems + len(failures),
+    }), 200
+
+
 @app.route('/api/version', methods=['GET'])
 def get_version():
     """Return toolkit version — no auth required."""
@@ -6862,6 +6995,87 @@ def _f2b_read_conf(path):
     for section in cp.sections():
         result[section] = dict(cp[section])
     return result
+
+
+def _f2b_health():
+    """Distinguish between fail2ban failure modes (v1.4.2).
+
+    _f2b_all_jails() returns an empty dict when fail2ban-client fails, which is
+    indistinguishable from a working install with no jails. On one node fail2ban
+    was dead for six hours and the toolkit jail had never been written at all,
+    and the dashboard showed the same empty list it shows when everything is fine.
+
+    Returns a status of: not_installed, not_running, filter_missing,
+    jail_missing, jail_not_loaded, or ok.
+    """
+    filter_path = Path('/etc/fail2ban/filter.d/mysterium-dashboard.conf')
+    jail_path = Path('/etc/fail2ban/jail.d/mysterium-toolkit.conf')
+
+    result = {
+        'status': 'unknown', 'healthy': False, 'message': '',
+        'service_running': False,
+        'filter_exists': filter_path.exists(),
+        'jail_file_exists': jail_path.exists(),
+        'jail_loaded': False,
+        'active_jails': [],
+    }
+
+    if not shutil.which('fail2ban-client'):
+        result.update(status='not_installed',
+                      message='fail2ban is not installed — the dashboard has no brute-force protection')
+        return result
+
+    out, rc = None, 1
+    for pfx in ([], ['sudo', '-n']):
+        try:
+            r = subprocess.run(pfx + ['fail2ban-client', 'status'],
+                               capture_output=True, timeout=5, text=True)
+            rc, out = r.returncode, (r.stdout or '') + (r.stderr or '')
+            if rc == 0:
+                break
+        except Exception as e:
+            out = str(e)
+
+    if rc != 0:
+        result.update(
+            status='not_running',
+            message='fail2ban is installed but not running — the dashboard is unprotected. '
+                    'Check: sudo systemctl status fail2ban')
+        if out and 'socket' in out.lower():
+            result['detail'] = 'fail2ban-client cannot reach the server socket'
+        return result
+
+    result['service_running'] = True
+    for line in out.splitlines():
+        if 'Jail list:' in line:
+            result['active_jails'] = [n.strip() for n in
+                                      line.split(':', 1)[1].strip().split(',') if n.strip()]
+            break
+
+    result['jail_loaded'] = 'mysterium-dashboard' in result['active_jails']
+
+    if not result['filter_exists']:
+        result.update(status='filter_missing',
+                      message='The mysterium-dashboard filter is missing, so fail2ban skips the jail. '
+                              'Re-run setup with sudo to recreate it.')
+    elif not result['jail_file_exists']:
+        result.update(status='jail_missing',
+                      message='The toolkit jail file is missing. Re-run setup to recreate it.')
+    elif not result['jail_loaded']:
+        result.update(status='jail_not_loaded',
+                      message='The jail files exist but fail2ban has not loaded the jail. '
+                              'Check: sudo journalctl -u fail2ban -n 20')
+    else:
+        result.update(status='ok', healthy=True,
+                      message='fail2ban is running and the mysterium-dashboard jail is active')
+
+    return result
+
+
+@app.route('/api/fail2ban-health', methods=['GET'])
+@require_auth
+def fail2ban_health():
+    return jsonify(_f2b_health()), 200
 
 
 def _f2b_all_jails():
