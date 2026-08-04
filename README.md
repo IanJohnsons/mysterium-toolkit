@@ -1,8 +1,8 @@
 # Mysterium Node Toolkit
 
-![Version](https://img.shields.io/badge/version-1.3.13-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Version](https://img.shields.io/badge/version-1.4.0-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 
-A professional monitoring and management dashboard for [Mysterium Network](https://mysterium.network) VPN node operators. Runs fully local on your node machine — no cloud account, no third-party service, no data leaving your server.
+A professional monitoring and management dashboard for [Mysterium Network](https://mysterium.network) VPN node operators. Runs on your own machine — no cloud account, no telemetry, no analytics. Your session history, earnings records and consumer data live in local SQLite files and are never transmitted anywhere. A small number of public APIs are contacted for price conversion, node quality and update checks — see [Privacy and outbound connections](#privacy-and-outbound-connections).
 
 **Author:** Ian Johnsons — [github.com/IanJohnsons](https://github.com/IanJohnsons)  
 **License:** AGPL-3.0 — free to use and modify, modifications must be open source, not for commercial use without permission  
@@ -800,6 +800,10 @@ sudo journalctl -u mysterium-toolkit -f
 
 Each node runs its own toolkit backend. The fleet master reads data from each node over HTTP using its API key. Data is never mixed between nodes.
 
+Run the master on the machine with a stable public address — usually a VPS. Nodes at home sit behind a router and a changing IP address, which makes them awkward to reach from outside.
+
+**Transport security:** the master polls each node at the address in `toolkit_url`. When that address is `http://` and the traffic crosses the internet, the node's data and its API key are sent in clear text. Either enable [TLS](#tls-https), or place the fleet on a private network such as WireGuard or Tailscale.
+
 ### Setup
 
 1. Install the toolkit on each node — Type 1 for full local access, Type 3 for lightweight remote-only
@@ -918,6 +922,27 @@ TequilAPI is on **port 4449**. The `-p 4449:4449` flag exposes it to the host �
 
 ---
 
+## Privacy and outbound connections
+
+The toolkit sends no telemetry and reports nothing back to its author. There is no account, no cloud backend and no analytics. Everything the dashboard shows is computed on your own machine.
+
+It does contact a small number of public APIs. All of them are reached over HTTPS. Two of them receive identifiers that are already public on the Mysterium network and on the Polygon blockchain:
+
+| Destination | What is sent | Why |
+|---|---|---|
+| `discovery.mysterium.network` | Your provider ID | Node quality score, latency and bandwidth |
+| `api.etherscan.io` | Your beneficiary address and your own API key | On-chain MYST balance and settlement history |
+| `api.coinpaprika.com` | Nothing but your IP address | MYST price in USD |
+| `api.frankfurter.dev` | Nothing but your IP address | USD to EUR conversion |
+| `raw.githubusercontent.com` | Nothing but your IP address | Toolkit update check |
+| `api.github.com` | Nothing but your IP address | Mysterium node release check |
+
+Your provider ID is published by the node itself to the Mysterium discovery service, and your beneficiary address is visible on the Polygon blockchain. Neither is a secret. They are listed here so you know exactly what leaves the machine.
+
+Never sent anywhere: session records, consumer addresses, earnings history, traffic figures, system metrics, logs, configuration files and API keys.
+
+---
+
 ## Permissions
 
 The backend always runs as your normal user, never as root. During setup, `setup.sh` writes `/etc/sudoers.d/mysterium-toolkit` with narrow passwordless rules. These never expire.
@@ -1008,6 +1033,56 @@ Rules are persisted automatically:
 - `nftables` → written back to `/etc/nftables.conf`
 - `firewalld` → `--permanent` on all rules, then `--reload`
 - `ufw` → `ufw allow`; enabled automatically if inactive
+
+---
+
+## TLS (HTTPS)
+
+By default the dashboard is served over plain HTTP. On a LAN, or through an SSH tunnel, that is fine. If you reach the dashboard over the internet, or run a fleet where the master polls nodes across the internet, that traffic — including your API key — travels in clear text.
+
+Enable TLS during setup (step 12.55), or afterwards by editing `config/setup.json`:
+
+```json
+{
+  "https_enabled": true,
+  "tls_cert": "config/tls/cert.pem",
+  "tls_key": "config/tls/key.pem"
+}
+```
+
+Setup generates a self-signed certificate locally. No domain name, no Let's Encrypt, no certbot and no port 80 are required. Your browser will warn about the certificate the first time — that is expected for a self-signed certificate, and you can accept it permanently.
+
+### Fleet over TLS
+
+Copy each node's `config/tls/cert.pem` to the master and point that node's entry at it:
+
+```json
+{
+  "id": "laptop",
+  "toolkit_url": "https://home.example.com:5000",
+  "toolkit_api_key": "...",
+  "tls_cert": "config/tls/peers/laptop.pem"
+}
+```
+
+This pins the connection to that one certificate, which is stronger than validating against a public certificate authority.
+
+A mixed fleet is supported. Some nodes may use HTTPS while others stay on HTTP, and nothing needs to change for nodes you leave alone.
+
+### Nodes whose IP address changes
+
+A certificate is only valid for the names and addresses it was issued for. If a node sits behind a home connection and the provider changes the IP address — after an outage or a line reset, for example — the certificate no longer matches and the master can no longer reach that node. Note that this second part is already true without TLS: `nodes.json` holds the old address either way.
+
+Two ways around it:
+
+- Give the node a hostname that always points to it — a DNS record you control, or a dynamic DNS name — and enter it during setup. A certificate issued for a name keeps working when the address changes. This is the recommended option.
+- Set `"tls_verify": false` for that node in `nodes.json`. Traffic stays encrypted but the certificate is no longer checked, which means a man-in-the-middle attack becomes possible. Use this only on a network you trust.
+
+### Web server
+
+From v1.4.0 the dashboard is served by [cheroot](https://cheroot.cherrypy.dev/), a small production WSGI server, instead of Flask's built-in development server. It is a single process with a thread pool, so memory use is essentially unchanged (about 1 MB more), and it keeps connections alive rather than closing them after every request. Without keep-alive, every request over HTTPS would pay for a fresh TLS handshake: opening the dashboard measured roughly 360 ms against 35 ms with keep-alive.
+
+Thread count defaults to 30, or 10 when `pi_mode` is enabled. Override with `server_threads` in `config/setup.json` if you have reason to.
 
 ---
 

@@ -26,6 +26,17 @@
 //                 Omit this for live-only data (no history, no resources)
 // toolkit_api_key The dashboard_api_key from that node's config/setup.json
 //
+// ── TLS fields (optional, v1.4.0) ────────────────────────────────────────────
+// tls_cert        Path to a copy of that node's config/tls/cert.pem. Pins the
+//                 connection to that one certificate, which is stronger than
+//                 normal certificate authority validation.
+//                 Only used when toolkit_url starts with https://
+// tls_verify      Set to false to encrypt without checking the certificate.
+//                 A man-in-the-middle attack is then possible, so use this only
+//                 on a network you trust. Defaults to true.
+//
+// A mixed fleet is fine: some nodes on https://, others still on http://
+//
 // ── How to find the API key on a remote node ─────────────────────────────────
 // On the remote node machine, open:
 //   /path/to/mysterium-toolkit/config/setup.json

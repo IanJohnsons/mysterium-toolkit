@@ -1698,6 +1698,141 @@ F2B_FILTER_EOF
     fi
 fi
 
+# ============ STEP 12.55: OPTIONAL TLS ============
+echo
+echo "Step 12.55: TLS / HTTPS (optional)..."
+echo -e "  By default the dashboard is served over plain HTTP. On a LAN that is fine."
+echo -e "  If you reach the dashboard over the internet, or run a fleet where the"
+echo -e "  master polls nodes across the internet, that traffic — including your"
+echo -e "  API key — travels in clear text."
+echo -e "  ${DIM}  A self-signed certificate is generated locally. No domain name,${NC}"
+echo -e "  ${DIM}  no Let's Encrypt, no certbot and no port 80 are required.${NC}"
+echo
+printf "  Enable TLS (HTTPS) for the dashboard? [y/N]: "
+read -r _tls_answer </dev/tty
+if [[ "$_tls_answer" =~ ^[Yy]$ ]]; then
+    _TLS_DIR="$TOOLKIT_DIR/config/tls"
+    _TLS_CERT="$_TLS_DIR/cert.pem"
+    _TLS_KEY="$_TLS_DIR/key.pem"
+    mkdir -p "$_TLS_DIR"
+
+    if [ -f "$_TLS_CERT" ] && [ -f "$_TLS_KEY" ]; then
+        echo -e "  ${CYAN}Existing certificate found — keeping it${NC}"
+        echo -e "  ${DIM}  Delete $_TLS_CERT to generate a new one${NC}"
+    else
+        # Collect the names and addresses this certificate must be valid for.
+        # A certificate only matches what is listed here, so a node reached by a
+        # bare IP address stops matching when the provider changes that address.
+        _LAN_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+        _PUB_IP=$(curl -sf --max-time 5 https://api.ipify.org 2>/dev/null || echo "")
+        _SAN="IP:127.0.0.1,DNS:localhost"
+        [ -n "$_LAN_IP" ] && _SAN="$_SAN,IP:$_LAN_IP"
+        [ -n "$_PUB_IP" ] && _SAN="$_SAN,IP:$_PUB_IP"
+
+        echo
+        echo -e "  ${DIM}If this machine has a hostname that always points to it (a DNS${NC}"
+        echo -e "  ${DIM}record or a dynamic DNS name), enter it. A certificate issued for${NC}"
+        echo -e "  ${DIM}a name keeps working when your provider changes your IP address;${NC}"
+        echo -e "  ${DIM}one issued for an address does not. Leave empty to skip.${NC}"
+        printf "  Hostname (optional): "
+        read -r _tls_host </dev/tty
+        [ -n "$_tls_host" ] && _SAN="$_SAN,DNS:$_tls_host"
+
+        echo -e "  Generating certificate for: ${CYAN}$_SAN${NC}"
+
+        if command -v openssl &>/dev/null; then
+            openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+                -keyout "$_TLS_KEY" -out "$_TLS_CERT" \
+                -subj "/CN=mysterium-toolkit" \
+                -addext "subjectAltName=$_SAN" \
+                -addext "basicConstraints=critical,CA:FALSE" \
+                -addext "keyUsage=critical,digitalSignature,keyEncipherment" \
+                -addext "extendedKeyUsage=serverAuth" >/dev/null 2>&1 \
+                && echo -e "  ${GREEN}✓ Certificate generated with openssl${NC}" \
+                || echo -e "  ${RED}✗ openssl failed${NC}"
+        else
+            # Minimal images (some Alpine and LXC templates) ship without the
+            # openssl CLI. Python can do the same job when cryptography is present.
+            echo -e "  ${DIM}  openssl not found — using Python instead${NC}"
+            "$TOOLKIT_DIR/venv/bin/python3" - "$_TLS_CERT" "$_TLS_KEY" "$_SAN" << 'TLS_PY_EOF'
+import sys, datetime, ipaddress
+try:
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+except ImportError:
+    sys.stderr.write("cryptography is not installed\n")
+    sys.exit(1)
+
+cert_path, key_path, san_str = sys.argv[1], sys.argv[2], sys.argv[3]
+alt = []
+for item in san_str.split(','):
+    item = item.strip()
+    if item.startswith('IP:'):
+        try:
+            alt.append(x509.IPAddress(ipaddress.ip_address(item[3:])))
+        except ValueError:
+            pass
+    elif item.startswith('DNS:'):
+        alt.append(x509.DNSName(item[4:]))
+
+key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "mysterium-toolkit")])
+now = datetime.datetime.now(datetime.timezone.utc)
+cert = (x509.CertificateBuilder()
+        .subject_name(subject).issuer_name(subject)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=1))
+        .not_valid_after(now + datetime.timedelta(days=3650))
+        .add_extension(x509.SubjectAlternativeName(alt), critical=False)
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .sign(key, hashes.SHA256()))
+
+with open(key_path, 'wb') as f:
+    f.write(key.private_bytes(serialization.Encoding.PEM,
+                              serialization.PrivateFormat.TraditionalOpenSSL,
+                              serialization.NoEncryption()))
+with open(cert_path, 'wb') as f:
+    f.write(cert.public_bytes(serialization.Encoding.PEM))
+TLS_PY_EOF
+            if [ -f "$_TLS_CERT" ]; then
+                echo -e "  ${GREEN}✓ Certificate generated with Python${NC}"
+            else
+                echo -e "  ${RED}✗ Could not generate a certificate.${NC}"
+                echo -e "  ${DIM}  Install openssl, or: venv/bin/pip install cryptography${NC}"
+            fi
+        fi
+    fi
+
+    if [ -f "$_TLS_CERT" ] && [ -f "$_TLS_KEY" ]; then
+        chmod 600 "$_TLS_KEY"
+        chmod 644 "$_TLS_CERT"
+        [ -n "$_REAL_USER" ] && chown -R "$_REAL_USER:$_REAL_USER" "$_TLS_DIR" 2>/dev/null || true
+
+        "$TOOLKIT_DIR/venv/bin/python3" - << 'TLS_CFG_EOF'
+import json, pathlib
+p = pathlib.Path('config/setup.json')
+d = json.loads(p.read_text()) if p.exists() else {}
+d['https_enabled'] = True
+d['tls_cert'] = 'config/tls/cert.pem'
+d['tls_key'] = 'config/tls/key.pem'
+p.write_text(json.dumps(d, indent=2))
+print("  setup.json updated: https_enabled = true")
+TLS_CFG_EOF
+
+        echo -e "  ${GREEN}✓ TLS enabled${NC}"
+        echo -e "  ${DIM}  Dashboard: https://localhost:${DASHBOARD_PORT:-5000}${NC}"
+        echo -e "  ${DIM}  Your browser will warn about the certificate once — that is${NC}"
+        echo -e "  ${DIM}  expected for a self-signed certificate; accept it permanently.${NC}"
+        echo -e "  ${DIM}  Fleet master: copy config/tls/cert.pem to the master and point${NC}"
+        echo -e "  ${DIM}  this node's tls_cert at it in nodes.json.${NC}"
+    fi
+else
+    echo -e "  ${DIM}  Skipped — dashboard stays on plain HTTP${NC}"
+fi
+
 # ============ STEP 12.6: OPTIONAL TAILSCALE ============
 echo
 echo "Step 12.6: Tailscale (optional private access)..."
