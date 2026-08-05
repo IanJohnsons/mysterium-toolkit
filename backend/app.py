@@ -885,6 +885,28 @@ _tequila_cache = {}          # {endpoint: response_data}
 _tequila_cache_time = 0
 
 # ============ AUTHENTICATION ============
+def _tokens_to_myst(value):
+    """Convert a stored token amount to MYST (v1.4.4).
+
+    sessions.tokens and daily_totals.tokens are TEXT columns: wei exceeds SQLite's
+    signed 64-bit INTEGER range, so the value arrives as a string. Anything doing
+    arithmetic on a row read straight from the database must go through here —
+    `row['tokens'] / 1e18` raises TypeError on a string.
+    """
+    try:
+        return int(value or 0) / 1e18
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _tokens_to_int(value):
+    """Return a stored token amount as an exact integer in wei (v1.4.4)."""
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def require_auth(f):
     """Decorator for API authentication.
     Local requests (127.0.0.1, ::1) always bypass auth — this is a local monitoring tool.
@@ -3644,7 +3666,8 @@ class MetricsCollector:
             for row in cm_db_rows:
                 cid = row.get('consumer_id', '') or 'unknown'
                 data_mb = ((row.get('bytes_sent', 0) or 0) + (row.get('bytes_received', 0) or 0)) / (1024 * 1024)
-                earn = (row.get('tokens', 0) or 0) / 1e18
+                # tokens is TEXT since v1.4.4 — convert before arithmetic
+                earn = _tokens_to_myst(row.get('tokens'))
                 _cm_add(cid, row.get('consumer_country', '') or '', data_mb, earn,
                         row.get('started_at', '') or '', row.get('service_type', '') or '',
                         row.get('id') in live_active_ids)
@@ -8953,7 +8976,8 @@ def consumers_top():
     for row in rows:
         cid = row.get('consumer_id', '') or 'unknown'
         data_mb = ((row.get('bytes_sent', 0) or 0) + (row.get('bytes_received', 0) or 0)) / (1024 * 1024)
-        earn = (row.get('tokens', 0) or 0) / 1e18
+        # tokens is TEXT since v1.4.4 — convert before arithmetic
+        earn = _tokens_to_myst(row.get('tokens'))
         _add(cid, row.get('consumer_country', '') or '', data_mb, earn,
              row.get('started_at', '') or '', row.get('service_type', '') or '')
 
