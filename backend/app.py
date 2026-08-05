@@ -3735,7 +3735,7 @@ class MetricsCollector:
                 live_ids = {s.get('id') for s in sessions if s.get('id')}
                 for row in db_rows:
                     if row.get('id') not in live_ids:
-                        tokens_wei = row.get('tokens', 0) or 0
+                        tokens_wei = _tokens_to_int(row.get('tokens'))
                         earnings_myst = tokens_wei / 1e18
                         bytes_total = (row.get('bytes_sent', 0) or 0) + (row.get('bytes_received', 0) or 0)
                         db_sessions.append({
@@ -3861,7 +3861,7 @@ class MetricsCollector:
                 if cc not in country_map:
                     country_map[cc] = {'country': cc, 'sessions': 0,
                                        'earnings_myst': 0.0, 'data_mb': 0.0}
-                tokens_wei = row.get('tokens', 0) or 0
+                tokens_wei = _tokens_to_int(row.get('tokens'))
                 bytes_total = (row.get('bytes_sent', 0) or 0) + (row.get('bytes_received', 0) or 0)
                 country_map[cc]['sessions']      += 1
                 country_map[cc]['earnings_myst'] += tokens_wei / 1e18
