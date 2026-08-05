@@ -740,9 +740,19 @@ def _write_daily_integrity_log():
         cur = conn.cursor()
         total_sessions = cur.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
         unique_consumers = cur.execute("SELECT COUNT(DISTINCT consumer_id) FROM sessions").fetchone()[0]
-        tokens_sum = cur.execute("SELECT SUM(CAST(tokens AS REAL)) FROM sessions").fetchone()[0] or 0
+        # v1.4.4: sum exactly in Python. tokens is TEXT (wei exceeds SQLite's
+        # 64-bit INTEGER), and CAST AS REAL loses the low digits of a wei total.
+        tokens_sum = 0
+        for (t,) in cur.execute("SELECT tokens FROM sessions"):
+            try:
+                tokens_sum += int(t or 0)
+            except (TypeError, ValueError):
+                pass
+        # Rows still holding the pre-v1.4.4 clamp value. These are corrected
+        # automatically once the node serves that session again; sessions the node
+        # has already forgotten keep the clamped amount permanently.
         corrupt_rows = cur.execute(
-            "SELECT COUNT(*) FROM sessions WHERE tokens = 9223372036854775807"
+            "SELECT COUNT(*) FROM sessions WHERE CAST(tokens AS TEXT) = '9223372036854775807'"
         ).fetchone()[0]
         oldest = cur.execute("SELECT MIN(started_at) FROM sessions").fetchone()[0]
         conn.close()
@@ -1584,6 +1594,9 @@ class SessionDB:
     _db_path = Path(__file__).parent / 'databases' / 'sessions_history.db'
     _initialized = False
     _lock = Lock()
+    # Set by init() when the v1.4.4 tokens migration runs, so the rollup — which was
+    # aggregated from clamped values — gets rebuilt from the corrected sessions.
+    _tokens_migrated = False
 
     @classmethod
     def _conn(cls):
@@ -1612,7 +1625,7 @@ class SessionDB:
                         duration_secs    INTEGER DEFAULT 0,
                         bytes_sent       INTEGER DEFAULT 0,
                         bytes_received   INTEGER DEFAULT 0,
-                        tokens           INTEGER DEFAULT 0,
+                        tokens           TEXT    DEFAULT '0',
                         consumer_country TEXT DEFAULT '',
                         first_seen       TEXT DEFAULT '',
                         last_seen        TEXT DEFAULT '',
@@ -1634,6 +1647,82 @@ class SessionDB:
                 # Existing rows without provider_id may belong to a different node
                 # that was migrated. Only new sessions get provider_id set.
                 # Analytics uses date filter as fallback for rows without provider_id.
+
+                # v1.4.4: migrate tokens from INTEGER to TEXT.
+                #
+                # The node reports tokens as a Go *big.Int (consumer/session/session.go
+                # and tequilapi/contract/session.go), serialised as a JSON number with
+                # unlimited precision — there is no cap on the node side. SQLite's
+                # INTEGER is signed 64-bit, topping out at 9223372036854775807, which
+                # is only 9.223372 MYST. upsert_sessions clamped incoming values to
+                # that maximum, so every session worth more than ~9.22 MYST was stored
+                # short. Verified against a live node: session a8e09bbb reported
+                # 13779037025053810949 (13.779 MYST) while the database held the clamp
+                # value — 4.556 MYST lost on that one session.
+                #
+                # TEXT stores wei exactly. Clamped rows are corrected automatically by
+                # upsert_sessions as soon as the node serves that session again.
+                try:
+                    cols = conn.execute("PRAGMA table_info(sessions)").fetchall()
+                    tokens_type = next((c[2] for c in cols if c[1] == 'tokens'), '')
+                    if str(tokens_type).upper() != 'TEXT':
+                        clamped = conn.execute(
+                            "SELECT COUNT(*) FROM sessions WHERE tokens = 9223372036854775807"
+                        ).fetchone()[0]
+                        logger.info("SessionDB: migrating tokens column from INTEGER to TEXT "
+                                    f"({clamped} rows currently stuck at the clamp value)")
+                        conn.execute("ALTER TABLE sessions RENAME TO sessions_old_int")
+                        conn.execute("""
+                            CREATE TABLE sessions (
+                                id               TEXT PRIMARY KEY,
+                                consumer_id      TEXT DEFAULT '',
+                                service_type     TEXT DEFAULT '',
+                                status           TEXT DEFAULT '',
+                                started_at       TEXT DEFAULT '',
+                                duration_secs    INTEGER DEFAULT 0,
+                                bytes_sent       INTEGER DEFAULT 0,
+                                bytes_received   INTEGER DEFAULT 0,
+                                tokens           TEXT    DEFAULT '0',
+                                consumer_country TEXT DEFAULT '',
+                                first_seen       TEXT DEFAULT '',
+                                last_seen        TEXT DEFAULT '',
+                                tokens_frozen    INTEGER DEFAULT 0,
+                                provider_id      TEXT DEFAULT ''
+                            )
+                        """)
+                        conn.execute("""
+                            INSERT INTO sessions
+                                (id, consumer_id, service_type, status, started_at,
+                                 duration_secs, bytes_sent, bytes_received, tokens,
+                                 consumer_country, first_seen, last_seen, tokens_frozen,
+                                 provider_id)
+                            SELECT id, consumer_id, service_type, status, started_at,
+                                   duration_secs, bytes_sent, bytes_received,
+                                   CAST(tokens AS TEXT),
+                                   consumer_country, first_seen, last_seen, tokens_frozen,
+                                   provider_id
+                            FROM sessions_old_int
+                        """)
+                        conn.execute("DROP TABLE sessions_old_int")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_started ON sessions(started_at)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_service ON sessions(service_type)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_provider ON sessions(provider_id)")
+                        logger.info("SessionDB: tokens column migrated to TEXT")
+                        cls._tokens_migrated = True
+                        # The rollup was aggregated from clamped session values, so its
+                        # daily totals are short by the truncated amount. Wipe it here,
+                        # inside the migration, rather than relying on startup ordering:
+                        # the background collector can call backfill_if_empty() before
+                        # the startup hook runs, and a rollup that is already populated
+                        # would then never be rebuilt.
+                        try:
+                            RollupDB.clear()
+                            logger.info("RollupDB: cleared for rebuild from corrected sessions")
+                        except Exception as e:
+                            logger.warning(f"RollupDB clear after tokens migration failed: {e}")
+                except Exception as e:
+                    logger.warning(f"SessionDB tokens migration failed: {e}")
+
                 conn.commit()
                 conn.close()
                 cls._initialized = True
@@ -1668,9 +1757,12 @@ class SessionDB:
                     sid = s.get('id', '')
                     if not sid:
                         continue
-                    # Clamp tokens to SQLite INTEGER max (2^63-1) — raw wei can exceed this
-                    _raw_tokens = int(s.get('tokens', 0) or 0)
-                    tokens = min(_raw_tokens, 9223372036854775807)
+                    # v1.4.4: store the exact value. This used to be
+                    #   tokens = min(_raw_tokens, 9223372036854775807)
+                    # because the column was INTEGER. The node sends a *big.Int with
+                    # no upper bound, so anything above ~9.22 MYST was silently
+                    # truncated to the clamp value. The column is TEXT now.
+                    tokens = str(int(s.get('tokens', 0) or 0))
                     conn.execute("""
                         INSERT INTO sessions
                             (id, consumer_id, service_type, status, started_at,
@@ -1695,14 +1787,18 @@ class SessionDB:
                             END,
                             bytes_sent       = MAX(sessions.bytes_sent,    excluded.bytes_sent),
                             bytes_received   = MAX(sessions.bytes_received, excluded.bytes_received),
-                            -- Preserve tokens: only update if incoming > 0 or never frozen
+                            -- Preserve tokens: only update if incoming > 0 or never frozen.
+                            -- v1.4.4: tokens is TEXT now, and in SQLite any TEXT value
+                            -- compares greater than any INTEGER — so `excluded.tokens > 0`
+                            -- would be true even for '0' and ''. CAST AS REAL compares the
+                            -- numeric value; precision loss is irrelevant for a > 0 test.
                             tokens           = CASE
-                                WHEN excluded.tokens > 0 THEN excluded.tokens
+                                WHEN CAST(excluded.tokens AS REAL) > 0 THEN excluded.tokens
                                 WHEN sessions.tokens_frozen = 1 THEN sessions.tokens
                                 ELSE excluded.tokens
                             END,
                             tokens_frozen    = CASE
-                                WHEN excluded.tokens > 0 THEN 1
+                                WHEN CAST(excluded.tokens AS REAL) > 0 THEN 1
                                 ELSE sessions.tokens_frozen
                             END,
                             last_seen        = excluded.last_seen,
@@ -1728,7 +1824,8 @@ class SessionDB:
                         s.get('consumer_country', ''),
                         now,  # first_seen (ignored on conflict)
                         now,  # last_seen
-                        1 if tokens > 0 else 0,
+                        # tokens is a string now — compare the numeric value
+                        1 if int(tokens) > 0 else 0,
                         _provider_id,
                     ))
                     saved += 1
@@ -1751,15 +1848,23 @@ class SessionDB:
                        MAX(started_at) as newest
                 FROM sessions WHERE service_type != 'monitoring'
             """).fetchone()
-            # Fetch tokens and bytes separately to avoid integer overflow on SUM
+            # v1.4.4: tokens is TEXT and holds wei, which is beyond the range where a
+            # float keeps every digit — sum it exactly in Python. Bytes stay in SQL;
+            # they fit comfortably in 64-bit.
+            _tok_total = 0
+            for (t,) in conn.execute(
+                    "SELECT tokens FROM sessions WHERE service_type != 'monitoring'"):
+                try:
+                    _tok_total += int(t or 0)
+                except (TypeError, ValueError):
+                    pass
             row2 = conn.execute("""
-                SELECT SUM(CAST(tokens AS REAL)) as total_tokens,
-                       SUM(CAST(bytes_sent AS REAL) + CAST(bytes_received AS REAL)) as total_bytes
+                SELECT SUM(CAST(bytes_sent AS REAL) + CAST(bytes_received AS REAL)) as total_bytes
                 FROM sessions WHERE service_type != 'monitoring'
             """).fetchone()
             conn.close()
             if row:
-                total_tokens = float(row2['total_tokens'] or 0) if row2 else 0.0
+                total_tokens = float(_tok_total)
                 total_bytes  = float(row2['total_bytes']  or 0) if row2 else 0.0
                 return {
                     'total':         row['total'] or 0,
@@ -6259,6 +6364,8 @@ def start_collector():
     # G1: build the permanent daily rollup from existing sessions on first start
     # (idempotent — only runs when the rollup table is empty).
     try:
+        # The v1.4.4 tokens migration clears the rollup itself when it runs, so this
+        # only has to fill an empty table.
         RollupDB.backfill_if_empty()
     except Exception as e:
         logger.warning(f"RollupDB startup backfill failed: {e}")
@@ -6391,12 +6498,29 @@ def database_health():
     with _db_write_lock:
         failures = {k: dict(v) for k, v in _db_write_failures.items()}
 
+    # v1.4.4: sessions still holding the pre-v1.4.4 clamp value. These are corrected
+    # automatically once the node serves that session again; sessions the node has
+    # already forgotten keep the truncated amount permanently.
+    clamped = None
+    try:
+        sess_db = db_dir / 'sessions_history.db'
+        if sess_db.exists():
+            c = sqlite3.connect(str(sess_db), timeout=5)
+            clamped = c.execute(
+                "SELECT COUNT(*) FROM sessions "
+                "WHERE CAST(tokens AS TEXT) = '9223372036854775807'"
+            ).fetchone()[0]
+            c.close()
+    except Exception:
+        pass
+
     return jsonify({
         'healthy': problems == 0 and not failures,
         'directory': str(db_dir),
         'directory_writable': dir_writable,
         'databases': databases,
         'write_failures': failures,
+        'clamped_token_rows': clamped,
         'problem_count': problems + len(failures),
     }), 200
 
