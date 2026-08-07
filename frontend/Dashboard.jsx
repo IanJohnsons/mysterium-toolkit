@@ -1200,11 +1200,6 @@ const MysteriumDashboard = () => {
     fetch('/api/update-check').then(r => r.ok ? r.json() : null).then(d => {
       if (d) setUpdateInfo(d);
     }).catch(() => {});
-    // Auto-update timer state — the timer runs update.sh on its own, so the
-    // dashboard should show that and let it be turned off.
-    fetch('/api/autoupdate').then(r => r.ok ? r.json() : null).then(d => {
-      if (d) setAutoUpdate(d);
-    }).catch(() => {});
     // Fetch MYST price for fleet bar fiat display
     fetch('/myst-price').then(r => r.ok ? r.json() : null).then(d => {
       if (d?.usd) setFleetMystPrice(d);
@@ -1214,6 +1209,20 @@ const MysteriumDashboard = () => {
       if (d) setNodeUpdateInfo(d);
     }).catch(() => {});
   }, []);
+
+  // Auto-update timer state. Deliberately not fetched on mount: /api/autoupdate
+  // requires auth, and authHeaderRef is still empty until the first successful
+  // /metrics call. Fetching too early returns 401, leaves autoUpdate null and
+  // hides the toggle without any visible error — which is exactly what happened
+  // when the dashboard was opened over Tailscale, whose CGNAT addresses
+  // is_local_request() does not treat as local.
+  useEffect(() => {
+    if (!isConnected) return;
+    fetch(`${backendUrlRef.current}/api/autoupdate`, { headers: authHeaderRef.current })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setAutoUpdate(d); })
+      .catch(() => {});
+  }, [isConnected]);
 
   const loadConfig = async () => {
     // Try restoring previous session first (survives page refresh)
@@ -1812,7 +1821,7 @@ const MysteriumDashboard = () => {
         if (autoUpdateBusy || !autoUpdate?.supported) return;
         setAutoUpdateBusy(true);
         try {
-          const r = await fetch('/api/autoupdate', {
+          const r = await fetch(`${backendUrlRef.current}/api/autoupdate`, {
             method: 'POST',
             headers: { ...authHeaderRef.current, 'Content-Type': 'application/json' },
             body: JSON.stringify({ enabled: !autoUpdate.enabled }),
