@@ -6470,6 +6470,106 @@ def serve_setup_config():
         return jsonify({'error': 'No config found — run setup wizard first'}), 404
 
 
+_AUTOUPDATE_TIMER = 'mysterium-toolkit-update.timer'
+
+
+def _autoupdate_state():
+    """Report the state of the auto-update timer.
+
+    The timer runs update.sh whenever the VERSION on this install's branch differs
+    from the local one, so it can pull and restart without anyone asking. Until now
+    the only way to turn that off was systemctl on the command line, and the
+    dashboard gave no indication that automatic updates were happening at all.
+    """
+    state = {'supported': True, 'status': 'unknown', 'enabled': False,
+             'active': False, 'next_run': '', 'message': ''}
+
+    if not shutil.which('systemctl'):
+        state.update(supported=False, status='no_systemd',
+                     message='No systemd on this system — automatic updates are not available. '
+                             'Run ./update.sh manually.')
+        return state
+
+    if not Path(f'/etc/systemd/system/{_AUTOUPDATE_TIMER}').exists():
+        state.update(status='not_installed',
+                     message='The auto-update timer is not installed. Run setup or update.sh once to create it.')
+        return state
+
+    def _run(args):
+        try:
+            r = subprocess.run(['systemctl'] + args, capture_output=True, text=True, timeout=5)
+            return (r.stdout or '').strip(), r.returncode
+        except Exception:
+            return '', 1
+
+    enabled, _ = _run(['is-enabled', _AUTOUPDATE_TIMER])
+    active, _ = _run(['is-active', _AUTOUPDATE_TIMER])
+    state['enabled'] = (enabled == 'enabled')
+    state['active'] = (active == 'active')
+
+    if state['enabled'] and state['active']:
+        out, _ = _run(['list-timers', _AUTOUPDATE_TIMER, '--no-pager', '--no-legend'])
+        if out:
+            state['next_run'] = ' '.join(out.split()[:3])
+        state.update(status='enabled',
+                     message='Automatic updates are on — the toolkit updates itself when a new '
+                             'version appears on this branch.')
+    else:
+        state.update(status='disabled',
+                     message='Automatic updates are off — run ./update.sh to update manually.')
+    return state
+
+
+@app.route('/api/autoupdate', methods=['GET'])
+@require_auth
+def autoupdate_status():
+    return jsonify(_autoupdate_state()), 200
+
+
+@app.route('/api/autoupdate', methods=['POST'])
+@require_auth
+def autoupdate_toggle():
+    """Enable or disable the auto-update timer. Body: {"enabled": true|false}"""
+    if not is_local_request():
+        return jsonify({'error': 'Only available from the local machine'}), 403
+
+    body = request.get_json(silent=True) or {}
+    if 'enabled' not in body:
+        return jsonify({'error': "Body must contain 'enabled'"}), 400
+    want = bool(body['enabled'])
+
+    current = _autoupdate_state()
+    if not current['supported']:
+        return jsonify({'error': current['message'], **current}), 400
+    if current['status'] == 'not_installed':
+        return jsonify({'error': current['message'], **current}), 400
+
+    args = ['enable', '--now', _AUTOUPDATE_TIMER] if want else ['disable', '--now', _AUTOUPDATE_TIMER]
+    errors = []
+    ok = False
+    # Both systemctl paths are covered by sudoers; try each so a hardened distro
+    # that only lists one of them still works.
+    for binary in ('/usr/bin/systemctl', '/bin/systemctl', 'systemctl'):
+        try:
+            r = subprocess.run(['sudo', '-n', binary] + args,
+                               capture_output=True, text=True, timeout=15)
+            if r.returncode == 0:
+                ok = True
+                break
+            errors.append((r.stderr or r.stdout or '').strip()[:120])
+        except Exception as e:
+            errors.append(str(e)[:120])
+
+    new_state = _autoupdate_state()
+    if not ok and new_state['enabled'] != want:
+        logger.warning(f"autoupdate toggle to {want} failed: {errors}")
+        return jsonify({'error': 'Could not change the timer — check sudoers permissions',
+                        'detail': errors[:2], **new_state}), 500
+
+    logger.info(f"Auto-update timer {'enabled' if want else 'disabled'} from the dashboard")
+    return jsonify({'success': True, **new_state}), 200
+
+
 @app.route('/api/database-health', methods=['GET'])
 @require_auth
 def database_health():
@@ -8136,22 +8236,43 @@ def probe_fleet_node():
         if api_key:
             headers['Authorization'] = f'Bearer {api_key}'
 
+        # v1.4.4+: probing an https:// node used to fail with an SSL error that the UI
+        # reported as "cannot reach node", because verify defaulted to CA validation
+        # and toolkit certificates are self-signed. Honour the same tls_cert /
+        # tls_verify fields the fleet collector uses.
+        verify = _peer_verify({'id': 'probe', 'toolkit_url': toolkit_url,
+                               'tls_cert': body.get('tls_cert'),
+                               'tls_verify': body.get('tls_verify', True)})
+
         # Test /health first
         try:
-            health = requests.get(f'{toolkit_url}/health', headers=headers, timeout=6)
+            health = requests.get(f'{toolkit_url}/health', headers=headers, timeout=6, verify=verify)
             if health.status_code == 401:
                 return jsonify({'success': False, 'error': 'Invalid API key — authentication failed'}), 200
             if health.status_code != 200:
                 return jsonify({'success': False, 'error': f'Toolkit returned HTTP {health.status_code}'}), 200
-        except requests.exceptions.ConnectionError:
-            return jsonify({'success': False, 'error': f'Cannot reach {toolkit_url} — check URL and port forwarding'}), 200
+        except requests.exceptions.SSLError as e:
+            # Must come before ConnectionError: SSLError subclasses it, so the
+            # broader handler would swallow this and report an unreachable node
+            # when the real problem is an unverified certificate — a completely
+            # different fix for the operator.
+            return jsonify({
+                'success': False,
+                'error': 'TLS certificate could not be verified. Copy that node\'s '
+                         'config/tls/cert.pem to this machine and set tls_cert, or set '
+                         'tls_verify to false if you trust the network.',
+                'detail': str(e)[:160],
+                'tls_error': True,
+            }), 200
         except requests.exceptions.Timeout:
             return jsonify({'success': False, 'error': f'Connection timed out — node may be offline'}), 200
+        except requests.exceptions.ConnectionError:
+            return jsonify({'success': False, 'error': f'Cannot reach {toolkit_url} — check URL and port forwarding'}), 200
 
         # Fetch peer/data for node info
         node_info = {}
         try:
-            peer = requests.get(f'{toolkit_url}/peer/data', headers=headers, timeout=8)
+            peer = requests.get(f'{toolkit_url}/peer/data', headers=headers, timeout=8, verify=verify)
             if peer.status_code == 200:
                 data = peer.json()
                 ns = data.get('node_status', {})
@@ -8169,7 +8290,7 @@ def probe_fleet_node():
         # Try /metrics as fallback
         if not node_info.get('identity'):
             try:
-                m = requests.get(f'{toolkit_url}/metrics', headers=headers, timeout=6)
+                m = requests.get(f'{toolkit_url}/metrics', headers=headers, timeout=6, verify=verify)
                 if m.status_code == 200:
                     md = m.json()
                     ns2 = md.get('nodeStatus', {})
@@ -8246,7 +8367,8 @@ def test_fleet_node(node_id):
         try:
             hdrs = {'Authorization': f'Bearer {api_key}'} if api_key else {}
             t0 = _t.time()
-            r = requests.get(f'{toolkit_url}/peer/data', headers=hdrs, timeout=10)
+            _v = _peer_verify(node_entry)
+            r = requests.get(f'{toolkit_url}/peer/data', headers=hdrs, timeout=10, verify=_v)
             ms = round((_t.time() - t0) * 1000)
             result['toolkit'] = {'ok': r.status_code == 200, 'status': r.status_code,
                                  'error': None, 'latency_ms': ms}

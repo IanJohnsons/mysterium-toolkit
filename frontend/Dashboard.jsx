@@ -1011,6 +1011,8 @@ const MysteriumDashboard = () => {
   const [updateInterval, setUpdateInterval] = useState(5000);
   const [toolkitVersion, setToolkitVersion] = useState('...');
   const [updateInfo, setUpdateInfo]         = useState(null);
+  const [autoUpdate, setAutoUpdate]         = useState(null);
+  const [autoUpdateBusy, setAutoUpdateBusy] = useState(false);
   const [nodeUpdateInfo, setNodeUpdateInfo] = useState(null);
   const [nodeUpdateStates, setNodeUpdateStates] = useState({}); // {nodeId: 'idle'|'updating'|'done'|'error'}
   const [fleetMystPrice, setFleetMystPrice] = useState(null); // {usd, eur} for fleet bar
@@ -1022,7 +1024,7 @@ const MysteriumDashboard = () => {
   // Fleet Node Manager state — must be at top level to survive fetchMetrics re-renders
   const [fleetModalOpen, setFleetModalOpen] = useState(false);
   const [fleetEditNode, setFleetEditNode] = useState(null);
-  const [fleetForm, setFleetForm] = useState({ label: '', toolkit_url: '', toolkit_api_key: '' });
+  const [fleetForm, setFleetForm] = useState({ label: '', toolkit_url: '', toolkit_api_key: '', tls_cert: '', tls_verify: true });
   const [fleetProbing, setFleetProbing] = useState(false);
   const [fleetProbeResult, setFleetProbeResult] = useState(null);
   const [fleetSaving, setFleetSaving] = useState(false);
@@ -1197,6 +1199,11 @@ const MysteriumDashboard = () => {
     // Check for available update (cached 1h on backend)
     fetch('/api/update-check').then(r => r.ok ? r.json() : null).then(d => {
       if (d) setUpdateInfo(d);
+    }).catch(() => {});
+    // Auto-update timer state — the timer runs update.sh on its own, so the
+    // dashboard should show that and let it be turned off.
+    fetch('/api/autoupdate').then(r => r.ok ? r.json() : null).then(d => {
+      if (d) setAutoUpdate(d);
     }).catch(() => {});
     // Fetch MYST price for fleet bar fiat display
     fetch('/myst-price').then(r => r.ok ? r.json() : null).then(d => {
@@ -1779,7 +1786,7 @@ const MysteriumDashboard = () => {
       // ── Fleet Node Manager — uses top-level state to survive re-renders ───
       const openFleetAdd = () => {
         setFleetEditNode(null);
-        setFleetForm({ label: '', toolkit_url: '', toolkit_api_key: '' });
+        setFleetForm({ label: '', toolkit_url: '', toolkit_api_key: '', tls_cert: '', tls_verify: true });
         setFleetProbeResult(null);
         setFleetSaveError('');
         setFleetModalOpen(true);
@@ -1789,12 +1796,33 @@ const MysteriumDashboard = () => {
 
       const openFleetEdit = (node) => {
         setFleetEditNode(node);
-        setFleetForm({ label: node.label || '', toolkit_url: node.toolkit_url || '', toolkit_api_key: node.toolkit_api_key || '' });
+        setFleetForm({ label: node.label || '', toolkit_url: node.toolkit_url || '', toolkit_api_key: node.toolkit_api_key || '', tls_cert: node.tls_cert || '', tls_verify: node.tls_verify !== false });
         setFleetProbeResult(null);
         setFleetSaveError('');
         setFleetModalOpen(true);
         fetch(`${backendUrlRef.current}/fleet/config`, { headers: authHeaderRef.current })
           .then(r => r.json()).then(d => setFleetConfigNodes(d.nodes || [])).catch(() => {});
+      };
+
+      // Kept out of the JSX: an expression starting with {/ can be mistaken for the
+      // opening of a JSX comment by the bundler.
+      const fleetUrlIsHttps = String(fleetForm.toolkit_url || '').toLowerCase().startsWith('https://');
+
+      const toggleAutoUpdate = async () => {
+        if (autoUpdateBusy || !autoUpdate?.supported) return;
+        setAutoUpdateBusy(true);
+        try {
+          const r = await fetch('/api/autoupdate', {
+            method: 'POST',
+            headers: { ...authHeaderRef.current, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: !autoUpdate.enabled }),
+          });
+          const d = await r.json();
+          setAutoUpdate(prev => ({ ...prev, ...d }));
+        } catch (e) {
+          setAutoUpdate(prev => ({ ...prev, message: e.message }));
+        }
+        setAutoUpdateBusy(false);
       };
 
       const handleFleetProbe = async () => {
@@ -1805,7 +1833,7 @@ const MysteriumDashboard = () => {
           const r = await fetch(`${backendUrlRef.current}/fleet/probe`, {
             method: 'POST',
             headers: { ...authHeaderRef.current, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ toolkit_url: fleetForm.toolkit_url, toolkit_api_key: fleetForm.toolkit_api_key }),
+            body: JSON.stringify({ toolkit_url: fleetForm.toolkit_url, toolkit_api_key: fleetForm.toolkit_api_key, tls_cert: fleetForm.tls_cert, tls_verify: fleetForm.tls_verify }),
           });
           const d = await r.json();
           setFleetProbeResult(d);
@@ -1827,10 +1855,20 @@ const MysteriumDashboard = () => {
         setFleetSaveError('');
         try {
           let updated;
+          // Only write tls_* when the URL is https — leaving them on an http node
+          // is confusing and they are ignored anyway.
+          const isHttps = String(fleetForm.toolkit_url || '').toLowerCase().startsWith('https://');
+          const tlsFields = isHttps
+            ? { tls_cert: fleetForm.tls_cert || '', tls_verify: fleetForm.tls_verify !== false }
+            : {};
           if (fleetEditNode) {
             updated = fleetConfigNodes.map(n =>
               (n.toolkit_url === fleetEditNode.toolkit_url)
-                ? { ...n, label: fleetForm.label, toolkit_url: fleetForm.toolkit_url, toolkit_api_key: fleetForm.toolkit_api_key }
+                ? (() => {
+                    const merged = { ...n, label: fleetForm.label, toolkit_url: fleetForm.toolkit_url, toolkit_api_key: fleetForm.toolkit_api_key, ...tlsFields };
+                    if (!isHttps) { delete merged.tls_cert; delete merged.tls_verify; }
+                    return merged;
+                  })()
                 : n
             );
           } else {
@@ -1839,6 +1877,7 @@ const MysteriumDashboard = () => {
               label: fleetForm.label || fleetForm.toolkit_url,
               toolkit_url: fleetForm.toolkit_url,
               toolkit_api_key: fleetForm.toolkit_api_key,
+              ...tlsFields,
             };
             updated = [...fleetConfigNodes, newNode];
           }
@@ -1997,7 +2036,39 @@ const MysteriumDashboard = () => {
                             />
                           </div>
 
-                          {/* Test Connection */}
+                          {/* TLS — only relevant for https:// nodes */}
+                          {fleetUrlIsHttps && (
+                            <div className="border border-emerald-500/30 bg-emerald-500/5 rounded p-3 space-y-2">
+                              <p className="text-xs text-emerald-300 font-semibold">TLS certificate</p>
+                              <p className="text-xs text-slate-500">
+                                Toolkit certificates are self-signed, so this node's certificate has to be
+                                pinned. Copy its config/tls/cert.pem to this machine and enter the path.
+                              </p>
+                              <input
+                                type="text"
+                                value={fleetForm.tls_cert}
+                                onChange={e => { setFleetForm(f => ({ ...f, tls_cert: e.target.value })); setFleetProbeResult(null); }}
+                                placeholder="config/tls/peers/nodename.pem"
+                                className="w-full bg-slate-800 border border-slate-600 focus:border-emerald-400 rounded px-3 py-2 text-xs text-slate-200 outline-none transition font-mono"
+                              />
+                              <label className="flex items-start gap-2 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={fleetForm.tls_verify === false}
+                                  onChange={e => { setFleetForm(f => ({ ...f, tls_verify: !e.target.checked })); setFleetProbeResult(null); }}
+                                  className="mt-0.5"
+                                />
+                                <span className="text-xs text-slate-400">
+                                  Skip certificate verification
+                                  <span className="block text-amber-400/80">
+                                    Traffic stays encrypted but is not authenticated — a man-in-the-middle
+                                    attack becomes possible. Use only on a network you trust, for example a
+                                    node whose IP address changes.
+                                  </span>
+                                </span>
+                              </label>
+                            </div>
+                          )}
                           <button onClick={handleFleetProbe} disabled={fleetProbing || !fleetForm.toolkit_url}
                             className="w-full py-2 text-xs font-semibold rounded border border-violet-500/40 bg-violet-500/10 text-violet-300 hover:bg-violet-500/20 transition disabled:opacity-40">
                             {fleetProbing ? '⟳ Testing connection…' : '⚡ Test Connection & Auto-discover'}
@@ -2244,6 +2315,20 @@ const MysteriumDashboard = () => {
                     <span className="ml-2 text-xs font-normal text-amber-400 border border-amber-500/40 bg-amber-500/10 rounded px-1.5 py-0.5" title={`v${updateInfo.latest} available — run: sudo ./update.sh`}>
                       ↑ v{updateInfo.latest}
                     </span>
+                  )}
+                  {autoUpdate?.supported && autoUpdate.status !== 'not_installed' && (
+                    <button
+                      onClick={toggleAutoUpdate}
+                      disabled={autoUpdateBusy}
+                      title={autoUpdate.message + (autoUpdate.next_run ? ` — next run: ${autoUpdate.next_run}` : '')}
+                      className={`ml-2 text-xs font-normal rounded px-1.5 py-0.5 border transition disabled:opacity-40 ${
+                        autoUpdate.enabled
+                          ? 'text-emerald-400 border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20'
+                          : 'text-slate-400 border-slate-600 hover:bg-slate-800'
+                      }`}
+                    >
+                      {autoUpdateBusy ? '⟳' : (autoUpdate.enabled ? '⟳ auto-update on' : '⏸ auto-update off')}
+                    </button>
                   )}
                 </h1>
                 <div className="flex gap-2 items-center text-xs">
