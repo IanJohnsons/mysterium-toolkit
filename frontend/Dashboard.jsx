@@ -1789,6 +1789,26 @@ const MysteriumDashboard = () => {
     // ── FLEET LANDING PAGE ─────────────────────────────────────────────────
     // When fleet mode is active and no node is selected yet, show the fleet
     // overview as a dedicated landing page — not embedded in the dashboard.
+    // Defined outside the fleet-view block: the toggle is rendered in the node
+    // dashboard further down, which is a different scope. Declaring it inside the
+    // fleet branch left it undefined there and the whole dashboard failed to render.
+    const toggleAutoUpdate = async () => {
+      if (autoUpdateBusy || !autoUpdate?.supported) return;
+      setAutoUpdateBusy(true);
+      try {
+        const r = await fetch(`${backendUrlRef.current}/api/autoupdate`, {
+          method: 'POST',
+          headers: { ...authHeaderRef.current, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: !autoUpdate.enabled }),
+        });
+        const d = await r.json();
+        setAutoUpdate(prev => ({ ...prev, ...d }));
+      } catch (e) {
+        setAutoUpdate(prev => ({ ...prev, message: e.message }));
+      }
+      setAutoUpdateBusy(false);
+    };
+
     if (metrics.fleet?.fleet_mode && !selectedNodeId) {
       const fleetNodes = metrics.fleet.nodes || [];
 
@@ -1816,23 +1836,6 @@ const MysteriumDashboard = () => {
       // Kept out of the JSX: an expression starting with {/ can be mistaken for the
       // opening of a JSX comment by the bundler.
       const fleetUrlIsHttps = String(fleetForm.toolkit_url || '').toLowerCase().startsWith('https://');
-
-      const toggleAutoUpdate = async () => {
-        if (autoUpdateBusy || !autoUpdate?.supported) return;
-        setAutoUpdateBusy(true);
-        try {
-          const r = await fetch(`${backendUrlRef.current}/api/autoupdate`, {
-            method: 'POST',
-            headers: { ...authHeaderRef.current, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled: !autoUpdate.enabled }),
-          });
-          const d = await r.json();
-          setAutoUpdate(prev => ({ ...prev, ...d }));
-        } catch (e) {
-          setAutoUpdate(prev => ({ ...prev, message: e.message }));
-        }
-        setAutoUpdateBusy(false);
-      };
 
       const handleFleetProbe = async () => {
         if (!fleetForm.toolkit_url) return;
