@@ -1025,6 +1025,10 @@ This table applies when the toolkit runs on the node machine (`toolkit_mode=loca
 - **4449/tcp (Node UI)** — intentionally left closed to the internet for security. The Mysterium Node UI stays reachable on localhost and your LAN; open it yourself only if you knowingly want remote access to it.
 - **1194 (OpenVPN) / 51820 (WireGuard)** — not used; Mysterium runs WireGuard over the UDP range above via NAT hole punching. The toolkit can remove these if an older install left them open (Security tab).
 
+**One port the toolkit does not control:** the Mysterium node runs an SSDP service for local network discovery, and it binds to a random high TCP port chosen by the operating system — a different number after every restart. It serves a small device description so a Mysterium app on the same LAN can find the node. On a VPS it has no purpose; disable it with `--local-service-discovery=false` in the node's startup options if you would rather not have it listening. It is unrelated to earnings either way.
+
+Note also that the node's own Web UI binds to localhost **and the machine's LAN address** when `ui.address` is left empty, which is the default. On a VPS that LAN address is the public IP, so port 4449 is listening publicly even though the firewall keeps it closed. Set `--ui.address=127.0.0.1` if you want it bound to loopback only.
+
 > **Type 3:** firewall configuration is skipped — the node machine manages its own rules. Run setup on the node machine to apply them there.
 
 Rules are persisted automatically:

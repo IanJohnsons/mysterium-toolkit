@@ -5,6 +5,10 @@ Also adds additional tracking columns for unlimited history.
 Run once: python3 scripts/migrate_all.py
 """
 
+# NOTE: this script is not called by setup.sh, update.sh or the backend — it is a
+# manual one-off for databases created before v1.2.28. Schema changes made by the
+# backend on startup (SessionDB.init, RollupDB.init) are the authoritative ones.
+
 import sqlite3
 import json
 from pathlib import Path
@@ -114,10 +118,13 @@ def migrate_sessions_db(db_path):
         cursor.execute("ALTER TABLE sessions ADD COLUMN ended_at TEXT DEFAULT ''")
         changes_made = True
     
-    # Add settled_tokens for tracking what was actually settled
+    # Add settled_tokens for tracking what was actually settled.
+    # TEXT, not INTEGER: token amounts are wei, and SQLite's signed 64-bit INTEGER
+    # tops out at 9223372036854775807 — under 9.23 MYST. That limit is what
+    # truncated sessions.tokens before v1.4.4; the same column type would repeat it.
     if 'settled_tokens' not in columns:
         print(f"    Adding settled_tokens column...")
-        cursor.execute("ALTER TABLE sessions ADD COLUMN settled_tokens INTEGER DEFAULT 0")
+        cursor.execute("ALTER TABLE sessions ADD COLUMN settled_tokens TEXT DEFAULT '0'")
         changes_made = True
     
     # Add settlement_tx for blockchain reference

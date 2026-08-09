@@ -1013,6 +1013,7 @@ const MysteriumDashboard = () => {
   const [updateInfo, setUpdateInfo]         = useState(null);
   const [autoUpdate, setAutoUpdate]         = useState(null);
   const [autoUpdateBusy, setAutoUpdateBusy] = useState(false);
+  const [autoUpdateError, setAutoUpdateError] = useState('');
   const [nodeUpdateInfo, setNodeUpdateInfo] = useState(null);
   const [nodeUpdateStates, setNodeUpdateStates] = useState({}); // {nodeId: 'idle'|'updating'|'done'|'error'}
   const [fleetMystPrice, setFleetMystPrice] = useState(null); // {usd, eur} for fleet bar
@@ -1801,10 +1802,19 @@ const MysteriumDashboard = () => {
           headers: { ...authHeaderRef.current, 'Content-Type': 'application/json' },
           body: JSON.stringify({ enabled: !autoUpdate.enabled }),
         });
-        const d = await r.json();
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          // Surface the failure. Non-200 responses used to be merged into state as
+          // if they had succeeded, so a 403 looked exactly like a button that does
+          // nothing — no message, no log line, nothing to go on.
+          setAutoUpdateError(d.error || `Request failed (HTTP ${r.status})`);
+          setAutoUpdateBusy(false);
+          return;
+        }
+        setAutoUpdateError('');
         setAutoUpdate(prev => ({ ...prev, ...d }));
       } catch (e) {
-        setAutoUpdate(prev => ({ ...prev, message: e.message }));
+        setAutoUpdateError(e.message || 'Could not reach the backend');
       }
       setAutoUpdateBusy(false);
     };
@@ -2332,14 +2342,14 @@ const MysteriumDashboard = () => {
                     <button
                       onClick={toggleAutoUpdate}
                       disabled={autoUpdateBusy}
-                      title={autoUpdate.message + (autoUpdate.next_run ? ` — next run: ${autoUpdate.next_run}` : '')}
+                      title={autoUpdateError || (autoUpdate.message + (autoUpdate.next_run ? ` — next run: ${autoUpdate.next_run}` : ''))}
                       className={`ml-2 text-xs font-normal rounded px-1.5 py-0.5 border transition disabled:opacity-40 ${
                         autoUpdate.enabled
                           ? 'text-emerald-400 border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20'
                           : 'text-slate-400 border-slate-600 hover:bg-slate-800'
                       }`}
                     >
-                      {autoUpdateBusy ? '⟳' : (autoUpdate.enabled ? '⟳ auto-update on' : '⏸ auto-update off')}
+                      {autoUpdateBusy ? '⟳' : autoUpdateError ? '⚠ auto-update' : (autoUpdate.enabled ? '⟳ auto-update on' : '⏸ auto-update off')}
                     </button>
                   )}
                 </h1>
@@ -4331,7 +4341,13 @@ const MysteriumDashboard = () => {
 
                     <strong className="text-slate-300">Custom jails</strong> — the toolkit only manages <code className="bg-slate-800 px-1 rounded">mysterium-dashboard</code>. To add other jails (sshd, nginx, etc.), edit <code className="bg-slate-800 px-1 rounded">/etc/fail2ban/jail.local</code> manually and place your jails <em>outside</em> the toolkit block. The toolkit block is clearly marked — everything outside it is never touched.<br/><br/>
 
-                    <strong className="text-slate-300">Tailscale</strong> — creates a private network between your devices. Once connected, the dashboard is reachable via your Tailscale IP (<code className="bg-slate-800 px-1 rounded">100.x.x.x:5000</code>) without exposing it to the internet. Install via CLI menu → option 9 → Tailscale, or run <code className="bg-slate-800 px-1 rounded">curl -fsSL https://tailscale.com/install.sh | sh</code>. After connecting, the Security tab shows your Tailscale IP and optional UFW commands to block port 5000 from the public internet — only do this after confirming Tailscale works.
+                    <strong className="text-slate-300">Tailscale</strong> — creates a private network between your devices. Once connected, the dashboard is reachable via your Tailscale IP (<code className="bg-slate-800 px-1 rounded">100.x.x.x:5000</code>) without exposing it to the internet. Install via CLI menu → option 9 → Tailscale, or run <code className="bg-slate-800 px-1 rounded">curl -fsSL https://tailscale.com/install.sh | sh</code>. After connecting, the Security tab shows your Tailscale IP and optional UFW commands to block port 5000 from the public internet — only do this after confirming Tailscale works. Note that the CLI menu numbering shifts with your install type — look for <em>Security &amp; Upgrades</em>.<br/><br/>
+
+                    <strong className="text-slate-300">TLS / HTTPS</strong> — encrypts the dashboard, and for a fleet also the traffic between master and nodes. Without it, the API key travels in clear text over any network the connection crosses. Setup generates a self-signed certificate locally: no domain name, no Let's Encrypt, no reverse proxy. Turn it on during setup, or afterwards through CLI menu → Security &amp; Upgrades → TLS. Your browser warns once about the certificate — that is expected for a self-signed one and you can accept it permanently. For a fleet, copy each node's <code className="bg-slate-800 px-1 rounded">config/tls/cert.pem</code> to the master and point that node's <code className="bg-slate-800 px-1 rounded">tls_cert</code> at it; this pins the connection to that one certificate, which is stronger than trusting a public authority. A fleet may mix http and https nodes.<br/><br/>
+
+                    <strong className="text-slate-300">Certificates and changing IP addresses</strong> — a certificate is only valid for the addresses and names it was issued for. If your provider changes your IP, the certificate stops matching and the master can no longer reach that node. Give the node a hostname that always points to it and enter that during setup, or set <code className="bg-slate-800 px-1 rounded">tls_verify: false</code> for that node — traffic stays encrypted but is no longer authenticated, so only do that on a network you trust.<br/><br/>
+
+                    <strong className="text-slate-300">Auto-update</strong> — the toolkit checks hourly whether a newer version exists on the branch this install is on, and updates itself if so. The toggle next to the version number in the header turns that off; the timer state is shown there along with when it runs next. With it off, update manually with <code className="bg-slate-800 px-1 rounded">./update.sh</code>.
                   </p>
                 </div>
 

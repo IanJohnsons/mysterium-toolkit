@@ -535,9 +535,22 @@ def _run_fleet_wizard() -> bool:
         "url": "http://NODE_IP:4050",
         "toolkit_url": "http://NODE_IP:5000",
         "toolkit_api_key": "API_KEY_FROM_REMOTE_CONFIG"
+      },
+      {
+        "id": "node2",
+        "label": "Node reached over TLS",
+        "url": "http://NODE_IP:4050",
+        "toolkit_url": "https://NODE_IP:5000",
+        "toolkit_api_key": "API_KEY_FROM_REMOTE_CONFIG",
+        "tls_cert": "config/tls/peers/node2.pem"
       }
     ]
   }""")
+        print_info("")
+        print_info("TLS is optional. When a node serves https, copy its")
+        print_info("config/tls/cert.pem to this machine and point tls_cert at it —")
+        print_info("toolkit certificates are self-signed, so they have to be pinned.")
+        print_info("A fleet may mix http and https nodes.")
         print_info("")
         print_info("The remote node's API key is in:  config/setup.json → dashboard_api_key")
         print_info("Hot-reload: edit nodes.json while running — changes apply within 30s.")

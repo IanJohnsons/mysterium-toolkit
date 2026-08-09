@@ -4,7 +4,13 @@
 # Sets up the toolkit as a production service on a VPS/server:
 #   - Builds the frontend (Vite → static files)
 #   - Creates a systemd service for the backend
-#   - Configures nginx as reverse proxy (optional)
+#   - Configures nginx as reverse proxy (optional — see the note below)
+#
+# NOTE (v1.4.4): the backend now serves itself through cheroot, a production WSGI
+# server with a thread pool, keep-alive and built-in TLS. A reverse proxy is no
+# longer needed for that. Put nginx in front only if you want a shared port 443,
+# a public certificate, or virtual hosts. For TLS on the dashboard itself, enable
+# https_enabled in config/setup.json instead — see the TLS section in README.md.
 #   - Opens the required firewall port
 #
 # Usage:
@@ -12,7 +18,7 @@
 #   bash scripts/deploy_production.sh --port 8080 --no-nginx
 #
 # Author: Ian Johnsons
-# License: CC BY-NC-SA 4.0
+# License: AGPL-3.0 (see LICENSE)
 
 set -e
 

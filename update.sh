@@ -112,7 +112,11 @@ done
 # recorded nothing for six weeks without a single visible warning.
 _REAL_USER="${SUDO_USER:-$USER}"
 if [ "$_REAL_USER" != "root" ]; then
-    for _d in "$TOOLKIT_DIR/config" "$TOOLKIT_DIR/backend"; do
+    # dist/ is included since v1.4.4: a sudo build or a root-run update leaves the
+    # built frontend owned by root, and the next build then fails with EACCES while
+    # update.sh still reports success. The stale bundle keeps being served, so new
+    # UI features silently never appear.
+    for _d in "$TOOLKIT_DIR/config" "$TOOLKIT_DIR/backend" "$TOOLKIT_DIR/dist"; do
         if [ -d "$_d" ]; then
             _bad=$(find "$_d" -user root -print -quit 2>/dev/null)
             if [ -n "$_bad" ]; then
@@ -212,11 +216,18 @@ elif command -v npm &>/dev/null && [ -d ".build" ]; then
         mv dist dist_new 2>/dev/null && rm -rf dist/ 2>/dev/null || true
         mv dist_new dist 2>/dev/null || true
         echo -e "  ${GREEN}✓ Frontend rebuilt${NC}"
-    elif [ -f "dist/index.html" ]; then
-        echo -e "  ${GREEN}✓ Frontend rebuilt${NC}"
     else
-        echo -e "  ${YELLOW}⚠ Frontend build failed — keeping existing dist/${NC}"
-        echo "$BUILD_OUT" | tail -5
+        # v1.4.4: this used to report success whenever dist/index.html existed,
+        # even when the build had failed — so a stale bundle kept being served and
+        # new UI features appeared to be missing with no error anywhere. The most
+        # common cause is dist/ being owned by root while the build runs as the
+        # service user, which fails with EACCES.
+        echo -e "  ${YELLOW}⚠ Frontend build FAILED — the dashboard still serves the previous build${NC}"
+        echo "$BUILD_OUT" | tail -6
+        if echo "$BUILD_OUT" | grep -q "EACCES"; then
+            echo -e "  ${YELLOW}    Permission problem on dist/. Fix with:${NC}"
+            echo -e "  ${DIM}    sudo chown -R \$USER:\$USER $TOOLKIT_DIR/dist${NC}"
+        fi
     fi
     rm -f vite.config.js postcss.config.js tailwind.config.js package.json package-lock.json index.html
 else

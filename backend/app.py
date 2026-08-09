@@ -6530,9 +6530,14 @@ def autoupdate_status():
 @require_auth
 def autoupdate_toggle():
     """Enable or disable the auto-update timer. Body: {"enabled": true|false}"""
-    if not is_local_request():
-        return jsonify({'error': 'Only available from the local machine'}), 403
-
+    # v1.4.4: this required is_local_request(), which only trusts loopback and
+    # RFC1918. Anyone reaching the dashboard over Tailscale (100.64.0.0/10) or a
+    # published address got a 403 and the button did nothing, with no log entry
+    # either. @require_auth is the right gate here: an API key already permits
+    # restarting the node and changing payment settings through the fleet proxy,
+    # so toggling a timer is not the sensitive part. Widening is_local_request()
+    # was the alternative and would have handed every route's auth bypass to any
+    # CGNAT address, which is a far bigger change than this button warrants.
     body = request.get_json(silent=True) or {}
     if 'enabled' not in body:
         return jsonify({'error': "Body must contain 'enabled'"}), 400

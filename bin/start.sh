@@ -116,8 +116,19 @@ fi
 OWN_IP=$(python3 -c "import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.connect(('8.8.8.8',80)); print(s.getsockname()[0]); s.close()" 2>/dev/null || echo "localhost")
 DASHBOARD_PORT=$(grep -oP '(?<=DASHBOARD_PORT=)\d+' "$TOOLKIT_DIR/.env" 2>/dev/null || echo "5000")
 
-DASHBOARD_URL="http://localhost:${DASHBOARD_PORT}"
-DASHBOARD_URL_NETWORK="http://${OWN_IP}:${DASHBOARD_PORT}"
+# v1.4.4: follow https_enabled. Printing http:// while the backend serves TLS
+# gives a browser error that looks like the dashboard is down.
+DASHBOARD_SCHEME=$(python3 -c "
+import json, pathlib
+try:
+    d = json.loads(pathlib.Path('$TOOLKIT_DIR/config/setup.json').read_text())
+    print('https' if d.get('https_enabled') else 'http')
+except Exception:
+    print('http')
+" 2>/dev/null || echo "http")
+
+DASHBOARD_URL="${DASHBOARD_SCHEME}://localhost:${DASHBOARD_PORT}"
+DASHBOARD_URL_NETWORK="${DASHBOARD_SCHEME}://${OWN_IP}:${DASHBOARD_PORT}"
 PROD_MODE=false
 [ -f "$TOOLKIT_DIR/dist/index.html" ] && PROD_MODE=true
 
@@ -784,8 +795,20 @@ _action_security() {
             fi
         fi
 
+        # TLS status (v1.4.4)
+        _tls_status="${YELLOW}off — dashboard served over plain HTTP${NC}"
+        if [ "${DASHBOARD_SCHEME:-http}" = "https" ]; then
+            if [ -f "$TOOLKIT_DIR/config/tls/cert.pem" ]; then
+                _tls_exp=$(openssl x509 -in "$TOOLKIT_DIR/config/tls/cert.pem" -noout -enddate 2>/dev/null | cut -d= -f2)
+                _tls_status="${GREEN}on${_tls_exp:+ — valid until $_tls_exp}${NC}"
+            else
+                _tls_status="${RED}enabled but certificate missing${NC}"
+            fi
+        fi
+
         echo -e "  fail2ban:  $(echo -e "$_f2b_status")"
         echo -e "  Tailscale: $(echo -e "$_ts_status")"
+        echo -e "  TLS:       $(echo -e "$_tls_status")"
         echo
         echo "  ── fail2ban ─────────────────────────"
         if ! command -v fail2ban-client &>/dev/null; then
@@ -801,10 +824,16 @@ _action_security() {
         fi
         echo "  ── Sudoers ──────────────────────────"
         echo "  3. Reconfigure sudoers (fix sudo permission issues)"
+        echo "  ── TLS / HTTPS ──────────────────────"
+        if [ "${DASHBOARD_SCHEME:-http}" = "https" ]; then
+            echo "  4. TLS — regenerate certificate, or turn off"
+        else
+            echo "  4. Enable TLS (encrypts the dashboard and fleet traffic)"
+        fi
         echo "  ── ──────────────────────────────────"
         echo "  0. Back to main menu"
         echo
-        read -p "  Select (0-3): " _sec_choice
+        read -p "  Select (0-4): " _sec_choice
         case "$_sec_choice" in
             1)
                 if ! command -v fail2ban-client &>/dev/null; then
@@ -819,7 +848,7 @@ _action_security() {
                 else
                     echo
                     echo -e "  ${DIM}  Open the dashboard and go to Security tab to manage fail2ban jails.${NC}"
-                    echo -e "  ${DIM}  Dashboard: http://$(hostname -I | awk '{print $1}' 2>/dev/null || echo localhost):${DASHBOARD_PORT:-5000}${NC}"
+                    echo -e "  ${DIM}  Dashboard: ${DASHBOARD_SCHEME:-http}://$(hostname -I | awk '{print $1}' 2>/dev/null || echo localhost):${DASHBOARD_PORT:-5000}${NC}"
                 fi
                 echo
                 echo "  Press Enter to continue..."
@@ -843,7 +872,7 @@ _action_security() {
                             echo -e "  ${DIM}  1. Run: sudo tailscale up${NC}"
                             echo -e "  ${DIM}  2. Open the URL shown and authenticate${NC}"
                             echo -e "  ${DIM}  3. Your Tailscale IP will be in the 100.x.x.x range${NC}"
-                            echo -e "  ${DIM}  4. Access dashboard via http://100.x.x.x:5000${NC}"
+                            echo -e "  ${DIM}  4. Access dashboard via ${DASHBOARD_SCHEME:-http}://100.x.x.x:${DASHBOARD_PORT:-5000}${NC}"
                             echo -e "  ${DIM}  5. Optionally block port 5000 from internet: sudo ufw deny 5000${NC}"
                             echo -e "  ${DIM}     Then allow Tailscale: sudo ufw allow in on tailscale0${NC}"
                         else
@@ -871,6 +900,60 @@ _action_security() {
                     echo -e "  ${GREEN}✓ Done — sudoers updated via update.sh${NC}"
                 else
                     echo -e "  ${RED}✗ setup.sh not found${NC}"
+                fi
+                echo
+                echo "  Press Enter to continue..."
+                read -r
+                ;;
+            4)
+                # TLS (v1.4.4). Previously only available during setup, so an install
+                # that skipped it had no way to turn it on afterwards.
+                echo
+                _TLS_DIR="$TOOLKIT_DIR/config/tls"
+                if [ "${DASHBOARD_SCHEME:-http}" = "https" ]; then
+                    echo -e "  ${BOLD}TLS is currently enabled${NC}"
+                    echo -e "  ${DIM}  Certificate: $_TLS_DIR/cert.pem${NC}"
+                    echo
+                    echo "  a. Regenerate the certificate (after an IP or hostname change)"
+                    echo "  b. Turn TLS off — back to plain HTTP"
+                    echo "  c. Show the certificate to copy to a fleet master"
+                    echo "  0. Back"
+                    echo
+                    read -p "  Select: " _tls_c
+                    case "$_tls_c" in
+                        a) rm -f "$_TLS_DIR/cert.pem" "$_TLS_DIR/key.pem"
+                           echo -e "  ${DIM}  Removed. Run ./setup.sh and answer yes at the TLS step.${NC}" ;;
+                        b) "$TOOLKIT_DIR/venv/bin/python3" - << 'TLSOFF'
+import json, pathlib
+p = pathlib.Path('config/setup.json')
+d = json.loads(p.read_text()) if p.exists() else {}
+d['https_enabled'] = False
+p.write_text(json.dumps(d, indent=2))
+print("  setup.json updated: https_enabled = false")
+TLSOFF
+                           echo -e "  ${GREEN}✓ TLS disabled — restart the backend to apply${NC}"
+                           echo -e "  ${DIM}  The certificate is kept in config/tls/ for later${NC}" ;;
+                        c) if [ -f "$_TLS_DIR/cert.pem" ]; then
+                               echo -e "  ${DIM}  Copy this file to the fleet master and point tls_cert at it:${NC}"
+                               echo -e "  ${CYAN}  $_TLS_DIR/cert.pem${NC}"
+                               openssl x509 -in "$_TLS_DIR/cert.pem" -noout -subject -dates -ext subjectAltName 2>/dev/null | sed 's/^/    /'
+                           else
+                               echo -e "  ${RED}✗ No certificate found${NC}"
+                           fi ;;
+                    esac
+                else
+                    echo -e "  ${BOLD}Enable TLS${NC}"
+                    echo -e "  ${DIM}  Encrypts the dashboard and, for a fleet, the traffic between${NC}"
+                    echo -e "  ${DIM}  master and nodes. A self-signed certificate is generated locally —${NC}"
+                    echo -e "  ${DIM}  no domain name and no Let's Encrypt needed.${NC}"
+                    echo -e "  ${DIM}  Your browser warns once about the certificate; that is expected.${NC}"
+                    echo
+                    echo -e "  ${DIM}  This runs the TLS step of setup.sh (step 12.55).${NC}"
+                    printf "  Continue? [y/N]: "
+                    read -r _tls_go
+                    if [[ "$_tls_go" =~ ^[Yy]$ ]]; then
+                        bash "$TOOLKIT_DIR/bin/setup.sh" --tls-only 2>&1 | tail -20
+                    fi
                 fi
                 echo
                 echo "  Press Enter to continue..."
