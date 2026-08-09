@@ -1850,7 +1850,11 @@ else
             # and the dashboard showed no protection and no warning.
             $SUDO tee "$_F2B_FILTER" > /dev/null << 'F2B_FILTER_EOF'
 [Definition]
-failregex = ^<HOST> -.*".*" 401
+# Matches the line the application writes itself, not a web-server access log.
+# The previous pattern (^<HOST> -.*".*" 401) relied on werkzeug's access log;
+# since v1.4.4 the dashboard is served by cheroot, which writes none — the jail
+# loaded, reported zero bans and detected nothing.
+failregex = ^.*Auth failed from <HOST>\s.*$
 ignoreregex =
 F2B_FILTER_EOF
             # Migration: remove the old toolkit block from jail.local (older versions

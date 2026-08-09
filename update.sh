@@ -198,6 +198,33 @@ except:
 " 2>/dev/null)
 fi
 
+# ── fail2ban filter migration (v1.4.4) ───────────────────────────────────────
+# The old filter matched a web-server access log line. Since the dashboard moved
+# from werkzeug to cheroot there is no access log, so the jail loaded, reported
+# zero bans and detected nothing at all — worse than having no jail, because it
+# looked like protection. Replace it with one that matches the line the
+# application writes itself.
+_F2B_FILTER="/etc/fail2ban/filter.d/mysterium-dashboard.conf"
+if [ -f "$_F2B_FILTER" ] && grep -q '401' "$_F2B_FILTER" 2>/dev/null; then
+    echo -e "  Updating fail2ban filter (the old one could not match anything)..."
+    $SUDO tee "$_F2B_FILTER" > /dev/null << 'F2B_MIG_EOF'
+[Definition]
+failregex = ^.*Auth failed from <HOST>\s.*$
+ignoreregex =
+F2B_MIG_EOF
+    if $SUDO systemctl reload fail2ban 2>/dev/null || $SUDO systemctl restart fail2ban 2>/dev/null; then
+        sleep 2
+        if $SUDO fail2ban-client status 2>/dev/null | grep -q "mysterium-dashboard"; then
+            echo -e "  ${GREEN}✓ fail2ban filter updated — jail active${NC}"
+        else
+            echo -e "  ${YELLOW}⚠ Filter updated but the jail is not loaded${NC}"
+            echo -e "  ${DIM}    Check: sudo journalctl -u fail2ban -n 20${NC}"
+        fi
+    else
+        echo -e "  ${YELLOW}⚠ Filter updated but fail2ban could not be reloaded${NC}"
+    fi
+fi
+
 # ── Rebuild frontend ──────────────────────────────────────────────────────
 if [ "$SETUP_MODE" = "3" ]; then
     echo -e "  ${DIM}Lightweight mode — skipping frontend build${NC}"

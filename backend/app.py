@@ -907,6 +907,30 @@ def _tokens_to_int(value):
         return 0
 
 
+def _client_ip():
+    """Return the client's real address for logging (v1.4.4).
+
+    request.remote_addr is the immediate peer, which is the proxy when one sits in
+    front — so an authentication failure logged from behind a proxy read 127.0.0.1
+    and fail2ban had nothing usable to ban. X-Forwarded-For carries the original
+    address in that case.
+    """
+    fwd = request.headers.get('X-Forwarded-For', '').split(',')[0].strip()
+    return fwd or request.remote_addr or 'unknown'
+
+
+def _log_auth_failure(reason):
+    """Log a failed authentication attempt in a form fail2ban can match.
+
+    The toolkit's fail2ban filter used to look for an access-log line
+    (`<HOST> - - [date] "GET ..." 401`), which werkzeug produced. Since v1.4.4 the
+    dashboard is served by cheroot, which writes no access log at all — so the jail
+    loaded, reported zero bans and saw nothing. This line is written by the
+    application itself and therefore does not depend on the web server.
+    """
+    logger.warning(f"Auth failed from {_client_ip()} — {reason}")
+
+
 def require_auth(f):
     """Decorator for API authentication.
     Local requests (127.0.0.1, ::1) always bypass auth — this is a local monitoring tool.
@@ -919,6 +943,7 @@ def require_auth(f):
 
         auth = request.headers.get('Authorization')
         if not auth:
+            _log_auth_failure('missing Authorization header')
             return jsonify({'error': 'Missing Authorization header'}), 401
 
         # Bearer token (API Key)
@@ -926,7 +951,7 @@ def require_auth(f):
             token = auth.split(' ', 1)[1]
             if API_KEY and token == API_KEY:
                 return f(*args, **kwargs)
-            logger.warning(f"Invalid API key attempt from {request.remote_addr}")
+            _log_auth_failure('invalid API key')
             return jsonify({'error': 'Invalid API key'}), 401
 
         # Basic Auth
@@ -938,9 +963,10 @@ def require_auth(f):
                     return f(*args, **kwargs)
             except Exception as e:
                 logger.warning(f"Basic auth error: {e}")
-            logger.warning(f"Invalid credentials from {request.remote_addr}")
+            _log_auth_failure('invalid username or password')
             return jsonify({'error': 'Invalid credentials'}), 401
 
+        _log_auth_failure('unrecognised Authorization scheme')
         return jsonify({'error': 'Invalid authorization'}), 401
 
     return decorated_function
@@ -7355,6 +7381,21 @@ def _f2b_health():
 
     result['jail_loaded'] = 'mysterium-dashboard' in result['active_jails']
 
+    # A filter that cannot match anything is worse than a missing one: the jail
+    # loads, reports zero bans, and looks like working protection.
+    if result['filter_exists']:
+        try:
+            _f = filter_path.read_text()
+            if 'Auth failed from' not in _f:
+                result.update(
+                    status='filter_outdated', healthy=False,
+                    message='The fail2ban filter is the pre-v1.4.4 version, which matches a '
+                            'web-server access log the dashboard no longer produces. The jail '
+                            'is loaded but detects nothing. Run ./update.sh to replace it.')
+                return result
+        except Exception:
+            pass
+
     if not result['filter_exists']:
         result.update(status='filter_missing',
                       message='The mysterium-dashboard filter is missing, so fail2ban skips the jail. '
@@ -7761,7 +7802,11 @@ def fail2ban_install():
         f2b_filter = TOOLKIT_FILTER_FILE
 
         # Write filter file
-        filter_content = '[Definition]\nfailregex = ^<HOST> -.*".*" 401\nignoreregex =\n'
+        # v1.4.4: matches the application's own log line instead of a web-server
+        # access log — cheroot writes none, which left the jail blind.
+        filter_content = ('[Definition]\n'
+                          'failregex = ^.*Auth failed from <HOST>\\s.*$\n'
+                          'ignoreregex =\n')
         for prefix in [[], ['sudo', '-n']]:
             try:
                 r = subprocess.run(
