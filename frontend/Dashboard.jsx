@@ -209,6 +209,24 @@ const SERVICE_LABELS = {
 };
 const fmtType = (t) => SERVICE_LABELS[t] || t;
 
+// NAT labels lived inside the node dashboard only, so the fleet cards printed the
+// raw value from the node — `prcone` instead of `Port Restricted`. Same mistake as
+// fmtType once had. Module level so every view reads the same table.
+const NAT_LABEL_MAP = {
+  none:      'Open / No NAT',
+  fullcone:  'Full Cone',
+  rcone:     'Restricted Cone',
+  prcone:    'Port Restricted',
+  symmetric: 'Symmetric',
+};
+// An empty value is not "unknown": a node on a public IP does no NAT detection and
+// reports nothing. Saying so keeps every fleet card on the same set of rows.
+const fmtNat = (n) => {
+  const k = String(n || '').toLowerCase();
+  if (!k) return 'No NAT (public)';
+  return NAT_LABEL_MAP[k] || (k === 'unknown' ? 'Detecting…' : n);
+};
+
 // ─── CSS generator ─────────────────────────────────────────────────────────
 // Maps each Tailwind color class family → the theme slot that replaces it.
 // amber / red / green / yellow / rose are NEVER in this map — they are semantic.
@@ -2313,7 +2331,7 @@ const MysteriumDashboard = () => {
                         {n.version && <span>v{n.version}</span>}
                         {nodeUpdateInfo?.update_available && n.version === nodeUpdateInfo.current && <div className="mt-0.5"><span className="text-amber-400 border border-amber-500/40 bg-amber-500/10 rounded px-1 text-[9px]" title={`Node v${nodeUpdateInfo.latest} available`}>↑ {nodeUpdateInfo.latest}</span></div>}
                         {n.uptime && <span>up {formatUptime(n.uptime)}</span>}
-                        {n.nat && <span>NAT: {n.nat}</span>}
+                        <span>NAT: {fmtNat(n.nat)}</span>
                       </div>
                       {/* Toolkit update button per node */}
                       {updateInfo?.update_available && (
@@ -2353,16 +2371,27 @@ const MysteriumDashboard = () => {
                             Today: <span className="font-semibold">{Number(Number(n.earnings?.daily||0)).toFixed(4)}</span> MYST
                           </span>
                         )}
-                        {(n.node_quality?.uptime_24h_local ?? n.node_quality?.uptime_24h_net) != null && (
-                          <span className={`${(n.node_quality?.uptime_24h_local ?? n.node_quality?.uptime_24h_net) >= 90 ? 'text-emerald-400/70' : (n.node_quality?.uptime_24h_local ?? n.node_quality?.uptime_24h_net) >= 70 ? 'text-amber-400/70' : 'text-red-400/70'}`}>
-                            Up: {((n.node_quality?.uptime_24h_local ?? n.node_quality?.uptime_24h_net) ?? 0).toFixed(1)}%
-                          </span>
-                        )}
-                        {n.earnings?.daily != null && (n.node_quality?.uptime_24h_local ?? n.node_quality?.uptime_24h_net) > 0 && (() => {
-                          const up = (n.node_quality?.uptime_24h_local ?? n.node_quality?.uptime_24h_net) / 100;
-                          if (up >= 1.0) return null; // same as Today earnings — not useful to show
-                          const eff = Number(n.earnings.daily) / up;
-                          return <span className="text-slate-500" title="Estimated daily earnings at 100% uptime">{(eff || 0).toFixed(4)} proj/day</span>;
+                        {(n.node_quality?.uptime_24h_local ?? n.node_quality?.uptime_24h_net) != null && (() => {
+                          // v1.4.5 — was two separate spans, and the projection one
+                          // returned null at 100% uptime. That left the Pi with a row
+                          // the other cards did not have. Now one span: the projection
+                          // is phrased as what the uptime costs, and only appears when
+                          // it differs from Today.
+                          const upPct = (n.node_quality?.uptime_24h_local ?? n.node_quality?.uptime_24h_net) ?? 0;
+                          const cls = upPct >= 90 ? 'text-emerald-400/70' : upPct >= 70 ? 'text-amber-400/70' : 'text-red-400/70';
+                          const up = upPct / 100;
+                          const showProj = n.earnings?.daily != null && up > 0 && up < 1.0;
+                          const eff = showProj ? (Number(n.earnings.daily) / up) : 0;
+                          return (
+                            <span className={cls}>
+                              Up: {upPct.toFixed(1)}%
+                              {showProj && (
+                                <span className="text-slate-500" title="Estimated daily earnings had the node been reachable all day">
+                                  {' \u2192 ' + (eff || 0).toFixed(4) + '/day at 100%'}
+                                </span>
+                              )}
+                            </span>
+                          );
                         })()}
                       </div>
                       {n.error && <div className="text-red-400/80 text-[10px]">⚠ {n.error}</div>}
@@ -6425,13 +6454,6 @@ const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, 
           </div>
         )}
         {isOnline && (() => {
-          const NAT_LABELS = {
-            none:      'Open / No NAT',
-            fullcone:  'Full Cone',
-            rcone:     'Restricted Cone',
-            prcone:    'Port Restricted',
-            symmetric: 'Symmetric',
-          };
           const NAT_COLORS = {
             none:      'text-emerald-300',
             fullcone:  'text-emerald-300',
@@ -6440,7 +6462,7 @@ const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, 
             symmetric: 'text-red-400',
           };
           const nt   = (natType || '').toLowerCase();
-          const label = NAT_LABELS[nt] || (natType && natType !== 'unknown' ? natType : 'Detecting\u2026');
+          const label = fmtNat(natType);
           const color = NAT_COLORS[nt] || (natType && natType !== 'unknown' ? 'text-slate-300' : 'text-slate-500');
           return (
             <div>NAT: <span className={`font-semibold ${color}`}>{label}</span></div>
