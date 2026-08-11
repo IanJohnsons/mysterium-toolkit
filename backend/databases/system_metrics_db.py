@@ -151,6 +151,74 @@ class SystemMetricsDB:
                 return False
     
     @classmethod
+    def backfill_node_id(cls, node_id):
+        """Claim rows written before the node identity was known.
+
+        v1.4.5. Until now the fast tier wrote snapshots with an empty node_id
+        whenever it ran before the slow tier had reached the node, and
+        get_history() folded those empty rows into every node's chart. The write
+        path no longer produces them; this reclaims the ones already on disk so
+        they stay visible after the query stopped matching on ''.
+
+        Refuses when the table holds rows from another node — in that case an
+        empty node_id is not necessarily ours, and guessing would attribute a
+        foreign machine's CPU and memory to this one. Returns rows updated.
+        """
+        if not node_id:
+            return 0
+        cls.init()
+        updated = 0
+        with cls._lock:
+            try:
+                conn = cls._conn()
+                others = [r[0] for r in conn.execute(
+                    "SELECT DISTINCT node_id FROM system_snapshots "
+                    "WHERE node_id != '' AND node_id IS NOT NULL"
+                ).fetchall()]
+                foreign = [n for n in others if n != node_id]
+                if foreign:
+                    blank = conn.execute(
+                        "SELECT COUNT(*) FROM system_snapshots "
+                        "WHERE node_id = '' OR node_id IS NULL"
+                    ).fetchone()[0]
+                    conn.close()
+                    logger.warning(
+                        f"SystemMetricsDB: node_id backfill refused — table holds rows "
+                        f"from {len(foreign)} other node(s); {blank} unattributed rows "
+                        f"left as-is rather than claimed for {node_id[:10]}…"
+                    )
+                    return 0
+                cur = conn.execute(
+                    "UPDATE OR IGNORE system_snapshots SET node_id = ? "
+                    "WHERE node_id = '' OR node_id IS NULL", (node_id,)
+                )
+                updated = cur.rowcount
+                left = conn.execute(
+                    "SELECT COUNT(*) FROM system_snapshots "
+                    "WHERE node_id = '' OR node_id IS NULL"
+                ).fetchone()[0]
+                conn.commit()
+                conn.close()
+                if updated:
+                    logger.info(
+                        f"SystemMetricsDB: claimed {updated} snapshot(s) written "
+                        f"before the node identity was known"
+                    )
+                if left:
+                    # UNIQUE(time, node_id): an orphan sharing its timestamp with an
+                    # already-attributed row cannot be claimed without colliding.
+                    # OR IGNORE leaves those in place — they are duplicates of a row
+                    # that is already in the chart, so nothing is missing from it.
+                    logger.info(
+                        f"SystemMetricsDB: {left} orphan snapshot(s) share a timestamp "
+                        f"with an attributed row and were left as-is"
+                    )
+            except Exception as e:
+                logger.warning(f"SystemMetricsDB backfill_node_id failed: {e}")
+                return 0
+        return updated
+
+    @classmethod
     def get_history(cls, days_back=7, node_id=None):
         """Get system metrics history for charting."""
         cls.init()
@@ -161,7 +229,7 @@ class SystemMetricsDB:
             if node_id:
                 rows = conn.execute("""
                     SELECT * FROM system_snapshots 
-                    WHERE time >= ? AND (node_id = ? OR node_id = '')
+                    WHERE time >= ? AND node_id = ?
                     ORDER BY time ASC
                 """, (cutoff, node_id)).fetchall()
             else:
@@ -197,7 +265,7 @@ class SystemMetricsDB:
                         AVG(cpu_temp) as avg_temp,
                         MAX(cpu_temp) as max_temp
                     FROM system_snapshots 
-                    WHERE (node_id = ? OR node_id = '')
+                    WHERE node_id = ?
                 """, (node_id,)).fetchone()
             else:
                 row = conn.execute("""

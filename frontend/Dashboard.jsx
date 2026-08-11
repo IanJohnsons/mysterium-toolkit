@@ -1080,20 +1080,42 @@ const MysteriumDashboard = () => {
   // For fleet nodes: routes via /fleet/node/<id>/proxy/<endpoint> on the central backend.
   // This keeps the remote API key server-side and never exposes it to the browser.
   const healthFixUrl = (endpoint) => {
-    if (metrics._fleet_node && metrics._node_id) {
-      return `${backendUrlRef.current}/fleet/node/${encodeURIComponent(metrics._node_id)}/proxy/${endpoint}`;
+    if (selectedNodeId) {
+      return `${backendUrlRef.current}/fleet/node/${encodeURIComponent(selectedNodeId)}/proxy/${endpoint}`;
     }
     return `${backendUrlRef.current}/${endpoint}`;
   };
 
   // nodeAwareUrl: when viewing a fleet node, route card API calls via proxy
-  // so each card fetches data from the correct remote node, not the central VPS
+  // so each card fetches data from the correct remote node, not the central VPS.
+  //
+  // v1.4.5: this used to key off `metrics._fleet_node && metrics._node_id`, which
+  // is set only after the first metrics response arrives. Two ways that went wrong:
+  //   1. On page load with ?node=<id>, the header already showed the remote node
+  //      while metrics was still empty — so every self-fetching card (traffic,
+  //      earnings history, system metrics, analytics, settlements) pulled its first
+  //      round from the LOCAL backend and drew fleet-master data under the remote
+  //      node's name.
+  //   2. Whenever a fleet poll failed, _fleet_node dropped out of metrics and this
+  //      silently fell back to the local backend — same wrong data, no error.
+  // selectedNodeId is initialised straight from the URL and only changes when the
+  // operator picks a node, so it is correct from the very first render. If the id
+  // is not in the registry the proxy answers 404, which is visible — far better
+  // than quietly serving the wrong machine's numbers.
   const getNodeAwareUrl = () => {
-    if (metrics._fleet_node && metrics._node_id) {
-      return `${backendUrlRef.current}/fleet/node/${encodeURIComponent(metrics._node_id)}/proxy`;
+    if (selectedNodeId) {
+      return `${backendUrlRef.current}/fleet/node/${encodeURIComponent(selectedNodeId)}/proxy`;
     }
     return backendUrlRef.current;
   };
+
+  // nodeKey: React remount key for every card that fetches node-bound numbers.
+  // Cards keep their own state, and their fetch handlers swallow failures
+  // (`.catch(() => setLoading(false))`) — so a card that already held data for
+  // node A and then failed to load node B kept showing A's numbers under B's
+  // name, indefinitely and without a word. Changing the key throws the old
+  // component away instead of letting stale data survive a node switch.
+  const nodeKey = selectedNodeId || 'local';
 
   // Sync selectedNodeId to URL so browser back/forward works
   useEffect(() => {
@@ -2512,25 +2534,25 @@ const MysteriumDashboard = () => {
           </div>
 
           {/* Settlement History — on-chain wallet balance + Polygonscan transactions */}
-          <SettlementHistoryCard backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
+          <SettlementHistoryCard key={`settle-${nodeKey}`} backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
 
           {/* Node Quality — sourced from Mysterium Discovery API */}
-          <NodeQualityCard nodeQuality={metrics.nodeQuality} nodeStatus={metrics.nodeStatus} backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} nodeUrl={metrics._fleet_node && metrics._node_id ? null : (metrics._node_toolkit_url || null)} />
+          <NodeQualityCard key={`quality-${nodeKey}`} nodeQuality={metrics.nodeQuality} nodeStatus={metrics.nodeStatus} backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} nodeUrl={metrics._fleet_node && metrics._node_id ? null : (metrics._node_toolkit_url || null)} />
 
           {/* Earnings History — daily/weekly/monthly/all bar chart */}
-          <EarningsHistoryCard backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
+          <EarningsHistoryCard key={`earnhist-${nodeKey}`} backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
 
           {/* Data Traffic — VPN, NIC total, overhead, per tunnel */}
-          <DataTrafficCard bandwidth={metrics.bandwidth} backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
+          <DataTrafficCard key={`traffic-${nodeKey}`} bandwidth={metrics.bandwidth} backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
 
           {/* Analytics — lifetime totals, service breakdown, consumer origin */}
-          <AnalyticsCard sessions={metrics.sessions} backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
+          <AnalyticsCard key={`analytics-${nodeKey}`} sessions={metrics.sessions} backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
 
           {/* Service Split over Time — stacked bar per day/week */}
-          <ServiceSplitChart backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
+          <ServiceSplitChart key={`svcsplit-${nodeKey}`} backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
 
           {/* Earnings Efficiency — MYST/GB timeseries */}
-          <EarningsEfficiencyChart backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
+          <EarningsEfficiencyChart key={`efficiency-${nodeKey}`} backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
 
           {/* Bandwidth — VPN tunnel traffic */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
@@ -3705,7 +3727,7 @@ const MysteriumDashboard = () => {
 
           {/* System Metrics History Card */}
           {/* System Metrics History Card */}
-          <SystemMetricsHistoryCard backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
+          <SystemMetricsHistoryCard key={`sysmetrics-${nodeKey}`} backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
 
           {/* System Health Card — full width, inline expand */}
           <div className="mb-6">
@@ -4772,15 +4794,28 @@ const EarningsHistoryCard = ({ backendUrl, authHeaders }) => {
   const [data, setData] = useState(null);
   const [view, setView] = useState('daily');
   const [loading, setLoading] = useState(false);
+  const [loadErr, setLoadErr] = useState('');
 
 
   const loadChart = useCallback(() => {
     if (!backendUrl) return;
     setLoading(true);
+    setLoadErr('');
     fetch(`${backendUrl}/earnings/chart`, { headers: authHeaders || {} })
-      .then(r => r.json())
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
       .then(d => { setData(d); setLoading(false); })
-      .catch(() => setLoading(false));
+      .catch(e => {
+        // v1.4.5: never keep showing the previous payload. When this card is
+        // viewing a fleet node and the proxy call fails, the old numbers belong
+        // to a DIFFERENT machine — leaving them on screen under this node's name
+        // is worse than showing nothing. Drop them and say what went wrong.
+        setData(null);
+        setLoadErr(String(e.message || e));
+        setLoading(false);
+      });
   }, [backendUrl]);
 
   useEffect(() => { loadChart(); }, [loadChart]);
@@ -4788,6 +4823,18 @@ const EarningsHistoryCard = ({ backendUrl, authHeaders }) => {
   if (loading) return (
     <div className="mb-6 p-4 bg-slate-800/30 border border-slate-700 rounded-lg backdrop-blur">
       <div className="text-xs text-slate-500">Loading earnings history…</div>
+    </div>
+  );
+
+  if (loadErr) return (
+    <div className="mb-6 p-4 bg-slate-800/30 border border-amber-700/50 rounded-lg backdrop-blur">
+      <div className="flex items-center justify-between mb-1">
+        <h3 className="text-sm font-semibold text-slate-300 tracking-wide">Earnings History</h3>
+      </div>
+      <div className="text-xs text-amber-400/80 py-3 text-center">
+        Could not load earnings for this node ({loadErr}).<br/>
+        No figures shown rather than figures from another node.
+      </div>
     </div>
   );
 

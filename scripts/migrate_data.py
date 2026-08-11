@@ -84,7 +84,12 @@ DATA_FILES = [
         'name':    'node_identity.txt',
         'relpath': 'config/node_identity.txt',
         'label':   'Node identity (for uptime tracking)',
-        'merge':   'copy_if_missing',
+        # v1.4.5: was 'copy_if_missing'. On a fresh install importing a backup
+        # from ANOTHER node, that handed this install the source node's identity.
+        # Everything downstream then believed the two were the same node: the
+        # identity guard saw no change, and upsert_sessions stamped this node's
+        # own sessions with the foreign provider_id. Local update flow only.
+        'merge':   'copy_if_missing_local',
     },
     {
         'name':    'uptime_log.json',
@@ -386,9 +391,59 @@ def _db_is_empty(db_path: Path, table: str) -> bool:
         return False
 
 
+def _read_identity(install_dir: Path) -> str:
+    """Read config/node_identity.txt from an install dir. '' when absent."""
+    try:
+        f = install_dir / 'config' / 'node_identity.txt'
+        if f.exists():
+            return f.read_text().strip()
+    except Exception:
+        pass
+    return ''
+
+
+def _same_node(src_dir: Path, dest_dir: Path, trust_local: bool) -> tuple:
+    """Decide whether src and dest belong to the same Mysterium node.
+
+    Returns (same_node: bool, reason: str).
+
+    Node-bound data — sessions, earnings snapshots, uptime log — must never
+    cross from one node to another. Before v1.4.5 a missing identity file at
+    the destination was read as "same machine, update flow" and everything was
+    copied. That assumption holds for an update (the new install dir simply has
+    no identity yet) but NOT for `--import` / `--from-zip`, where the source is
+    a backup that may come from a completely different node. A fresh install
+    importing a backup from another node inherited that node's sessions and
+    earnings, and nothing in the UI ever revealed it.
+
+    trust_local is True only for the update flow, where both dirs were found by
+    find_toolkit_installs() on this same machine.
+    """
+    src_id = _read_identity(src_dir)
+    dst_id = _read_identity(dest_dir)
+
+    if src_id and dst_id:
+        if src_id == dst_id:
+            return True, f'same identity ({src_id[:10]}…)'
+        return False, f'different node ({src_id[:10]}… → {dst_id[:10]}…)'
+
+    if src_id and not dst_id:
+        if trust_local:
+            return True, 'destination has no identity yet — local update flow'
+        return False, ('destination has no identity yet and the source is an '
+                       'import — cannot confirm same node')
+
+    if not src_id:
+        if trust_local:
+            return True, 'source predates identity tracking — local update flow'
+        return False, 'source has no identity file — cannot confirm same node'
+
+    return False, 'identity unknown'
+
+
 # ── Core migration logic ───────────────────────────────────────────────────────
 def migrate_from_dir(src_dir: Path, dest_dir: Path, force: bool = False,
-                     silent: bool = False) -> Dict[str, str]:
+                     silent: bool = False, trust_local: bool = True) -> Dict[str, str]:
     """
     Migrate data files from src_dir into dest_dir/config/.
     Returns dict of {filename: 'migrated'|'merged'|'skipped'|'error'}.
@@ -414,12 +469,42 @@ def migrate_from_dir(src_dir: Path, dest_dir: Path, force: bool = False,
                     results[name] = 'skipped (already exists)'
                 else:
                     shutil.copy2(src, dst)
+                    # setup.json carries beneficiary_address, which is node-bound and
+                    # drives the on-chain earnings lookup. Copying it is usually what
+                    # the operator wants on a restore, but on an unconfirmed import it
+                    # can point this node at another node's wallet. Say so out loud.
+                    same_ok, _ = _same_node(src_dir, dest_dir, trust_local)
+                    if name == 'setup.json' and not same_ok:
+                        results[name] = ('copied — CHECK beneficiary_address, the source '
+                                         'may be a different node')
+                    else:
+                        results[name] = 'copied'
+
+            elif strategy == 'copy_if_missing_local':
+                # Identity-bearing file: only ever inherited during a local
+                # update, never from an imported backup.
+                if dst.exists() and not force:
+                    results[name] = 'skipped (already exists)'
+                elif not trust_local:
+                    results[name] = ('skipped (import — this node keeps its own '
+                                     'identity, read from the node on first poll)')
+                else:
+                    shutil.copy2(src, dst)
                     results[name] = 'copied'
 
             elif strategy == 'json_list_snapshots':
                 src_data = _read_json(src)
                 if src_data is None:
                     results[name] = 'error: unreadable source'
+                    continue
+
+                # v1.4.5: earnings snapshots hold node-specific lifetime totals and
+                # carry no node field of their own, so a merge across two nodes is
+                # both wrong and irreversible — dedup runs on 'time' alone, and
+                # afterwards nothing tells the two apart. Same gate as the DBs.
+                snap_same_node, snap_why = _same_node(src_dir, dest_dir, trust_local)
+                if not snap_same_node:
+                    results[name] = f'skipped ({snap_why} — earnings are node-specific)'
                     continue
 
                 # Extract snapshots list
@@ -469,15 +554,7 @@ def migrate_from_dir(src_dir: Path, dest_dir: Path, force: bool = False,
                 # Only copy uptime_log if both installs share the same node identity.
                 # Same identity = update on the same machine → preserve history.
                 # Different identity = different node → start fresh.
-                src_identity = src_dir / 'config' / 'node_identity.txt'
-                dst_identity = dest_dir / 'config' / 'node_identity.txt'
-                same_node = False
-                if src_identity.exists() and dst_identity.exists():
-                    same_node = (src_identity.read_text().strip() ==
-                                 dst_identity.read_text().strip())
-                elif src_identity.exists() and not dst_identity.exists():
-                    # Destination has no identity yet — assume same machine (update flow)
-                    same_node = True
+                same_node, why = _same_node(src_dir, dest_dir, trust_local)
 
                 if same_node:
                     src_data = _read_json(src)
@@ -493,7 +570,7 @@ def migrate_from_dir(src_dir: Path, dest_dir: Path, force: bool = False,
                         count = len(src_data) if isinstance(src_data, list) else '?'
                         results[name] = f'copied ({count} entries — same node)'
                 else:
-                    results[name] = 'skipped (different node identity — starting fresh)'
+                    results[name] = f'skipped ({why} — starting fresh)'
 
         except Exception as e:
             results[name] = f'error: {e}'
@@ -506,19 +583,10 @@ def migrate_from_dir(src_dir: Path, dest_dir: Path, force: bool = False,
     earnings_db_src = src_dir / 'backend' / 'databases' / 'earnings_history.db'
     earnings_db_dst = dest_dir / 'backend' / 'databases' / 'earnings_history.db'
     if earnings_db_src.exists():
-        src_identity = src_dir / 'config' / 'node_identity.txt'
-        dst_identity = dest_dir / 'config' / 'node_identity.txt'
-        earnings_same_node = False
-        if src_identity.exists() and dst_identity.exists():
-            earnings_same_node = (src_identity.read_text().strip() ==
-                                  dst_identity.read_text().strip())
-        elif src_identity.exists() and not dst_identity.exists():
-            earnings_same_node = True
-        elif not src_identity.exists():
-            earnings_same_node = True
+        earnings_same_node, earnings_why = _same_node(src_dir, dest_dir, trust_local)
 
         if not earnings_same_node:
-            results['earnings_history.db'] = 'skipped (different node identity — earnings belong to source node only)'
+            results['earnings_history.db'] = f'skipped ({earnings_why} — earnings belong to the source node only)'
         else:
             earnings_db_dst.parent.mkdir(parents=True, exist_ok=True)
             dst_is_empty = _db_is_empty(earnings_db_dst, 'earnings_snapshots')
@@ -539,22 +607,10 @@ def migrate_from_dir(src_dir: Path, dest_dir: Path, force: bool = False,
     sessions_src = src_dir / 'backend' / 'databases' / 'sessions_history.db'
     sessions_dst = dest_dir / 'backend' / 'databases' / 'sessions_history.db'
     if sessions_src.exists():
-        # Check node identity before copying
-        src_identity = src_dir / 'config' / 'node_identity.txt'
-        dst_identity = dest_dir / 'config' / 'node_identity.txt'
-        sessions_same_node = False
-        if src_identity.exists() and dst_identity.exists():
-            sessions_same_node = (src_identity.read_text().strip() ==
-                                  dst_identity.read_text().strip())
-        elif src_identity.exists() and not dst_identity.exists():
-            # No identity at destination yet — assume same machine (update flow)
-            sessions_same_node = True
-        elif not src_identity.exists():
-            # No identity file at source — old install, allow copy
-            sessions_same_node = True
+        sessions_same_node, sessions_why = _same_node(src_dir, dest_dir, trust_local)
 
         if not sessions_same_node:
-            results['sessions_history.db'] = 'skipped (different node identity — sessions belong to source node only)'
+            results['sessions_history.db'] = f'skipped ({sessions_why} — sessions belong to the source node only)'
         else:
             sessions_dst.parent.mkdir(parents=True, exist_ok=True)
             dst_is_empty = _db_is_empty(sessions_dst, 'sessions')
@@ -626,7 +682,7 @@ def migrate_from_dir(src_dir: Path, dest_dir: Path, force: bool = False,
 
 
 def migrate_from_zip(zip_path: Path, dest_dir: Path, force: bool = False,
-                     silent: bool = False) -> Dict[str, str]:
+                     silent: bool = False, trust_local: bool = False) -> Dict[str, str]:
     """
     Extract data files from a toolkit backup zip into dest_dir/config/.
     The zip may contain files at:
@@ -685,7 +741,8 @@ def migrate_from_zip(zip_path: Path, dest_dir: Path, force: bool = False,
             if src_candidate.exists():
                 shutil.copy2(src_candidate, fake_config / df['name'])
 
-        return migrate_from_dir(fake_src, dest_dir, force=force, silent=silent)
+        return migrate_from_dir(fake_src, dest_dir, force=force, silent=silent,
+                                trust_local=trust_local)
 
 
 # ── Display helpers ────────────────────────────────────────────────────────────

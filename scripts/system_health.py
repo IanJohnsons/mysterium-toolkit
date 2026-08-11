@@ -323,6 +323,25 @@ class ConntrackHealth:
         return ConntrackHealth.TIERS[-1][1]
 
     @staticmethod
+    def count_tunnels():
+        """Count active VPN tunnel interfaces (myst*, wg*, tun*).
+
+        fix() is called as sub.fix() from fix_all() and fix_one(), with no
+        argument. Before v1.4.5 that meant tunnel_count always defaulted to 0,
+        so target_for_load() could never return anything but the lowest tier —
+        the whole TIERS table was unreachable. Detect the count here instead.
+        """
+        try:
+            count = 0
+            for iface in Path('/sys/class/net').iterdir():
+                name = iface.name
+                if name.startswith('myst') or name.startswith('wg') or name.startswith('tun'):
+                    count += 1
+            return count
+        except Exception:
+            return 0
+
+    @staticmethod
     def scan():
         result = {
             'name': 'conntrack',
@@ -398,7 +417,7 @@ class ConntrackHealth:
         return result
 
     @staticmethod
-    def fix(tunnel_count=0):
+    def fix(tunnel_count=None):
         """Expand table to the appropriate tier for current load."""
         actions = []
 
@@ -407,6 +426,8 @@ class ConntrackHealth:
             return {'name': 'conntrack', 'actions': [], 'success': True,
                     'note': 'conntrack not loaded'}
 
+        if tunnel_count is None:
+            tunnel_count = ConntrackHealth.count_tunnels()
         target = ConntrackHealth.target_for_load(tunnel_count)
         current = int(ct_max)
 
@@ -432,109 +453,6 @@ class ConntrackHealth:
                 'success': all(a.get('success', True) for a in actions)}
 
 
-
-    @staticmethod
-    def scan():
-        result = {
-            'name': 'conntrack',
-            'title': 'Connection Tracking',
-            'status': 'ok',
-            'checks': [],
-            'recommendations': [],
-        }
-
-        ct_max = _sysctl_get('net.netfilter.nf_conntrack_max')
-        if ct_max is None:
-            result['checks'].append({
-                'name': 'conntrack module',
-                'status': 'ok',
-                'detail': 'nf_conntrack not loaded (normal if no NAT active)',
-            })
-            return result
-
-        ct_max = int(ct_max)
-        ct_count_str = _sysctl_get('net.netfilter.nf_conntrack_count')
-        ct_count = int(ct_count_str) if ct_count_str else 0
-        usage_pct = (ct_count / ct_max * 100) if ct_max > 0 else 0
-
-        if usage_pct > 95:
-            status = 'critical'
-        elif usage_pct > 80:
-            status = 'warning'
-        else:
-            status = 'ok'
-
-        result['checks'].append({
-            'name': 'Table usage',
-            'status': status,
-            'detail': f'{ct_count:,} / {ct_max:,} ({usage_pct:.1f}%)',
-            'current': ct_count, 'max': ct_max, 'pct': round(usage_pct, 1),
-        })
-        if status != 'ok':
-            result['status'] = status
-
-        if ct_max < ConntrackHealth.MIN_CONNTRACK_MAX:
-            result['checks'].append({
-                'name': 'Table size',
-                'status': 'warning',
-                'detail': f'{ct_max:,} too small for VPN exit',
-            })
-            if result['status'] == 'ok':
-                result['status'] = 'warning'
-            result['recommendations'].append(
-                f'Expand to {ConntrackHealth.RECOMMENDED_CONNTRACK_MAX:,}')
-        else:
-            result['checks'].append({
-                'name': 'Table size',
-                'status': 'ok',
-                'detail': f'{ct_max:,} entries',
-            })
-
-        # Informational only — never flag timeouts as warnings
-        tcp_est = _sysctl_get('net.netfilter.nf_conntrack_tcp_timeout_established')
-        udp_stream = _sysctl_get('net.netfilter.nf_conntrack_udp_timeout_stream')
-        parts = []
-        if tcp_est:
-            parts.append(f'TCP: {int(tcp_est)//3600}h')
-        if udp_stream:
-            parts.append(f'UDP stream: {udp_stream}s')
-        if parts:
-            result['checks'].append({
-                'name': 'Timeouts',
-                'status': 'ok',
-                'detail': ' · '.join(parts) + ' (preserved)',
-            })
-
-        return result
-
-    @staticmethod
-    def fix():
-        """Only expand table size. Never touch timeouts."""
-        actions = []
-
-        ct_max = _sysctl_get('net.netfilter.nf_conntrack_max')
-        if ct_max is None:
-            return {'name': 'conntrack', 'actions': [], 'success': True,
-                    'note': 'conntrack not loaded'}
-
-        if int(ct_max) < ConntrackHealth.RECOMMENDED_CONNTRACK_MAX:
-            ok = _sysctl_set('net.netfilter.nf_conntrack_max',
-                             ConntrackHealth.RECOMMENDED_CONNTRACK_MAX)
-            actions.append({
-                'action': f'nf_conntrack_max: {ct_max} → {ConntrackHealth.RECOMMENDED_CONNTRACK_MAX}',
-                'success': ok,
-            })
-            hashsize = ConntrackHealth.RECOMMENDED_CONNTRACK_MAX // 4
-            ok2 = _write_file('/sys/module/nf_conntrack/parameters/hashsize', hashsize)
-            actions.append({
-                'action': f'hashsize → {hashsize}',
-                'success': ok2,
-            })
-        else:
-            actions.append({'action': f'Already at {ct_max} — no change', 'success': True})
-
-        return {'name': 'conntrack', 'actions': actions,
-                'success': all(a.get('success', True) for a in actions)}
 
 
 # =============================================================================
@@ -2617,38 +2535,6 @@ class CpuGovernorHealth:
 
 
 
-    @staticmethod
-    def _get_cpu_count():
-        return os.cpu_count() or 1
-
-    @staticmethod
-    def _get_governors():
-        """Return list of (cpu_index, current_governor) for all cores."""
-        governors = []
-        for i in range(CpuGovernorHealth._get_cpu_count()):
-            path = f'/sys/devices/system/cpu/cpu{i}/cpufreq/scaling_governor'
-            gov = _read_file(path)
-            if gov:
-                governors.append((i, gov))
-        return governors
-
-    @staticmethod
-    def _get_available_governors(cpu_index=0):
-        path = f'/sys/devices/system/cpu/cpu{cpu_index}/cpufreq/scaling_available_governors'
-        avail = _read_file(path)
-        return avail.split() if avail else []
-
-    @staticmethod
-    def _get_cur_freq_mhz(cpu_index=0):
-        path = f'/sys/devices/system/cpu/cpu{cpu_index}/cpufreq/scaling_cur_freq'
-        val = _read_file(path)
-        return int(val) // 1000 if val else None
-
-    @staticmethod
-    def _get_max_freq_mhz(cpu_index=0):
-        path = f'/sys/devices/system/cpu/cpu{cpu_index}/cpufreq/scaling_max_freq'
-        val = _read_file(path)
-        return int(val) // 1000 if val else None
 
 
 

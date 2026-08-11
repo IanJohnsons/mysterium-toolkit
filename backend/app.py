@@ -872,6 +872,7 @@ def record_db_success(db_name):
         if _db_write_failures.pop(db_name, None):
             logger.info(f"{db_name} is writable again")
 _local_node_id = ''         # Cached local node identity for DB writes (set by slow tier)
+_sysmetrics_backfilled = False  # v1.4.5: one-shot guard for SystemMetricsDB.backfill_node_id
 _identity_cache = {'address': '', 'ts': 0}  # Cache identity to reduce /identities API calls
 
 # Uptime tracking — persisted to disk so 30-day stats survive restarts
@@ -2093,6 +2094,16 @@ class SessionDB:
         are inserted before the identity is known, so provider_id is stored as ''.
         This one-time fix ensures DataManager stats (which filter by provider_id)
         count all backfilled sessions correctly.
+
+        v1.4.5 — REFUSE when the table already holds rows from another node.
+        The schema migration above states plainly that empty provider_id rows may
+        belong to a different, migrated node and must not be backfilled. This
+        method did exactly that anyway: it stamped every empty row with the local
+        identity, which turned imported foreign sessions into local ones and
+        destroyed the only evidence that they came from elsewhere. Blank rows
+        written by this install before its identity was known are safe to claim;
+        blank rows sitting next to a foreign provider_id are not, and that case is
+        now reported instead of silently rewritten.
         """
         if not provider_id:
             return 0
@@ -2101,6 +2112,26 @@ class SessionDB:
         try:
             with cls._lock:
                 conn = cls._conn()
+                others = [r[0] for r in conn.execute(
+                    "SELECT DISTINCT provider_id FROM sessions "
+                    "WHERE provider_id != '' AND provider_id IS NOT NULL"
+                ).fetchall()]
+                foreign = [p for p in others if p != provider_id]
+                if foreign:
+                    blank = conn.execute(
+                        "SELECT COUNT(*) FROM sessions "
+                        "WHERE provider_id='' OR provider_id IS NULL"
+                    ).fetchone()[0]
+                    conn.close()
+                    logger.warning(
+                        f"SessionDB: provider_id backfill REFUSED — this database holds "
+                        f"sessions from {len(foreign)} other node(s): "
+                        f"{', '.join(p[:10] + '…' for p in foreign[:3])}. "
+                        f"{blank} rows with no provider_id were left untouched; claiming "
+                        f"them for {provider_id[:10]}… could mislabel another node's "
+                        f"sessions. Check /api/database-health."
+                    )
+                    return 0
                 cur = conn.execute(
                     "UPDATE sessions SET provider_id=? WHERE provider_id='' OR provider_id IS NULL",
                     (provider_id,)
@@ -2406,6 +2437,20 @@ class EarningsDB:
                         source     TEXT DEFAULT 'identity'
                     )
                 """)
+                # v1.4.5: until now a snapshot carried no trace of which node it
+                # came from, so data merged in from another install was impossible
+                # to tell apart afterwards, let alone remove. New rows are stamped;
+                # existing rows keep '' because we cannot know retroactively.
+                # NOTE: the primary key is still `time` alone. Two nodes writing a
+                # snapshot at the same timestamp still collide, and INSERT OR IGNORE
+                # means the second one is dropped without a word. Fixing that needs
+                # a table rebuild with UNIQUE(time, provider_id) — deliberately not
+                # bundled into this release.
+                try:
+                    conn.execute("ALTER TABLE earnings_snapshots ADD COLUMN provider_id TEXT DEFAULT ''")
+                    logger.info("EarningsDB: added provider_id column to existing database")
+                except Exception:
+                    pass  # column already present
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_time ON earnings_snapshots(time)")
                 conn.commit()
                 conn.close()
@@ -4791,7 +4836,20 @@ class MetricsCollector:
                             'sys_speed_total': _perf.get('sys_speed_total'),
                             'latency_ms':      _perf.get('latency_ms'),
                         }
-                        if SystemMetricsDB.record(resources_data, node_id=_local_node_id,
+                        # v1.4.5: this runs in the fast tier (~3s), but _local_node_id
+                        # is only set once the slow tier (5 min) has reached the node.
+                        # Every write before that landed with an empty node_id, and
+                        # get_history() used to fold empty rows into every node's chart
+                        # — so those orphans showed up under whichever node you opened.
+                        # IDENTITY_FILE holds the last known identity across restarts.
+                        _sm_node_id = _local_node_id
+                        if not _sm_node_id:
+                            try:
+                                if IDENTITY_FILE.exists():
+                                    _sm_node_id = IDENTITY_FILE.read_text().strip()
+                            except Exception:
+                                pass
+                        if SystemMetricsDB.record(resources_data, node_id=_sm_node_id,
                                                   performance_data=_perf_ext) is False:
                             record_db_failure('SystemMetricsDB', 'write returned False')
                         else:
@@ -5511,6 +5569,18 @@ class MetricsCollector:
                 global _local_node_id
                 if identity:
                     _local_node_id = identity
+                    # v1.4.5: one-shot per process. Snapshots written before the
+                    # identity was known carry an empty node_id, and get_history()
+                    # no longer matches those (it used to fold them into every
+                    # node's chart). Claim them once so the existing history stays
+                    # visible; the method refuses if the table is mixed.
+                    global _sysmetrics_backfilled
+                    if not _sysmetrics_backfilled and SystemMetricsDB:
+                        _sysmetrics_backfilled = True
+                        try:
+                            SystemMetricsDB.backfill_node_id(identity)
+                        except Exception as _bf_e:
+                            logger.warning(f"SystemMetricsDB backfill skipped: {_bf_e}")
                 if node_status_data.get('status') == 'online':
                     MetricsCollector.record_uptime_ping(identity=identity)
 
