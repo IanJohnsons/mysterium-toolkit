@@ -1025,7 +1025,7 @@ const MysteriumDashboard = () => {
   // Fleet Node Manager state — must be at top level to survive fetchMetrics re-renders
   const [fleetModalOpen, setFleetModalOpen] = useState(false);
   const [fleetEditNode, setFleetEditNode] = useState(null);
-  const [fleetForm, setFleetForm] = useState({ label: '', toolkit_url: '', toolkit_api_key: '', tls_cert: '', tls_verify: true });
+  const [fleetForm, setFleetForm] = useState({ label: '', toolkit_url: '', url: '', toolkit_api_key: '', tls_cert: '', tls_verify: true });
   const [fleetProbing, setFleetProbing] = useState(false);
   const [fleetProbeResult, setFleetProbeResult] = useState(null);
   const [fleetSaving, setFleetSaving] = useState(false);
@@ -1847,7 +1847,7 @@ const MysteriumDashboard = () => {
       // ── Fleet Node Manager — uses top-level state to survive re-renders ───
       const openFleetAdd = () => {
         setFleetEditNode(null);
-        setFleetForm({ label: '', toolkit_url: '', toolkit_api_key: '', tls_cert: '', tls_verify: true });
+        setFleetForm({ label: '', toolkit_url: '', url: '', toolkit_api_key: '', tls_cert: '', tls_verify: true });
         setFleetProbeResult(null);
         setFleetSaveError('');
         setFleetModalOpen(true);
@@ -1855,14 +1855,39 @@ const MysteriumDashboard = () => {
           .then(r => r.json()).then(d => setFleetConfigNodes(d.nodes || [])).catch(() => {});
       };
 
+      // v1.4.5: the form used to be filled from the fleet status payload, which
+      // deliberately carries no toolkit_api_key — so the key field came up empty,
+      // the Save button stayed disabled on `!fleetForm.toolkit_api_key`, and
+      // renaming a node was impossible without pasting the key again. The real
+      // config comes from /fleet/config; the key itself now stays on the server
+      // and an empty field means "leave it as it is".
       const openFleetEdit = (node) => {
         setFleetEditNode(node);
-        setFleetForm({ label: node.label || '', toolkit_url: node.toolkit_url || '', toolkit_api_key: node.toolkit_api_key || '', tls_cert: node.tls_cert || '', tls_verify: node.tls_verify !== false });
+        setFleetForm({
+          label: node.label || '', toolkit_url: node.toolkit_url || '', url: node.url || '',
+          toolkit_api_key: '', tls_cert: node.tls_cert || '', tls_verify: node.tls_verify !== false,
+        });
         setFleetProbeResult(null);
         setFleetSaveError('');
         setFleetModalOpen(true);
         fetch(`${backendUrlRef.current}/fleet/config`, { headers: authHeaderRef.current })
-          .then(r => r.json()).then(d => setFleetConfigNodes(d.nodes || [])).catch(() => {});
+          .then(r => r.json())
+          .then(d => {
+            const list = d.nodes || [];
+            setFleetConfigNodes(list);
+            const cfg = list.find(n => n.id === node.id) || list.find(n => n.toolkit_url === node.toolkit_url);
+            if (cfg) {
+              setFleetForm(f => ({
+                ...f,
+                label: cfg.label || f.label,
+                toolkit_url: cfg.toolkit_url || f.toolkit_url,
+                url: cfg.url || f.url,
+                tls_cert: cfg.tls_cert || '',
+                tls_verify: cfg.tls_verify !== false,
+              }));
+            }
+          })
+          .catch(() => setFleetSaveError('Could not read fleet config — do not save until this loads.'));
       };
 
       // Kept out of the JSX: an expression starting with {/ can be mistaken for the
@@ -1877,7 +1902,7 @@ const MysteriumDashboard = () => {
           const r = await fetch(`${backendUrlRef.current}/fleet/probe`, {
             method: 'POST',
             headers: { ...authHeaderRef.current, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ toolkit_url: fleetForm.toolkit_url, toolkit_api_key: fleetForm.toolkit_api_key, tls_cert: fleetForm.tls_cert, tls_verify: fleetForm.tls_verify }),
+            body: JSON.stringify({ toolkit_url: fleetForm.toolkit_url, toolkit_api_key: fleetForm.toolkit_api_key, node_id: fleetEditNode ? fleetEditNode.id : undefined, tls_cert: fleetForm.tls_cert, tls_verify: fleetForm.tls_verify }),
           });
           const d = await r.json();
           setFleetProbeResult(d);
@@ -1891,8 +1916,19 @@ const MysteriumDashboard = () => {
       };
 
       const handleFleetSave = async () => {
-        if (!fleetForm.toolkit_url || !fleetForm.toolkit_api_key) {
-          setFleetSaveError('Toolkit URL and API key are required.');
+        if (!fleetForm.toolkit_url) {
+          setFleetSaveError('Toolkit URL is required.');
+          return;
+        }
+        if (!fleetEditNode && !fleetForm.toolkit_api_key) {
+          setFleetSaveError('API key is required when adding a node.');
+          return;
+        }
+        // v1.4.5: this POST rewrites the whole of nodes.json from fleetConfigNodes.
+        // If that fetch had not finished, or failed, the list is empty and the save
+        // wiped every configured node. Two entries were lost that way in August.
+        if (fleetEditNode && fleetConfigNodes.length === 0) {
+          setFleetSaveError('Fleet config not loaded yet — not saving, as that would erase nodes.json. Close and reopen.');
           return;
         }
         setFleetSaving(true);
@@ -1906,24 +1942,41 @@ const MysteriumDashboard = () => {
             ? { tls_cert: fleetForm.tls_cert || '', tls_verify: fleetForm.tls_verify !== false }
             : {};
           if (fleetEditNode) {
-            updated = fleetConfigNodes.map(n =>
-              (n.toolkit_url === fleetEditNode.toolkit_url)
-                ? (() => {
-                    const merged = { ...n, label: fleetForm.label, toolkit_url: fleetForm.toolkit_url, toolkit_api_key: fleetForm.toolkit_api_key, ...tlsFields };
-                    if (!isHttps) { delete merged.tls_cert; delete merged.tls_verify; }
-                    return merged;
-                  })()
-                : n
-            );
+            // Match on id, not toolkit_url: the URL is itself editable, so matching
+            // on it meant that changing it found nothing and the node silently
+            // vanished from the saved file.
+            let matched = false;
+            updated = fleetConfigNodes.map(n => {
+              const isTarget = fleetEditNode.id ? (n.id === fleetEditNode.id)
+                                                : (n.toolkit_url === fleetEditNode.toolkit_url);
+              if (!isTarget) return n;
+              matched = true;
+              const merged = { ...n, label: fleetForm.label, toolkit_url: fleetForm.toolkit_url, ...tlsFields };
+              if (fleetForm.url) merged.url = fleetForm.url;
+              // Empty key field means "unchanged" — the backend keeps the stored one.
+              if (fleetForm.toolkit_api_key) merged.toolkit_api_key = fleetForm.toolkit_api_key;
+              else delete merged.toolkit_api_key;
+              if (!isHttps) { delete merged.tls_cert; delete merged.tls_verify; }
+              delete merged.has_api_key; delete merged.api_key_hint;
+              return merged;
+            });
+            if (!matched) {
+              setFleetSaving(false);
+              setFleetSaveError('Could not find this node in the saved config — not saving. Reopen the fleet manager.');
+              return;
+            }
           } else {
             const newNode = {
               id: fleetForm.label.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || `node${fleetConfigNodes.length}`,
               label: fleetForm.label || fleetForm.toolkit_url,
               toolkit_url: fleetForm.toolkit_url,
               toolkit_api_key: fleetForm.toolkit_api_key,
+              ...(fleetForm.url ? { url: fleetForm.url } : {}),
               ...tlsFields,
             };
-            updated = [...fleetConfigNodes, newNode];
+            updated = [...fleetConfigNodes.map(n => {
+              const c = { ...n }; delete c.has_api_key; delete c.api_key_hint; return c;
+            }), newNode];
           }
           const r = await fetch(`${backendUrlRef.current}/fleet/config`, {
             method: 'POST',
@@ -2068,16 +2121,43 @@ const MysteriumDashboard = () => {
                             <p className="text-xs text-slate-600 mt-1">IP address and port of the remote toolkit backend</p>
                           </div>
 
+                          {/* TequilAPI URL — optional, auto-discovered by the probe.
+                              Missing from this form until v1.4.5, so a node added
+                              through the UI never got one written to nodes.json. */}
+                          <div>
+                            <label className="block text-xs text-slate-400 mb-1">TequilAPI URL <span className="text-slate-600">(optional)</span></label>
+                            <input
+                              value={fleetForm.url}
+                              onChange={e => setFleetForm(f => ({ ...f, url: e.target.value.trim() }))}
+                              placeholder="http://NODE_IP:4050"
+                              className="w-full bg-slate-800 border border-slate-600 focus:border-violet-400 rounded px-3 py-2 text-xs text-slate-200 outline-none transition font-mono"
+                            />
+                            <p className="text-xs text-slate-600 mt-1">Node API, port 4050. Leave empty to let the connection test fill it in. Port 4449 is corrected to 4050 automatically.</p>
+                          </div>
+
                           {/* API Key */}
                           <div>
-                            <label className="block text-xs text-slate-400 mb-1">API Key <span className="text-red-400">*</span></label>
+                            <label className="block text-xs text-slate-400 mb-1">
+                              API Key {!fleetEditNode && <span className="text-red-400">*</span>}
+                            </label>
                             <input
                               type="password"
                               value={fleetForm.toolkit_api_key}
                               onChange={e => { setFleetForm(f => ({ ...f, toolkit_api_key: e.target.value })); setFleetProbeResult(null); }}
-                              placeholder="Paste API key from remote node's config/setup.json"
+                              placeholder={fleetEditNode
+                                ? ((() => {
+                                    const cfg = fleetConfigNodes.find(n => n.id === fleetEditNode.id)
+                                             || fleetConfigNodes.find(n => n.toolkit_url === fleetEditNode.toolkit_url);
+                                    return cfg && cfg.has_api_key
+                                      ? 'Unchanged — stored key ending …' + (cfg.api_key_hint || '')
+                                      : 'No key stored — paste one';
+                                  })())
+                                : "Paste API key from remote node's config/setup.json"}
                               className="w-full bg-slate-800 border border-slate-600 focus:border-violet-400 rounded px-3 py-2 text-xs text-slate-200 outline-none transition font-mono"
                             />
+                            {fleetEditNode && (
+                              <p className="text-xs text-slate-600 mt-1">Leave empty to keep the current key. The key stays on the server and is never sent to this page.</p>
+                            )}
                           </div>
 
                           {/* TLS — only relevant for https:// nodes */}
@@ -2167,7 +2247,7 @@ const MysteriumDashboard = () => {
                               </button>
                             )}
                           </div>
-                          <button onClick={handleFleetSave} disabled={fleetSaving || !fleetForm.toolkit_url || !fleetForm.toolkit_api_key}
+                          <button onClick={handleFleetSave} disabled={fleetSaving || !fleetForm.toolkit_url || (!fleetEditNode && !fleetForm.toolkit_api_key)}
                             className="px-4 py-2 text-xs font-semibold rounded border border-violet-500/40 bg-violet-500/20 text-violet-200 hover:bg-violet-500/30 transition disabled:opacity-40">
                             {fleetSaving ? '⟳ Saving…' : fleetEditNode ? '✓ Save Changes' : '⊕ Add to Fleet'}
                           </button>

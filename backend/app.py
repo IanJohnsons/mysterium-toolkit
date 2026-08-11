@@ -8292,7 +8292,14 @@ def reload_fleet():
 @app.route('/fleet/config', methods=['GET'])
 @require_auth
 def get_fleet_config():
-    """Read current nodes.json config for the fleet manager UI."""
+    """Read current nodes.json config for the fleet manager UI.
+
+    v1.4.5: API keys are NOT returned. The fleet manager only needs to know that
+    a key exists and which one it is; sending the key itself to the browser on
+    every form open is a needless copy of a credential. Each node gets
+    `has_api_key` plus `api_key_hint` (last six characters) instead, and the
+    POST route treats a missing key as "leave unchanged".
+    """
     config_path = _nodes_json_path or Path('config/nodes.json')
     try:
         if config_path.exists():
@@ -8301,7 +8308,14 @@ def get_fleet_config():
             nodes = data if isinstance(data, list) else data.get('nodes', [])
         else:
             nodes = []
-        return jsonify({'nodes': nodes, 'path': str(config_path)}), 200
+        safe = []
+        for n in nodes:
+            n2 = {k: v for k, v in n.items() if k != 'toolkit_api_key'}
+            key = n.get('toolkit_api_key') or ''
+            n2['has_api_key']  = bool(key)
+            n2['api_key_hint'] = key[-6:] if len(key) > 6 else ('•' * len(key))
+            safe.append(n2)
+        return jsonify({'nodes': safe, 'path': str(config_path)}), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -8309,24 +8323,62 @@ def get_fleet_config():
 @app.route('/fleet/config', methods=['POST'])
 @require_auth
 def save_fleet_config():
-    """Write nodes.json and hot-reload the fleet registry."""
+    """Write nodes.json and hot-reload the fleet registry.
+
+    v1.4.5 — two guards, both added after a fleet edit wiped entries from
+    nodes.json:
+
+    1. A node whose `toolkit_api_key` is absent or empty keeps the key already
+       on disk, matched by `id`. The GET route no longer hands out keys, so an
+       edit that only changes a label arrives here without one — that must mean
+       "unchanged", not "clear it". A key is only required for a node that has
+       none stored yet.
+    2. Saving an empty list while nodes exist on disk is refused unless the
+       caller passes confirm_empty. A save that silently empties the fleet is
+       never what the operator meant, and until now nothing stopped it.
+    """
     try:
         body = request.get_json() or {}
         nodes = body.get('nodes', [])
+        confirm_empty = bool(body.get('confirm_empty'))
 
-        # Validate each node has required fields
+        config_path = _nodes_json_path or Path('config/nodes.json')
+
+        existing = []
+        try:
+            if config_path.exists():
+                with open(config_path) as f:
+                    _d = json.load(f)
+                existing = _d if isinstance(_d, list) else _d.get('nodes', [])
+        except Exception as e:
+            logger.warning(f"save_fleet_config: could not read existing nodes.json: {e}")
+
+        if existing and not nodes and not confirm_empty:
+            return jsonify({
+                'error': f'Refusing to save an empty fleet — {len(existing)} node(s) are '
+                         f'configured. Remove them individually, or pass confirm_empty.'
+            }), 400
+
+        by_id  = {n.get('id'): n for n in existing if n.get('id')}
+        by_url = {n.get('toolkit_url'): n for n in existing if n.get('toolkit_url')}
+
         for i, n in enumerate(nodes):
             if not n.get('toolkit_url'):
                 return jsonify({'error': f'Node {i+1} missing toolkit_url'}), 400
-            if not n.get('toolkit_api_key'):
-                return jsonify({'error': f'Node {i+1} missing toolkit_api_key'}), 400
             # Auto-generate id if missing
             if not n.get('id'):
                 import re as _re
                 base = _re.sub(r'[^a-z0-9]', '-', (n.get('label', f'node{i}')).lower())
                 n['id'] = base.strip('-') or f'node{i}'
 
-        config_path = _nodes_json_path or Path('config/nodes.json')
+            if not n.get('toolkit_api_key'):
+                prev = by_id.get(n.get('id')) or by_url.get(n.get('toolkit_url'))
+                prev_key = (prev or {}).get('toolkit_api_key') or ''
+                if prev_key:
+                    n['toolkit_api_key'] = prev_key
+                else:
+                    return jsonify({'error': f'Node {i+1} missing toolkit_api_key'}), 400
+
         config_path.parent.mkdir(parents=True, exist_ok=True)
         with open(config_path, 'w') as f:
             json.dump({'nodes': nodes}, f, indent=2)
@@ -8351,6 +8403,25 @@ def probe_fleet_node():
 
         if not toolkit_url:
             return jsonify({'success': False, 'error': 'toolkit_url required'}), 400
+
+        # v1.4.5: when editing an existing node the key field is intentionally left
+        # empty (the key never leaves the server), so fall back to the one already
+        # stored for this node — otherwise Test Connection would answer 401 for a
+        # node that is configured perfectly well.
+        if not api_key:
+            try:
+                _cp = _nodes_json_path or Path('config/nodes.json')
+                if _cp.exists():
+                    with open(_cp) as _f:
+                        _d = json.load(_f)
+                    _nodes = _d if isinstance(_d, list) else _d.get('nodes', [])
+                    _nid = body.get('node_id')
+                    _match = next((n for n in _nodes if _nid and n.get('id') == _nid), None) \
+                             or next((n for n in _nodes if n.get('toolkit_url', '').rstrip('/') == toolkit_url), None)
+                    if _match:
+                        api_key = _match.get('toolkit_api_key', '') or ''
+            except Exception as _e:
+                logger.warning(f"probe: could not read stored key: {_e}")
 
         headers = {}
         if api_key:
