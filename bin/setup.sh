@@ -644,6 +644,12 @@ case "$_ARCH" in
         pkg_install "sensors" "lm-sensors" "lm_sensors" "lm_sensors" "lm_sensors" ;;
 esac
 pkg_install "sqlite3" "sqlite3" "sqlite" "sqlite" "sqlite"
+# v1.4.5: the node uses UPnP for port mapping (nat-port-mapping is on by default,
+# traversal is manual,upnp,holepunching) and the toolkit's port-reachability check
+# reads the IGD through upnpc — but miniupnpc was never installed, so that check
+# silently reported nothing and the mapping had to be diagnosed by hand.
+# Binary is `upnpc`; on Debian/Ubuntu it ships in miniupnpc.
+pkg_install "upnpc" "miniupnpc" "miniupnpc" "miniupnpc" "miniupnpc"
 # Buster/EOL fallback: if sqlite3 still not installed, download from snapshot.debian.org
 if ! command -v sqlite3 &> /dev/null; then
     echo -e "  ${YELLOW}Trying snapshot.debian.org fallback for sqlite3...${NC}"

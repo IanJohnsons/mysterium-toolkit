@@ -4329,6 +4329,26 @@ const MysteriumDashboard = () => {
                 </div>
 
                 <div>
+                  <h4 className="text-emerald-400 font-semibold mb-1">Fleet Card Fields</h4>
+                  <p className="text-slate-400"><strong className="text-slate-300">Up:</strong> — share of the last 24 hours the node was reachable. When it is below 100%, the figure after the arrow (for example <code className="bg-slate-800 px-1 rounded">Up: 85.4% → 5.0904/day at 100%</code>) is today's earnings divided by that uptime: what the day would have produced had the node been reachable throughout. It is not extra income — it is the cost of the downtime. At 100% uptime it would only repeat today's number, so it is left out. <strong className="text-slate-300">Peer mode (full data)</strong> — the remote node runs the toolkit, so history, quality and system metrics come across; <strong className="text-slate-300">TequilAPI mode (live only)</strong> means only the node API is reachable and nothing historical is available. <strong className="text-slate-300">MYST</strong> in bold is the unsettled balance, <strong className="text-slate-300">Today</strong> is earned since midnight in your configured timezone.</p>
+                </div>
+
+                <div>
+                  <h4 className="text-emerald-400 font-semibold mb-1">NAT Types</h4>
+                  <p className="text-slate-400">How your router exposes the node to consumers, reported by the node itself. <strong className="text-slate-300">No NAT (public)</strong> — a public IP with no translation, typical on a VPS; the node performs no detection and reports nothing. <strong className="text-slate-300">Full Cone</strong> — any external host can reach the mapped port; best case behind a router. <strong className="text-slate-300">Restricted Cone</strong> — reachable by hosts you contacted first; still fine. <strong className="text-slate-300">Port Restricted</strong> — shown in amber: usable, but hole punching succeeds less often, so you win fewer sessions. <strong className="text-slate-300">Symmetric</strong> — shown in red: a new mapping per destination, which defeats hole punching and severely limits earnings. UPnP or a manual port forward usually improves a restricted or symmetric result.</p>
+                </div>
+
+                <div>
+                  <h4 className="text-emerald-400 font-semibold mb-1">Service Types</h4>
+                  <p className="text-slate-400">The node advertises four services and the toolkit shows the friendly name everywhere. <strong className="text-slate-300">Public</strong> (<code className="bg-slate-800 px-1 rounded">wireguard</code>) — open to the whole network, no access policy. <strong className="text-slate-300">VPN</strong> (<code className="bg-slate-800 px-1 rounded">dvpn</code>) — restricted to the Mysterium access policy. <strong className="text-slate-300">B2B Data Scraping</strong> and <strong className="text-slate-300">B2B VPN and data transfer</strong> — business traffic, usually long-running and the largest earners. <code className="bg-slate-800 px-1 rounded">monitoring</code> and <code className="bg-slate-800 px-1 rounded">noop</code> are internal to the node and never billed.</p>
+                </div>
+
+                <div>
+                  <h4 className="text-emerald-400 font-semibold mb-1">System Health States</h4>
+                  <p className="text-slate-400"><strong className="text-emerald-400">OK</strong> — the subsystem matches the recommended setting. <strong className="text-amber-400">Warning</strong> — it works, but a value is below what an exit node wants; <strong className="text-slate-300">Fix &amp; Lock</strong> applies the change and writes it so it survives a reboot, <strong className="text-slate-300">Fix only</strong> applies it until the next reboot, and <strong className="text-slate-300">Unpersist</strong> removes what the toolkit wrote. <strong className="text-red-400">Critical</strong> — something is actively degrading the node. Targets scale with load rather than being fixed: connection tracking, for instance, asks for 128K below five tunnels, 256K up to nineteen and 512K above that, so a quiet node is not told to reserve memory it will never use.</p>
+                </div>
+
+                <div>
                   <h4 className="text-emerald-400 font-semibold mb-1">Traffic Explained</h4>
                   <p className="text-slate-400"><strong className="text-slate-300">↑ Out to consumers</strong> = content forwarded (earns MYST). <strong className="text-slate-300">↓ In from consumers</strong> = their requests (small). <strong className="text-slate-300">NIC total</strong> = physical interface including tunnel overhead (~2× VPN). <strong className="text-slate-300">Overhead</strong> = NIC − VPN. <strong className="text-slate-300">VNSTAT</strong> = persistent counters (survive reboot). <strong className="text-slate-300">PSUTIL</strong> = since-boot fallback.</p>
                 </div>

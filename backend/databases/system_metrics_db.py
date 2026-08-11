@@ -200,7 +200,10 @@ class SystemMetricsDB:
                 conn.commit()
                 conn.close()
                 if updated:
-                    logger.info(
+                    # Visible even under pi_mode, where INFO is suppressed — this
+                    # changed rows on disk and must not be silent.
+                    logger.log(
+                        logging.INFO if logger.isEnabledFor(logging.INFO) else logging.WARNING,
                         f"SystemMetricsDB: claimed {updated} snapshot(s) written "
                         f"before the node identity was known"
                     )
@@ -209,7 +212,8 @@ class SystemMetricsDB:
                     # already-attributed row cannot be claimed without colliding.
                     # OR IGNORE leaves those in place — they are duplicates of a row
                     # that is already in the chart, so nothing is missing from it.
-                    logger.info(
+                    logger.log(
+                        logging.INFO if logger.isEnabledFor(logging.INFO) else logging.WARNING,
                         f"SystemMetricsDB: {left} orphan snapshot(s) share a timestamp "
                         f"with an attributed row and were left as-is"
                     )

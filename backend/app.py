@@ -185,6 +185,37 @@ if PI_MODE:
     logging.getLogger().setLevel(logging.WARNING)
     logger.warning("Pi mode active — log level set to WARNING to reduce SD card writes")
 
+
+def log_result(msg):
+    """Log an outcome that must stay visible even when INFO is suppressed.
+
+    v1.4.5. Pi mode drops the root logger to WARNING, which is right for routine
+    chatter but wrong for anything that changed data on disk: the v1.4.5 backfill
+    claimed 24 orphaned snapshots on the Pi and said so at INFO, so the only proof
+    it had run was querying the database by hand. Report at INFO where INFO is
+    visible, at WARNING where it is not — the message is never lost.
+    """
+    logger.log(logging.INFO if logger.isEnabledFor(logging.INFO) else logging.WARNING, msg)
+
+
+def local_provider_id():
+    """This node's identity, for stamping database rows.
+
+    v1.4.5. `_local_node_id` is only set once the slow tier has reached the node,
+    so anything written before that lands with an empty provider_id and sits in a
+    bucket of its own, apart from the rows that do carry the identity. The identity
+    file holds the last known value across restarts and closes that gap — the same
+    fallback already applied to the system metrics write path.
+    """
+    if _local_node_id:
+        return _local_node_id
+    try:
+        if IDENTITY_FILE.exists():
+            return IDENTITY_FILE.read_text().strip()
+    except Exception:
+        pass
+    return ''
+
 # ============ TIMEZONE ============
 # All "today" and "this month" calculations use this timezone.
 # Earnings snapshot timestamps stay in UTC — only display bucketing uses local tz.
@@ -339,6 +370,13 @@ def _load_nodes_json():
                     _nodes_json_path = p
                     _nodes_json_mtime = mtime
                     logger.info(f"Loaded {len(result)} nodes from {p}")
+                else:
+                    # v1.4.5: mtime was only recorded when nodes were found, so a file
+                    # that is briefly empty or malformed stayed "changed" forever and
+                    # the watcher reloaded it on every pass, silently.
+                    _nodes_json_path = p
+                    _nodes_json_mtime = mtime
+                    logger.warning(f"{p} contains no usable nodes — fleet is empty")
                 return result
             except Exception as e:
                 logger.warning(f"Error loading {p}: {e}")
@@ -1289,6 +1327,54 @@ class TrafficDB:
                     )
                 """)
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_date ON daily_traffic(date)")
+                # v1.4.5: same as earnings_snapshots — `date` alone was the key, so a
+                # second node's day-total silently replaced or was dropped against the
+                # first one's, and nothing recorded which node a row belonged to.
+                _tcols = [r[1] for r in conn.execute("PRAGMA table_info(daily_traffic)").fetchall()]
+                _tpk   = [r[1] for r in conn.execute("PRAGMA table_info(daily_traffic)").fetchall() if r[5]]
+                if 'provider_id' not in _tcols or _tpk == ['date']:
+                    _tpid = ''
+                    try:
+                        if IDENTITY_FILE.exists():
+                            _tpid = IDENTITY_FILE.read_text().strip()
+                    except Exception:
+                        pass
+                    _thas = 'provider_id' in _tcols
+                    _tn = conn.execute("SELECT COUNT(*) FROM daily_traffic").fetchone()[0]
+                    conn.execute("BEGIN IMMEDIATE")
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS daily_traffic_v2 (
+                            date        TEXT NOT NULL,
+                            vpn_rx_mb   REAL DEFAULT 0,
+                            vpn_tx_mb   REAL DEFAULT 0,
+                            nic_rx_mb   REAL DEFAULT 0,
+                            nic_tx_mb   REAL DEFAULT 0,
+                            source      TEXT DEFAULT 'snapshot',
+                            provider_id TEXT DEFAULT '',
+                            PRIMARY KEY (date, provider_id)
+                        )
+                    """)
+                    if _thas:
+                        conn.execute("""INSERT OR IGNORE INTO daily_traffic_v2
+                                        (date, vpn_rx_mb, vpn_tx_mb, nic_rx_mb, nic_tx_mb, source, provider_id)
+                                        SELECT date, vpn_rx_mb, vpn_tx_mb, nic_rx_mb, nic_tx_mb, source,
+                                               COALESCE(provider_id, '') FROM daily_traffic""")
+                    else:
+                        conn.execute("""INSERT OR IGNORE INTO daily_traffic_v2
+                                        (date, vpn_rx_mb, vpn_tx_mb, nic_rx_mb, nic_tx_mb, source, provider_id)
+                                        SELECT date, vpn_rx_mb, vpn_tx_mb, nic_rx_mb, nic_tx_mb, source, ?
+                                        FROM daily_traffic""", (_tpid,))
+                    _tmoved = conn.execute("SELECT COUNT(*) FROM daily_traffic_v2").fetchone()[0]
+                    if _tmoved < _tn:
+                        conn.execute("ROLLBACK")
+                        logger.error(f"TrafficDB migration aborted — {_tn} rows in, {_tmoved} out. "
+                                     f"Table left untouched.")
+                    else:
+                        conn.execute("DROP TABLE daily_traffic")
+                        conn.execute("ALTER TABLE daily_traffic_v2 RENAME TO daily_traffic")
+                        conn.execute("COMMIT")
+                        logger.warning(f"TrafficDB: rebuilt with PRIMARY KEY (date, provider_id) — "
+                                       f"{_tmoved} row(s) preserved")
                 conn.commit()
                 conn.close()
                 cls._initialized = True
@@ -1303,16 +1389,16 @@ class TrafficDB:
             try:
                 conn = cls._conn()
                 conn.execute("""
-                    INSERT INTO daily_traffic(date, vpn_rx_mb, vpn_tx_mb, nic_rx_mb, nic_tx_mb, source)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(date) DO UPDATE SET
+                    INSERT INTO daily_traffic(date, vpn_rx_mb, vpn_tx_mb, nic_rx_mb, nic_tx_mb, source, provider_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(date, provider_id) DO UPDATE SET
                         vpn_rx_mb = excluded.vpn_rx_mb,
                         vpn_tx_mb = excluded.vpn_tx_mb,
                         nic_rx_mb = excluded.nic_rx_mb,
                         nic_tx_mb = excluded.nic_tx_mb,
                         source    = excluded.source
                 """, (date_str, round(vpn_rx_mb, 3), round(vpn_tx_mb, 3),
-                      round(nic_rx_mb, 3), round(nic_tx_mb, 3), source))
+                      round(nic_rx_mb, 3), round(nic_tx_mb, 3), source, local_provider_id()))
                 conn.commit()
                 conn.close()
             except Exception as e:
@@ -1415,11 +1501,11 @@ class TrafficDB:
                     # Never overwrite vnstat_daily rows from the running backend
                     conn.execute("""
                         INSERT OR IGNORE INTO daily_traffic
-                            (date, vpn_rx_mb, vpn_tx_mb, nic_rx_mb, nic_tx_mb, source)
-                        VALUES (?, ?, ?, ?, ?, 'vnstat_backfill')
+                            (date, vpn_rx_mb, vpn_tx_mb, nic_rx_mb, nic_tx_mb, source, provider_id)
+                        VALUES (?, ?, ?, ?, ?, 'vnstat_backfill', ?)
                     """, (date_str,
                           round(v["rx"], 3), round(v["tx"], 3),
-                          round(n["rx"], 3), round(n["tx"], 3)))
+                          round(n["rx"], 3), round(n["tx"], 3), local_provider_id()))
                     imported_days += conn.execute("SELECT changes()").fetchone()[0]
 
                 # Step 2: Monthly fallback — only months with VPN traffic, no daily rows
@@ -1436,11 +1522,11 @@ class TrafficDB:
                     n = month_nic.get(key, {"rx": 0.0, "tx": 0.0})
                     conn.execute("""
                         INSERT OR REPLACE INTO daily_traffic
-                            (date, vpn_rx_mb, vpn_tx_mb, nic_rx_mb, nic_tx_mb, source)
-                        VALUES (?, ?, ?, ?, ?, 'vnstat_month_import')
+                            (date, vpn_rx_mb, vpn_tx_mb, nic_rx_mb, nic_tx_mb, source, provider_id)
+                        VALUES (?, ?, ?, ?, ?, 'vnstat_month_import', ?)
                     """, (key + "-01",
                           round(v["rx"], 3), round(v["tx"], 3),
-                          round(n["rx"], 3), round(n["tx"], 3)))
+                          round(n["rx"], 3), round(n["tx"], 3), local_provider_id()))
                     imported_months += conn.execute("SELECT changes()").fetchone()[0]
 
                 conn.commit()
@@ -2437,20 +2523,56 @@ class EarningsDB:
                         source     TEXT DEFAULT 'identity'
                     )
                 """)
-                # v1.4.5: until now a snapshot carried no trace of which node it
-                # came from, so data merged in from another install was impossible
-                # to tell apart afterwards, let alone remove. New rows are stamped;
-                # existing rows keep '' because we cannot know retroactively.
-                # NOTE: the primary key is still `time` alone. Two nodes writing a
-                # snapshot at the same timestamp still collide, and INSERT OR IGNORE
-                # means the second one is dropped without a word. Fixing that needs
-                # a table rebuild with UNIQUE(time, provider_id) — deliberately not
-                # bundled into this release.
-                try:
-                    conn.execute("ALTER TABLE earnings_snapshots ADD COLUMN provider_id TEXT DEFAULT ''")
-                    logger.info("EarningsDB: added provider_id column to existing database")
-                except Exception:
-                    pass  # column already present
+                # v1.4.5: `time` alone was the primary key, so two nodes writing a
+                # snapshot in the same second collided and INSERT OR IGNORE dropped
+                # the second one without a word. Rebuild with (time, provider_id).
+                # Existing rows are attributed to this node's identity only when the
+                # database holds one node's data; otherwise they stay blank, since it
+                # cannot be reconstructed.
+                _cols = [r[1] for r in conn.execute("PRAGMA table_info(earnings_snapshots)").fetchall()]
+                _pk   = [r[1] for r in conn.execute("PRAGMA table_info(earnings_snapshots)").fetchall() if r[5]]
+                if 'provider_id' not in _cols or _pk == ['time']:
+                    _pid = ''
+                    try:
+                        if IDENTITY_FILE.exists():
+                            _pid = IDENTITY_FILE.read_text().strip()
+                    except Exception:
+                        pass
+                    _has_pid_col = 'provider_id' in _cols
+                    _n = conn.execute("SELECT COUNT(*) FROM earnings_snapshots").fetchone()[0]
+                    conn.execute("BEGIN IMMEDIATE")
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS earnings_snapshots_v2 (
+                            time        TEXT NOT NULL,
+                            unsettled   REAL DEFAULT 0,
+                            lifetime    REAL DEFAULT 0,
+                            source      TEXT DEFAULT 'identity',
+                            provider_id TEXT DEFAULT '',
+                            PRIMARY KEY (time, provider_id)
+                        )
+                    """)
+                    if _has_pid_col:
+                        conn.execute("""INSERT OR IGNORE INTO earnings_snapshots_v2
+                                        (time, unsettled, lifetime, source, provider_id)
+                                        SELECT time, unsettled, lifetime, source,
+                                               COALESCE(provider_id, '') FROM earnings_snapshots""")
+                    else:
+                        conn.execute("""INSERT OR IGNORE INTO earnings_snapshots_v2
+                                        (time, unsettled, lifetime, source, provider_id)
+                                        SELECT time, unsettled, lifetime, source, ?
+                                        FROM earnings_snapshots""", (_pid,))
+                    _moved = conn.execute("SELECT COUNT(*) FROM earnings_snapshots_v2").fetchone()[0]
+                    if _moved < _n:
+                        conn.execute("ROLLBACK")
+                        logger.error(f"EarningsDB migration aborted — {_n} rows in, {_moved} out. "
+                                     f"Table left untouched.")
+                    else:
+                        conn.execute("DROP TABLE earnings_snapshots")
+                        conn.execute("ALTER TABLE earnings_snapshots_v2 RENAME TO earnings_snapshots")
+                        conn.execute("COMMIT")
+                        logger.warning(f"EarningsDB: rebuilt with PRIMARY KEY (time, provider_id) — "
+                                       f"{_moved} row(s) preserved"
+                                       + (f", attributed to {_pid[:10]}…" if _pid and not _has_pid_col else ""))
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_time ON earnings_snapshots(time)")
                 conn.commit()
                 conn.close()
@@ -2477,11 +2599,11 @@ class EarningsDB:
                     if not t:
                         continue
                     conn.execute("""
-                        INSERT OR IGNORE INTO earnings_snapshots(time, unsettled, lifetime, source)
-                        VALUES (?, ?, ?, ?)
+                        INSERT OR IGNORE INTO earnings_snapshots(time, unsettled, lifetime, source, provider_id)
+                        VALUES (?, ?, ?, ?, ?)
                     """, (t, float(s.get('unsettled', 0) or 0),
                           float(s.get('lifetime', 0) or 0),
-                          s.get('source', 'identity')))
+                          s.get('source', 'identity'), local_provider_id()))
                     imported += conn.execute("SELECT changes()").fetchone()[0]
                 conn.commit()
                 conn.close()
@@ -2500,9 +2622,9 @@ class EarningsDB:
             try:
                 conn = cls._conn()
                 conn.execute("""
-                    INSERT OR IGNORE INTO earnings_snapshots(time, unsettled, lifetime, source)
-                    VALUES (?, ?, ?, ?)
-                """, (time_iso, round(unsettled, 6), round(lifetime, 6), source))
+                    INSERT OR IGNORE INTO earnings_snapshots(time, unsettled, lifetime, source, provider_id)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (time_iso, round(unsettled, 6), round(lifetime, 6), source, local_provider_id()))
                 conn.commit()
                 conn.close()
             except Exception as e:
@@ -6318,12 +6440,21 @@ def multi_node_background_collector():
     logger.info(f"Multi-node collector started: {len(_node_registry)} nodes, "
                 f"stagger={max(1, FLEET_POLL_INTERVAL // max(1, len(_node_registry)))}s between nodes")
     cycle = 0
+    _last_nodes_check = 0.0
     while True:
         try:
-            # Hot-reload nodes.json if changed
-            if cycle % 30 == 0 and _check_nodes_json_changed():
-                reload_node_registry()
-                logger.info(f"nodes.json reloaded: {len(_node_registry)} nodes")
+            # Hot-reload nodes.json if changed.
+            # v1.4.5: this was `cycle % 30`, which counts POLL ROUNDS, not seconds.
+            # One round lasts FLEET_POLL_INTERVAL, so with the default 10s the
+            # documented "within 30s" was really five minutes, and longer at higher
+            # intervals — which is why edits to nodes.json appeared to need a
+            # restart. Thirty seconds of wall clock, as documented.
+            _now_chk = time.time()
+            if _now_chk - _last_nodes_check >= 30:
+                _last_nodes_check = _now_chk
+                if _check_nodes_json_changed():
+                    reload_node_registry()
+                    log_result(f"nodes.json reloaded: {len(_node_registry)} nodes")
 
             # Stagger: spread node queries across the interval
             stagger_delay = max(0.5, FLEET_POLL_INTERVAL / max(1, len(_node_registry)))
@@ -6357,7 +6488,27 @@ def background_collector():
     Single-node mode only. Multi-node uses multi_node_background_collector."""
     logger.info(f"Background collector started (interval={UPDATE_INTERVAL}s, "
                 f"medium_tier={TIER_MEDIUM_INTERVAL}s, slow_tier={TIER_SLOW_INTERVAL}s)")
+    _last_nodes_check = 0.0
+    _fleet_started = False
     while True:
+        try:
+            # v1.4.5: the nodes.json watcher used to live only in the fleet
+            # collector, which does not run when the fleet is empty. Adding the
+            # first node to nodes.json therefore did nothing until a restart —
+            # exactly the case where hot-reload matters most. Watch here too, and
+            # bring the fleet collector up when nodes appear.
+            _now_chk = time.time()
+            if not _fleet_started and _now_chk - _last_nodes_check >= 30:
+                _last_nodes_check = _now_chk
+                if _check_nodes_json_changed() and reload_node_registry():
+                    _fleet_started = True
+                    Thread(target=multi_node_background_collector, daemon=True,
+                           name='fleet-collector').start()
+                    log_result(f"nodes.json gained nodes — fleet collector started "
+                               f"({len(_node_registry)} nodes)")
+        except Exception as e:
+            logger.warning(f"nodes.json watch error: {e}")
+
         try:
             metrics = MetricsCollector.collect_all()
             with metrics_lock:

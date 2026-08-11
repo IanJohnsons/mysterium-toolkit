@@ -50,18 +50,66 @@ if [ -f "config/nodes.json" ]; then
     echo -e "  ${DIM}Fleet nodes.json backed up in memory before pull${NC}"
 fi
 
-# ── Fix .git ownership if root-owned (caused by previous sudo git pull) ──
-if [ -d ".git" ] && [ "$(stat -c '%U' .git/objects 2>/dev/null)" = "root" ] && [ -n "$_REAL_USER" ] && [ "$_REAL_USER" != "root" ]; then
-    echo -e "  ${YELLOW}⚠ .git/objects owned by root — fixing ownership...${NC}"
-    [ "$(stat -c '%U' ".git/objects" 2>/dev/null)" = "root" ] && $SUDO chown -R "$_REAL_USER:$_REAL_USER" ".git" 2>/dev/null || true
-    echo -e "  ${GREEN}✓ .git ownership restored to $_REAL_USER${NC}"
+# ── Fix .git ownership if any part is foreign-owned ───────────────────────
+# v1.4.5: this used to test only .git/objects. On the Pi it was .git/logs that
+# root owned while objects was fine, so the check passed and the pull then died
+# on "unable to append to .git/logs/refs/remotes/origin/dev". Test the whole
+# tree instead — one find, first hit is enough.
+if [ -d ".git" ] && [ -n "$_REAL_USER" ]; then
+    _GIT_FOREIGN=$(find .git ! -user "$_REAL_USER" -print -quit 2>/dev/null)
+    if [ -n "$_GIT_FOREIGN" ]; then
+        echo -e "  ${YELLOW}⚠ .git contains files not owned by $_REAL_USER — fixing ownership...${NC}"
+        echo -e "  ${DIM}    first offender: $_GIT_FOREIGN${NC}"
+        $SUDO chown -R "$_REAL_USER:$_REAL_USER" ".git" 2>/dev/null || true
+        if [ -n "$(find .git ! -user "$_REAL_USER" -print -quit 2>/dev/null)" ]; then
+            echo -e "  ${RED}✗ could not restore .git ownership — run:${NC}"
+            echo -e "  ${DIM}    sudo chown -R $_REAL_USER:$_REAL_USER $(pwd)${NC}"
+        else
+            echo -e "  ${GREEN}✓ .git ownership restored to $_REAL_USER${NC}"
+        fi
+    fi
+fi
+
+# ── Git safe.directory ────────────────────────────────────────────────────
+# Git refuses to touch a repository owned by another user ("dubious ownership")
+# even for read-only commands. Ownership is corrected above where possible; if
+# git still objects, register the exception instead of leaving the operator to
+# decode the message.
+if ! git rev-parse --git-dir >/dev/null 2>&1; then
+    if git rev-parse --git-dir 2>&1 | grep -q "dubious ownership"; then
+        echo -e "  ${YELLOW}⚠ git reports dubious ownership — registering safe.directory${NC}"
+        git config --global --add safe.directory "$(pwd)" 2>/dev/null || true
+    fi
 fi
 
 # ── Pull latest code ──────────────────────────────────────────────────────
 echo -e "  Pulling latest code..."
 _SELF_BEFORE=$(md5sum "$0" 2>/dev/null | cut -d' ' -f1)
-if ! git pull; then
-    echo -e "${RED}✗ git pull failed — check your network or repo access.${NC}"
+_PULL_OUT=$(git pull 2>&1)
+_PULL_RC=$?
+echo "$_PULL_OUT"
+if [ $_PULL_RC -ne 0 ]; then
+    # v1.4.5: this said "check your network or repo access" for every failure,
+    # including two that had nothing to do with either — a root-owned .git and
+    # git's dubious-ownership guard. Read the actual message and say what it is.
+    if echo "$_PULL_OUT" | grep -qi "permission denied"; then
+        echo -e "${RED}✗ git pull failed — permission denied inside .git${NC}"
+        echo -e "  ${DIM}A sudo operation left files owned by another user. Fix with:${NC}"
+        echo -e "  ${DIM}    sudo chown -R $_REAL_USER:$_REAL_USER $(pwd)${NC}"
+    elif echo "$_PULL_OUT" | grep -qi "dubious ownership"; then
+        echo -e "${RED}✗ git pull failed — git refuses this repository's ownership${NC}"
+        echo -e "  ${DIM}    sudo chown -R $_REAL_USER:$_REAL_USER $(pwd)${NC}"
+        echo -e "  ${DIM}    or: git config --global --add safe.directory $(pwd)${NC}"
+    elif echo "$_PULL_OUT" | grep -qiE "local changes|would be overwritten|conflict"; then
+        echo -e "${RED}✗ git pull failed — local changes block the update${NC}"
+        echo -e "  ${DIM}Inspect them first, they may be yours:${NC}"
+        echo -e "  ${DIM}    git status --short${NC}"
+    elif echo "$_PULL_OUT" | grep -qiE "could not resolve host|network is unreachable|timed out|connection refused"; then
+        echo -e "${RED}✗ git pull failed — cannot reach GitHub${NC}"
+        echo -e "  ${DIM}    git remote -v${NC}"
+    else
+        echo -e "${RED}✗ git pull failed — see the git output above.${NC}"
+    fi
     exit 1
 fi
 echo -e "  ${GREEN}✓ Code updated${NC}"
