@@ -8530,6 +8530,15 @@ def save_fleet_config():
                 else:
                     return jsonify({'error': f'Node {i+1} missing toolkit_api_key'}), 400
 
+            # The node's TequilAPI has no TLS. An https:// value here is always
+            # wrong and takes the node out of the fleet — correct it rather than
+            # storing something that cannot work.
+            _u = n.get('url') or ''
+            if _u.lower().startswith('https://'):
+                n['url'] = 'http://' + _u[8:]
+                logger.warning(f"Node {n.get('id')}: TequilAPI url was https — corrected to http "
+                               f"(the node API does not serve TLS)")
+
         config_path.parent.mkdir(parents=True, exist_ok=True)
         with open(config_path, 'w') as f:
             json.dump({'nodes': nodes}, f, indent=2)
@@ -8586,11 +8595,22 @@ def probe_fleet_node():
                                'tls_cert': body.get('tls_cert'),
                                'tls_verify': body.get('tls_verify', True)})
 
-        # Test /health first
+        # Reachability test.
+        # v1.4.5: this used to request /health, which does not exist — the probe
+        # answered "Toolkit returned HTTP 404" for nodes the fleet collector was
+        # polling successfully at that very moment. Use /api/version, which needs
+        # no auth and is the cheapest proof that a toolkit is listening; the key is
+        # then verified against /peer/data below, the same endpoint the collector
+        # uses, so a wrong key still surfaces as 401 rather than as a false success.
         try:
-            health = requests.get(f'{toolkit_url}/health', headers=headers, timeout=6, verify=verify)
+            health = requests.get(f'{toolkit_url}/api/version', headers=headers, timeout=6, verify=verify)
             if health.status_code == 401:
                 return jsonify({'success': False, 'error': 'Invalid API key — authentication failed'}), 200
+            if health.status_code == 404:
+                return jsonify({'success': False,
+                                'error': f'{toolkit_url} answered, but does not look like a toolkit '
+                                         f'backend (no /api/version). Check the port — the toolkit '
+                                         f'listens on 5000, the node API on 4050.'}), 200
             if health.status_code != 200:
                 return jsonify({'success': False, 'error': f'Toolkit returned HTTP {health.status_code}'}), 200
         except requests.exceptions.SSLError as e:

@@ -221,9 +221,11 @@ const NAT_LABEL_MAP = {
 };
 // An empty value is not "unknown": a node on a public IP does no NAT detection and
 // reports nothing. Saying so keeps every fleet card on the same set of rows.
-const fmtNat = (n) => {
+// The `reachable` flag matters — an offline node also reports nothing, and calling
+// that "No NAT (public)" states a fact about a machine we could not even contact.
+const fmtNat = (n, reachable = true) => {
   const k = String(n || '').toLowerCase();
-  if (!k) return 'No NAT (public)';
+  if (!k) return reachable ? 'No NAT (public)' : '—';
   return NAT_LABEL_MAP[k] || (k === 'unknown' ? 'Detecting…' : n);
 };
 
@@ -1043,6 +1045,10 @@ const MysteriumDashboard = () => {
   // Fleet Node Manager state — must be at top level to survive fetchMetrics re-renders
   const [fleetModalOpen, setFleetModalOpen] = useState(false);
   const [fleetEditNode, setFleetEditNode] = useState(null);
+  // Mirrors fleetEditNode for use inside async callbacks, which would otherwise
+  // close over the value as it was when the request went out.
+  const fleetEditNodeRef = useRef(null);
+  useEffect(() => { fleetEditNodeRef.current = fleetEditNode; }, [fleetEditNode]);
   const [fleetForm, setFleetForm] = useState({ label: '', toolkit_url: '', url: '', toolkit_api_key: '', tls_cert: '', tls_verify: true });
   const [fleetProbing, setFleetProbing] = useState(false);
   const [fleetProbeResult, setFleetProbeResult] = useState(null);
@@ -1888,22 +1894,30 @@ const MysteriumDashboard = () => {
         setFleetProbeResult(null);
         setFleetSaveError('');
         setFleetModalOpen(true);
+        const _openedFor = node.id || node.toolkit_url;
         fetch(`${backendUrlRef.current}/fleet/config`, { headers: authHeaderRef.current })
           .then(r => r.json())
           .then(d => {
             const list = d.nodes || [];
             setFleetConfigNodes(list);
             const cfg = list.find(n => n.id === node.id) || list.find(n => n.toolkit_url === node.toolkit_url);
-            if (cfg) {
-              setFleetForm(f => ({
+            if (!cfg) return;
+            // v1.4.5: this arrives a moment after the dialog opens, and it used to
+            // overwrite the form wholesale — so anything typed in that window was
+            // silently reverted to the stored value. Adding the "s" to https:// and
+            // watching it disappear was exactly this. Only fill fields the operator
+            // has not touched, and only while the dialog still shows this node.
+            setFleetForm(f => {
+              if ((fleetEditNodeRef.current?.id || fleetEditNodeRef.current?.toolkit_url) !== _openedFor) return f;
+              return {
                 ...f,
-                label: cfg.label || f.label,
-                toolkit_url: cfg.toolkit_url || f.toolkit_url,
-                url: cfg.url || f.url,
-                tls_cert: cfg.tls_cert || '',
-                tls_verify: cfg.tls_verify !== false,
-              }));
-            }
+                label: f.label === (node.label || '') ? (cfg.label || f.label) : f.label,
+                toolkit_url: f.toolkit_url === (node.toolkit_url || '') ? (cfg.toolkit_url || f.toolkit_url) : f.toolkit_url,
+                url: f.url === (node.url || '') ? (cfg.url || f.url) : f.url,
+                tls_cert: f.tls_cert === (node.tls_cert || '') ? (cfg.tls_cert || '') : f.tls_cert,
+                tls_verify: f.tls_verify === (node.tls_verify !== false) ? (cfg.tls_verify !== false) : f.tls_verify,
+              };
+            });
           })
           .catch(() => setFleetSaveError('Could not read fleet config — do not save until this loads.'));
       };
@@ -2146,11 +2160,20 @@ const MysteriumDashboard = () => {
                             <label className="block text-xs text-slate-400 mb-1">TequilAPI URL <span className="text-slate-600">(optional)</span></label>
                             <input
                               value={fleetForm.url}
-                              onChange={e => setFleetForm(f => ({ ...f, url: e.target.value.trim() }))}
+                              onChange={e => {
+                                // The node API speaks plain HTTP only — it has no TLS and
+                                // binds to loopback. An https:// address here makes every
+                                // poll fail and drops the node out of the fleet, which is
+                                // exactly what happened when the s was added by hand.
+                                // Correct it the same way 4449 is corrected to 4050.
+                                let v = e.target.value.trim();
+                                if (/^https:\/\//i.test(v)) v = v.replace(/^https:\/\//i, 'http://');
+                                setFleetForm(f => ({ ...f, url: v }));
+                              }}
                               placeholder="http://NODE_IP:4050"
                               className="w-full bg-slate-800 border border-slate-600 focus:border-violet-400 rounded px-3 py-2 text-xs text-slate-200 outline-none transition font-mono"
                             />
-                            <p className="text-xs text-slate-600 mt-1">Node API, port 4050. Leave empty to let the connection test fill it in. Port 4449 is corrected to 4050 automatically.</p>
+                            <p className="text-xs text-slate-600 mt-1">Node API, port 4050, plain HTTP — it has no TLS. Leave empty to let the connection test fill it in. Port 4449 is corrected to 4050 automatically.</p>
                           </div>
 
                           {/* API Key */}
@@ -2331,7 +2354,7 @@ const MysteriumDashboard = () => {
                         {n.version && <span>v{n.version}</span>}
                         {nodeUpdateInfo?.update_available && n.version === nodeUpdateInfo.current && <div className="mt-0.5"><span className="text-amber-400 border border-amber-500/40 bg-amber-500/10 rounded px-1 text-[9px]" title={`Node v${nodeUpdateInfo.latest} available`}>↑ {nodeUpdateInfo.latest}</span></div>}
                         {n.uptime && <span>up {formatUptime(n.uptime)}</span>}
-                        <span>NAT: {fmtNat(n.nat)}</span>
+                        <span>NAT: {fmtNat(n.nat, isOn)}</span>
                       </div>
                       {/* Toolkit update button per node */}
                       {updateInfo?.update_available && (
