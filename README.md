@@ -99,7 +99,11 @@ journalctl -u mysterium-toolkit -f
 
 **Node status, earnings and quality** across the top. Unsettled is what the node holds and has not paid out yet; lifetime gross is everything ever earned, before the 20% Hermes fee. The quality score comes from Mysterium's own discovery service, not from the toolkit.
 
+![Earnings history](docs/images/03-earnings.png)
+
 **Earnings history** by day, week, month, or the full record. Built from ten-minute snapshots, so it survives node restarts and keeps going where the node API forgets. Traffic, session archive and per-service analytics sit below it.
+
+![System health](docs/images/04-health.png)
 
 **System health** checks thirteen subsystems that affect how much a node earns: connection tracking, CPU load balancing across cores, kernel network tuning, NIC settings, firewall backend, port reachability, and more. Each one can be fixed with one click, and locked so it survives a reboot. Targets scale with load rather than being fixed — a quiet node is not told to reserve memory it will never use.
 
