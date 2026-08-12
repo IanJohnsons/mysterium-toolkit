@@ -267,6 +267,11 @@ function generateThemeCSS(key) {
   ${s} .bg-${fam}-500\\/10{background-color:rgb(${c500}/0.1)!important}
   ${s} .bg-${fam}-500\\/20{background-color:rgb(${c500}/0.2)!important}
   ${s} .bg-${fam}-500\\/30{background-color:rgb(${c500}/0.3)!important}
+  ${s} .bg-${fam}-500\\/15{background-color:rgb(${c500}/0.15)!important}
+  ${s} .bg-${fam}-500\\/25{background-color:rgb(${c500}/0.25)!important}
+  ${s} .bg-${fam}-500\\/35{background-color:rgb(${c500}/0.35)!important}
+  ${s} .bg-${fam}-500\\/70{background-color:rgb(${c500}/0.7)!important}
+  ${s} .group:hover .group-hover\\:bg-${fam}-400{background-color:rgb(${c400})!important}
   ${s} .hover\\:bg-${fam}-500\\/5:hover{background-color:rgb(${c500}/0.05)!important}
   ${s} .hover\\:bg-${fam}-500\\/10:hover{background-color:rgb(${c500}/0.1)!important}
   ${s} .hover\\:bg-${fam}-500\\/20:hover{background-color:rgb(${c500}/0.2)!important}
