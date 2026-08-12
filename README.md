@@ -38,10 +38,15 @@ Running three, like a VPS, a laptop and a Pi? Type 1 on each, then Type 2 on whi
 ### Requirements
 
 - Linux — Debian, Ubuntu, Parrot, Fedora, Arch or Alpine
+- x86_64, arm64 or armv7 — a Raspberry Pi 3, 4 or 5 is fine
 - Python 3.8 or newer
 - Node.js 18 or newer (Type 1 and 2; the installer offers to install it)
 - `sudo` access
-- Roughly 300 MB of disk space, plus your history
+- Disk space grows with your history — the install itself is small, the databases are what accumulate
+
+On a Raspberry Pi the installer reads `/proc/device-tree/model`, recognises the board and turns on **Pi mode**: the log level drops to WARNING to spare the SD card, and the web server runs a smaller thread pool. You can change it later under Settings.
+
+Pi Zero and Pi 1 (armv6) have no Node.js 18 build, so they cannot run a dashboard. Type 3 works there — the node is monitored from a fleet master.
 
 ---
 
@@ -194,20 +199,53 @@ Version history is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Built with
 
+**Backend**
+
 | Project | Author | License |
 |---|---|---|
 | [Flask](https://flask.palletsprojects.com) | Pallets Projects | BSD-3 |
-| [React](https://react.dev) | Meta / React contributors | MIT |
-| [Tailwind CSS](https://tailwindcss.com) | Tailwind Labs | MIT |
-| [Vite](https://vitejs.dev) | Evan You / Vite contributors | MIT |
+| [flask-cors](https://github.com/corydolphin/flask-cors) | Cory Dolphin | MIT |
 | [cheroot](https://cheroot.cherrypy.dev) | CherryPy team | BSD-3 |
 | [psutil](https://github.com/giampaolo/psutil) | Giampaolo Rodolà | BSD-3 |
-| [SQLite](https://sqlite.org) | D. Richard Hipp | Public Domain |
-| [vnstat](https://humdi.net/vnstat) | Teemu Toivola | GPL-2 |
-| [Lucide Icons](https://lucide.dev) | Lucide contributors | ISC |
 | [requests](https://requests.readthedocs.io) | Kenneth Reitz | Apache-2 |
-| [CoinPaprika API](https://api.coinpaprika.com) | CoinPaprika | Free, no key |
-| [Frankfurter](https://www.frankfurter.app) | Frankfurter (ECB rates) | Free, no key |
+| [python-dotenv](https://github.com/theskumar/python-dotenv) | Saurabh Kumar | BSD-3 |
+| [SQLite](https://sqlite.org) | D. Richard Hipp | Public Domain |
+
+**Frontend**
+
+| Project | Author | License |
+|---|---|---|
+| [React](https://react.dev) and react-dom | Meta / React contributors | MIT |
+| [Tailwind CSS](https://tailwindcss.com) | Tailwind Labs | MIT |
+| [Vite](https://vitejs.dev) and @vitejs/plugin-react | Evan You / Vite contributors | MIT |
+| [PostCSS](https://postcss.org) and Autoprefixer | Andrey Sitnik | MIT |
+| [Lucide Icons](https://lucide.dev) | Lucide contributors | ISC |
+
+**System tools the installer uses**
+
+| Tool | Author | License |
+|---|---|---|
+| [vnstat](https://humdi.net/vnstat) | Teemu Toivola | GPL-2 |
+| [ethtool](https://mirrors.edge.kernel.org/pub/software/network/ethtool) | Linux kernel project | GPL-2 |
+| [miniupnpc](http://miniupnp.free.fr) | Thomas Bernard | BSD |
+| [conntrack-tools](https://netfilter.org/projects/conntrack-tools) | Netfilter project | GPL-2 |
+| [irqbalance](https://github.com/Irqbalance/irqbalance) | irqbalance contributors | GPL-2 |
+| [lm-sensors](https://github.com/lm-sensors/lm-sensors) | lm-sensors project | GPL-2 |
+| [curl](https://curl.se) | Daniel Stenberg | curl license |
+| [fail2ban](https://www.fail2ban.org) | Cyril Jaquier and contributors | GPL-2 |
+| [Tailscale](https://tailscale.com) | Tailscale Inc. | BSD-3 |
+
+**External APIs** — see [Privacy](#privacy) for exactly what is sent to each
+
+| Service | Used for | Key required |
+|---|---|---|
+| [Mysterium Discovery](https://discovery.mysterium.network) | Node quality, latency, bandwidth | No |
+| [Etherscan / Polygonscan](https://etherscan.io) | On-chain balance and settlements | Yes, your own |
+| [CoinPaprika](https://coinpaprika.com) | MYST price in USD | No |
+| [Frankfurter](https://www.frankfurter.app) | USD to EUR, ECB rates | No |
+| [GitHub API](https://docs.github.com/rest) | Node and toolkit update checks | No |
+
+The Mysterium node itself is a separate project by [Mysterium Network](https://github.com/mysteriumnetwork/node) and is not distributed with this toolkit.
 
 ---
 

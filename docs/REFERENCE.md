@@ -346,6 +346,12 @@ From v1.4.0 the dashboard is served by [cheroot](https://cheroot.cherrypy.dev/),
 
 Thread count defaults to 30, or 10 when `pi_mode` is enabled. Override with `server_threads` in `config/setup.json` if you have reason to.
 
+Cheroot is already a production server, so it does not need anything in front of it.
+Note that `scripts/deploy_production.sh` still sets up nginx as a reverse proxy — that
+dates from when Flask's development server was doing the serving, and running both means
+two web servers doing the same job. Use it only if you specifically want nginx for
+something else, such as a real certificate on a domain name.
+
 ---
 
 ---
@@ -472,9 +478,27 @@ Once saved via the dashboard, the daily prune deletes rows older than your chose
 |-|---------|
 | Python | 3.8 or newer |
 | Node.js | 18 or newer (Type 1 / 2 only) |
+| Architectures | x86_64 · amd64 · aarch64 / arm64 · armv7l / armhf |
 | Distros | Debian · Ubuntu · Parrot OS · Fedora · Arch Linux · Alpine |
-| Environments | Bare metal · Docker · LXC · Proxmox · KVM VPS |
+| Environments | Bare metal · Docker · LXC · Proxmox · KVM VPS · Raspberry Pi |
 | Firewall | firewalld · ufw · nftables · iptables-nft · iptables-legacy |
+
+**armv6 (Pi Zero, Pi 1)** has no Node.js 18 build, so there is no dashboard on those
+boards. The installer says so and skips the step. Type 3 works — the node reports to a
+fleet master that renders the screen.
+
+**Raspberry Pi** is detected from `/proc/device-tree/model`. When found, the wizard
+enables `pi_mode`: log level WARNING instead of INFO, to cut down on SD card writes,
+and a web server thread pool of 10 instead of 30. Both can be changed afterwards in
+`config/setup.json` or from the dashboard.
+
+Note that `pi_mode` suppresses INFO logging, so routine confirmations do not appear in
+`journalctl` on a Pi. Outcomes that changed data on disk are reported at WARNING for
+that reason.
+
+**EOL distributions** (Debian Buster and similar) can fail to install Node.js and
+sqlite3 from their package manager. The installer falls back to a direct download from
+nodejs.org and a Debian snapshot for sqlite3, matched to the detected architecture.
 
 ---
 
