@@ -375,10 +375,25 @@ def format_uptime(uptime):
 
 
 class CLIDashboard:
-    def __init__(self, base_url, interval, api_key=None, username=None, password=None, theme='emerald'):
+    def __init__(self, base_url, interval, api_key=None, username=None, password=None,
+                 theme='emerald', verify=True):
         self.base_url   = base_url.rstrip('/')
         self.interval   = interval
         self.api_key    = api_key
+        # v1.4.6: the CLI had no notion of TLS. From v1.4.4 a toolkit with
+        # https_enabled serves nothing but TLS on port 5000, so every request failed
+        # certificate validation against the self-signed certificate and the CLI
+        # reported "Cannot connect" for a backend that was running fine. A session
+        # carries the setting to all eight call sites at once, so the CLI cannot be
+        # reachable from one command and unreachable from the next.
+        self.http = requests.Session()
+        self.http.verify = verify
+        if not verify:
+            try:
+                import urllib3
+                urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            except Exception:
+                pass
         self.username   = username
         self.password   = password
         self.metrics    = {}
@@ -455,7 +470,7 @@ class CLIDashboard:
             kwargs  = {'headers': headers, 'timeout': 10}
             if auth:
                 kwargs['auth'] = auth
-            resp = requests.get(f'{self.base_url}/metrics', **kwargs)
+            resp = self.http.get(f'{self.base_url}/metrics', **kwargs)
             if resp.status_code == 200:
                 self.metrics    = resp.json()
                 self.last_fetch = datetime.now()
@@ -475,7 +490,7 @@ class CLIDashboard:
         now = time.time()
         if now - self.myst_price_fetched > 300:
             try:
-                pr = requests.get(f'{self.base_url}/myst-price',
+                pr = self.http.get(f'{self.base_url}/myst-price',
                                   headers=self._auth_headers(), timeout=5)
                 if pr.status_code == 200:
                     d = pr.json()
@@ -509,7 +524,7 @@ class CLIDashboard:
         try:
             headers = self._auth_headers()
             headers['Content-Type'] = 'application/json'
-            resp = requests.post(
+            resp = self.http.post(
                 f'{self.base_url}{endpoint}',
                 json={'subsystem': subsystem},
                 headers=headers, timeout=30
@@ -538,7 +553,7 @@ class CLIDashboard:
             headers = self._auth_headers()
             headers['Content-Type'] = 'application/json'
             timeout = 120 if 'settle' in endpoint else 30
-            resp = requests.post(
+            resp = self.http.post(
                 f'{self.base_url}{endpoint}',
                 json={}, headers=headers, timeout=timeout
             )
@@ -563,7 +578,7 @@ class CLIDashboard:
         try:
             headers = self._auth_headers()
             headers['Content-Type'] = 'application/json'
-            resp = requests.post(
+            resp = self.http.post(
                 f'{self.base_url}/node/test',
                 json={}, headers=headers, timeout=20
             )
@@ -1285,7 +1300,7 @@ class CLIDashboard:
         import threading
         def _fetch():
             try:
-                resp = requests.get(
+                resp = self.http.get(
                     f'{self.base_url}/node/config/current',
                     headers=self._auth_headers(),
                     timeout=5,
@@ -1312,7 +1327,7 @@ class CLIDashboard:
         self._config_results[key] = '⏳'
         def _apply():
             try:
-                resp = requests.post(
+                resp = self.http.post(
                     f'{self.base_url}/node/config/set',
                     headers=self._auth_headers(),
                     json={'key': key, 'value': str(value)},
@@ -1337,7 +1352,7 @@ class CLIDashboard:
         self._config_results[key] = '⏳'
         def _reset():
             try:
-                resp = requests.post(
+                resp = self.http.post(
                     f'{self.base_url}/node/config/reset',
                     headers=self._auth_headers(),
                     json={'key': key},
@@ -1874,14 +1889,41 @@ class CLIDashboard:
 
 def main():
     parser = argparse.ArgumentParser(description='Mysterium Node Monitor — Terminal UI')
-    parser.add_argument('--url',      default='http://localhost:5000', help='Toolkit backend URL')
+    parser.add_argument('--url',      default=None,                    help='Toolkit backend URL (default: from config/setup.json)')
     parser.add_argument('--port',     type=int, default=None,          help='Backend port (overrides --url port)')
     parser.add_argument('--interval', type=int, default=10,            help='Refresh interval in seconds (default: 10)')
     parser.add_argument('--api-key',  default=None,                    help='Dashboard API key')
     parser.add_argument('--theme',    default='emerald',               help='Color theme (default: emerald)')
+    parser.add_argument('--insecure', action='store_true',
+                        help='Skip TLS certificate verification (toolkit certificates are self-signed)')
     args = parser.parse_args()
 
+    # v1.4.6: the default was hard-coded to http://, which stopped working the moment
+    # https_enabled was turned on. Read the scheme and port from the same file the
+    # backend reads, so the CLI follows the machine it is installed on.
+    _cfg = {}
+    try:
+        import json as _json
+        from pathlib import Path as _Path
+        _cp = _Path(__file__).parent.parent / 'config' / 'setup.json'
+        if _cp.exists():
+            _cfg = _json.loads(_cp.read_text())
+    except Exception:
+        pass
+
     base_url = args.url
+    if not base_url:
+        _scheme = 'https' if _cfg.get('https_enabled') else 'http'
+        base_url = f"{_scheme}://localhost:{_cfg.get('dashboard_port', 5000)}"
+
+    # A toolkit certificate is self-signed, so verification against a CA bundle can
+    # never succeed for this machine's own dashboard. Skip it there by default and
+    # let --insecure cover the remote case.
+    _verify = not args.insecure
+    if _verify and base_url.startswith('https://'):
+        _host = base_url.split('://', 1)[1].split('/')[0].split(':')[0]
+        if _host in ('localhost', '127.0.0.1', '::1'):
+            _verify = False
     if args.port:
         from urllib.parse import urlparse, urlunparse
         p = urlparse(base_url)
@@ -1905,6 +1947,7 @@ def main():
         interval=args.interval,
         api_key=api_key,
         theme=args.theme,
+        verify=_verify,
     )
     try:
         curses.wrapper(dashboard.run)

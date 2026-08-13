@@ -36,3 +36,9 @@ Thumbs.db
 # ── Keep config/ dir but not its contents ───────────────────────────────────
 !config/.gitkeep
 !config/nodes.json.example
+
+# ── Project knowledge (Claude project files — never in the repo) ─────────────
+START.md
+CONTEXT.md
+CLAUDE.md
+PROTOCOL.md

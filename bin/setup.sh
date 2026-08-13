@@ -148,6 +148,27 @@ except Exception:
         echo -e "  ${DIM}  expected for a self-signed certificate; accept it permanently.${NC}"
         echo -e "  ${DIM}  Fleet master: copy config/tls/cert.pem to the master and point${NC}"
         echo -e "  ${DIM}  this node's tls_cert at it in nodes.json.${NC}"
+
+        # v1.4.6: turning TLS on changes what port 5000 serves, but nothing revisits
+        # nodes.json. A fleet master's own entry is usually http://localhost:5000, and
+        # from this moment it is talking plain HTTP to a port that only speaks TLS —
+        # every card for that node answers 502 with nothing explaining why. The backend
+        # corrects self-referencing entries at startup; say so here, and point out any
+        # other entry that will need attention.
+        if [ -f config/nodes.json ]; then
+            _HTTP_SELF=$(grep -oE '"toolkit_url"[[:space:]]*:[[:space:]]*"http://[^"]*"' config/nodes.json \
+                         | grep -cE 'localhost|127\.0\.0\.1' || true)
+            _HTTP_ANY=$(grep -cE '"toolkit_url"[[:space:]]*:[[:space:]]*"http://' config/nodes.json || true)
+            if [ "${_HTTP_SELF:-0}" -gt 0 ]; then
+                echo -e "  ${YELLOW}⚠ nodes.json has ${_HTTP_SELF} entry/entries pointing at this host over http://${NC}"
+                echo -e "  ${DIM}    The backend switches those to https:// on start, but update the${NC}"
+                echo -e "  ${DIM}    file to make it permanent.${NC}"
+            fi
+            if [ "${_HTTP_ANY:-0}" -gt "${_HTTP_SELF:-0}" ]; then
+                echo -e "  ${DIM}  Other nodes still listed as http:// keep working — only enable${NC}"
+                echo -e "  ${DIM}  TLS on them first, then change their toolkit_url.${NC}"
+            fi
+        fi
     fi
 }
 
@@ -644,11 +665,11 @@ case "$_ARCH" in
         pkg_install "sensors" "lm-sensors" "lm_sensors" "lm_sensors" "lm_sensors" ;;
 esac
 pkg_install "sqlite3" "sqlite3" "sqlite" "sqlite" "sqlite"
-# v1.4.5: the node uses UPnP for port mapping (nat-port-mapping is on by default,
-# traversal is manual,upnp,holepunching) and the toolkit's port-reachability check
-# reads the IGD through upnpc — but miniupnpc was never installed, so that check
-# silently reported nothing and the mapping had to be diagnosed by hand.
-# Binary is `upnpc`; on Debian/Ubuntu it ships in miniupnpc.
+# v1.4.5: the node maps ports over UPnP by default (nat-port-mapping is on, traversal
+# is manual,upnp,holepunching). Without miniupnpc the toolkit could not see the router's
+# mapping table at all, so a failed mapping showed up only as quality 0.00 with no
+# stated cause. Since v1.4.6 the Router Port Mapping health check reads it through
+# `upnpc`. Binary is `upnpc`; on Debian/Ubuntu it ships in miniupnpc.
 pkg_install "upnpc" "miniupnpc" "miniupnpc" "miniupnpc" "miniupnpc"
 # Buster/EOL fallback: if sqlite3 still not installed, download from snapshot.debian.org
 if ! command -v sqlite3 &> /dev/null; then
@@ -1143,8 +1164,13 @@ net.ipv4.tcp_rmem = 4096 87380 134217728
 net.ipv4.tcp_wmem = 4096 65536 134217728
 net.ipv4.tcp_congestion_control = bbr
 net.core.default_qdisc = fq
-net.netfilter.nf_conntrack_max = 524288
+net.core.netdev_max_backlog = 16384
 vm.swappiness = 60
+# nf_conntrack_max is deliberately NOT set here. Since v1.4.5 the Connection
+# Tracking health check sizes it against the number of active tunnels — 128K below
+# five, 256K up to nineteen, 512K above — so a fixed 524288 written at install time
+# would both contradict that and reserve roughly 150 MB of kernel memory on a node
+# that may never need it. Use the health check to set and persist it.
 SYSCTL_EOF
         echo -e "  ${GREEN}✓ sysctl settings persisted to /etc/sysctl.d/99-mysterium-node.conf${NC}"
 
@@ -1167,7 +1193,10 @@ GOV_SCRIPT_EOF
         cat << 'GOV_SVC_EOF' | sudo tee /etc/systemd/system/mysterium-cpu-governor.service >/dev/null
 [Unit]
 Description=Mysterium CPU Performance Governor
-After=multi-user.target
+# v1.4.6: ordered after the other services that write scaling_governor. Without
+# this the outcome depended on which unit systemd happened to run last.
+After=multi-user.target cpupower.service cpupower-gui.service cpufrequtils.service
+Wants=multi-user.target
 
 [Service]
 Type=oneshot

@@ -2721,7 +2721,7 @@ const MysteriumDashboard = () => {
               {metrics.bandwidth.vnstat_available && (
                 <div className="mt-2 pt-2 border-t border-slate-700/50 text-xs text-slate-500">
                   Network ({metrics.bandwidth.vnstat_nic_name || 'NIC'}): {formatDataSize(safeNum(metrics.bandwidth.vnstat_today_total))}
-                  <span className="ml-1 text-slate-600">(includes tunnel overhead — each VPN byte crosses NIC twice)</span>
+                  <span className="ml-1 text-slate-600">(all interface traffic, not only VPN)</span>
                 </div>
               )}
             </div>
@@ -2746,7 +2746,7 @@ const MysteriumDashboard = () => {
               {metrics.bandwidth.vnstat_available && (
                 <div className="mt-2 pt-2 border-t border-slate-700/50 text-xs text-slate-500">
                   Network ({metrics.bandwidth.vnstat_nic_name || 'NIC'}): {formatDataSize(safeNum(metrics.bandwidth.vnstat_month_total))}
-                  <span className="ml-1 text-slate-600">(includes tunnel overhead)</span>
+                  <span className="ml-1 text-slate-600">(all interface traffic, not only VPN)</span>
                 </div>
               )}
             </div>
@@ -4378,7 +4378,7 @@ const MysteriumDashboard = () => {
 
                 <div>
                   <h4 className="text-emerald-400 font-semibold mb-1">Traffic Explained</h4>
-                  <p className="text-slate-400"><strong className="text-slate-300">↑ Out to consumers</strong> = content forwarded (earns MYST). <strong className="text-slate-300">↓ In from consumers</strong> = their requests (small). <strong className="text-slate-300">NIC total</strong> = physical interface including tunnel overhead (~2× VPN). <strong className="text-slate-300">Overhead</strong> = NIC − VPN. <strong className="text-slate-300">VNSTAT</strong> = persistent counters (survive reboot). <strong className="text-slate-300">PSUTIL</strong> = since-boot fallback.</p>
+                  <p className="text-slate-400"><strong className="text-slate-300">↑ Out to consumers</strong> = content forwarded (earns MYST). <strong className="text-slate-300">↓ In from consumers</strong> = their requests (small). <strong className="text-slate-300">NIC total</strong> = everything the physical interface carried, which on a busy machine is far more than the VPN: SSH, package updates, fleet polling and anything else running there. <strong className="text-slate-300">Tunnel overhead</strong> is an estimate, not a measurement — each VPN byte crosses the NIC twice, so it comes to roughly the VPN volume itself. <strong className="text-slate-300">Other traffic</strong> is what is left after subtracting both, and on a fleet master it is normally the largest figure of the three. <strong className="text-slate-300">VNSTAT</strong> = persistent counters (survive reboot). <strong className="text-slate-300">PSUTIL</strong> = since-boot fallback.</p>
                 </div>
 
                 <div>
@@ -5324,13 +5324,33 @@ const DataTrafficCard = ({ bandwidth, backendUrl, authHeaders }) => {
         <>
           <StatRow label="VPN traffic"     tx={d.vpn_tx}  rx={d.vpn_rx}  total={d.vpn_tot}  color="text-emerald-300" />
           <StatRow label={`${nic} total`}   tx={d.nic_tx}  rx={d.nic_rx}  total={d.nic_tot}  color="text-cyan-300" />
-          {d.nic_tot > 0 && d.vpn_tot > 0 && (
-            <div className="grid grid-cols-4 gap-1 py-1 text-xs">
-              <div className="text-slate-600">Overhead</div>
-              <div className="col-span-2"></div>
-              <div className="text-slate-500 text-right tabular-nums">{fmtGB(Math.max(0, d.nic_tot - d.vpn_tot))}</div>
-            </div>
-          )}
+          {d.nic_tot > 0 && d.vpn_tot > 0 && (() => {
+            // v1.4.6: this row was labelled "Overhead" and showed nic_tot − vpn_tot,
+            // which is not tunnel overhead at all — it is everything else the machine
+            // does. On a fleet master (SSH, apt, the polls to other nodes, Tailscale)
+            // that read 12.93 GiB against 238.9 MB of VPN traffic, which invited the
+            // conclusion that the tunnels were wasting fifty times their own volume.
+            // Tunnel overhead is roughly the VPN volume itself, because each byte
+            // crosses the NIC twice; the rest belongs under its own name.
+            const tunnel = Math.min(d.vpn_tot, d.nic_tot);
+            const other  = Math.max(0, d.nic_tot - d.vpn_tot * 2);
+            return (
+              <>
+                <div className="grid grid-cols-4 gap-1 py-1 text-xs">
+                  <div className="text-slate-600">Tunnel overhead</div>
+                  <div className="col-span-2 text-slate-700 text-[10px] self-center">estimated — each VPN byte crosses the NIC twice</div>
+                  <div className="text-slate-500 text-right tabular-nums">≈ {fmtGB(tunnel)}</div>
+                </div>
+                {other > 0 && (
+                  <div className="grid grid-cols-4 gap-1 py-1 text-xs">
+                    <div className="text-slate-600">Other traffic</div>
+                    <div className="col-span-2 text-slate-700 text-[10px] self-center">everything not carried by the tunnels</div>
+                    <div className="text-slate-500 text-right tabular-nums">{fmtGB(other)}</div>
+                  </div>
+                )}
+              </>
+            );
+          })()}
 
           {/* All-time summary strip */}
           {alltime && alltime.days > 0 && (
@@ -5667,15 +5687,63 @@ const SystemMetricsHistoryCard = ({ backendUrl, authHeaders }) => {
     if (!vals.length) return null;
     const mn = 0; const mx = Math.max(...vals, 1) * 1.1;
     const W = 300; const H = 40;
-    const pts = data.map((d, i) => {
-      if (d[yKey] == null) return null;
-      const x = (i / Math.max(data.length - 1, 1)) * W;
-      const y = H - ((d[yKey] - mn) / (mx - mn || 1)) * H;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    }).filter(Boolean).join(' ');
+
+    // v1.4.6: this used to place points by array index and join them into a single
+    // polyline, dropping nulls with .filter(Boolean). Two consequences, both of them
+    // a chart stating something untrue: a period when the toolkit was not running
+    // produced no rows at all, so the line ran straight across the gap as though the
+    // machine had been measured throughout; and because x came from the index rather
+    // than the timestamp, an hour and a week occupied the same horizontal distance.
+    // Position by time, and break the line wherever the interval jumps.
+    const times = data.map(d => {
+      const t = Date.parse(d.time || d.timestamp || '');
+      return Number.isNaN(t) ? null : t;
+    });
+    const known = times.filter(t => t != null);
+    const t0 = known.length ? known[0] : 0;
+    const t1 = known.length ? known[known.length - 1] : 1;
+    const span = Math.max(t1 - t0, 1);
+
+    // Median interval is the yardstick: a gap of more than three times the normal
+    // sampling distance is missing data, not a slow sample. The median is capped
+    // because a series that is mostly gaps would otherwise raise its own threshold
+    // until nothing counts as a gap any more — the writer samples every few minutes,
+    // so anything beyond an hour is missing data regardless of what the median says.
+    const deltas = [];
+    for (let i = 1; i < known.length; i++) deltas.push(known[i] - known[i - 1]);
+    const sorted = [...deltas].sort((a, b) => a - b);
+    const median = sorted.length ? sorted[Math.floor(sorted.length / 2)] : 0;
+    const gapLimit = median > 0 ? Math.min(median * 3, 3600000) : Infinity;
+
+    const segments = [];
+    let current = [];
+    data.forEach((d, i) => {
+      const t = times[i];
+      const v = d[yKey];
+      const broken = v == null || t == null ||
+        (current.length && t - current[current.length - 1].t > gapLimit);
+      if (broken) {
+        if (current.length) segments.push(current);
+        current = [];
+        if (v == null || t == null) return;
+      }
+      const x = known.length > 1 ? ((t - t0) / span) * W : (i / Math.max(data.length - 1, 1)) * W;
+      const y = H - ((v - mn) / (mx - mn || 1)) * H;
+      current.push({ t, x, y });
+    });
+    if (current.length) segments.push(current);
+
+    const polylines = segments
+      .filter(seg => seg.length > 1)
+      .map(seg => seg.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' '));
+    // A lone reading between two gaps would otherwise be invisible: no segment of
+    // one point can be drawn as a line.
+    const dots = segments.filter(seg => seg.length === 1).map(seg => seg[0]);
+
     const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
     const last = vals[vals.length - 1];
     const peak = Math.max(...vals);
+    const gapCount = Math.max(segments.length - 1, 0);
     return (
       <div className="flex items-center gap-3">
         <div className={`text-xs w-28 flex-shrink-0 ${colorClass}`}>
@@ -5684,10 +5752,20 @@ const SystemMetricsHistoryCard = ({ backendUrl, authHeaders }) => {
             avg <span className={colorClass}>{avg.toFixed(1)}{unit}</span>
             <span className="text-slate-700 mx-1">·</span>
             peak {peak.toFixed(1)}{unit}
+            {gapCount > 0 && (
+              <span className="text-slate-600" title="Periods with no measurements — the line is broken rather than drawn through them">
+                <span className="text-slate-700 mx-1">·</span>{gapCount} gap{gapCount > 1 ? 's' : ''}
+              </span>
+            )}
           </div>
         </div>
         <svg viewBox={`0 0 ${W} ${H}`} className="flex-1 h-8" preserveAspectRatio="none">
-          <polyline points={pts} fill="none" strokeWidth="1.5" style={{ stroke: hexColor }} />
+          {polylines.map((pts, i) => (
+            <polyline key={i} points={pts} fill="none" strokeWidth="1.5" style={{ stroke: hexColor }} />
+          ))}
+          {dots.map((p, i) => (
+            <circle key={`d${i}`} cx={p.x} cy={p.y} r="1.5" style={{ fill: hexColor }} />
+          ))}
         </svg>
         <span className="text-[10px] text-slate-600 w-12 text-right font-mono">{last.toFixed(1)}{unit}</span>
       </div>
@@ -6496,6 +6574,16 @@ const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, 
               <div className="mt-0.5">
                 <span className="text-xs text-amber-400 border border-amber-500/40 bg-amber-500/10 rounded px-1.5 py-0.5" title={`Mysterium node v${nodeUpdateInfo.latest} available`}>
                   ↑ {nodeUpdateInfo.latest} available
+                </span>
+              </div>
+            )}
+            {/* v1.4.6: a tag with no published files is not an available update.
+                Showing it as one sends the operator to an installer that answers
+                "No .deb found" through no fault of their own. */}
+            {nodeUpdateInfo?.pending_release && (
+              <div className="mt-0.5">
+                <span className="text-xs text-slate-500 border border-slate-700 rounded px-1.5 py-0.5" title="The release is tagged but carries no installable files yet, and may not be in the package repository either. Nothing to do — it will install normally once published.">
+                  {nodeUpdateInfo.latest} tagged, not published yet
                 </span>
               </div>
             )}

@@ -23,6 +23,7 @@ import re
 import time
 import shutil
 import psutil
+import socket
 import logging
 import subprocess
 from pathlib import Path
@@ -1551,20 +1552,12 @@ class PortReachability:
                         if nat and nat.lower() != 'unknown':
                             return nat
 
-        # Last fallback: check if UPnP mapped ports exist (indicates working NAT traversal)
-        try:
-            import requests as req
-            resp = req.get(
-                f'http://localhost:{PortReachability.TEQUILAPI_PORT}/services',
-                timeout=3)
-            if resp.status_code == 200:
-                services = resp.json()
-                if services and len(services) > 0:
-                    # If services are running and we have connections, NAT is working
-                    return 'working (type detection unavailable)'
-        except Exception:
-            pass
-
+        # v1.4.6: this used to answer 'working (type detection unavailable)' whenever
+        # any service was running. The comment claimed it checked UPnP mappings; it
+        # never did, and a running service says nothing about whether consumers can
+        # reach it — which is exactly the case that ends in quality 0.00. Router
+        # mappings are now checked properly by the PortMapping subsystem, so this
+        # reports honestly instead of guessing.
         return 'unknown'
 
     @staticmethod
@@ -1677,6 +1670,147 @@ class PortReachability:
 # =============================================================================
 # 8. STALE PROCESS CLEANUP
 # =============================================================================
+
+class PortMapping:
+    """Whether the router actually forwards the node's ports.
+
+    Every other reachability check looks at this machine only: is 4050 listening,
+    are the service ports bound, what does the node report as its NAT type. None of
+    that says whether traffic from the outside ever arrives. When a UPnP mapping
+    fails, the node keeps running, every local check stays green, and the only
+    symptom is a quality score of 0.00 with no stated cause.
+
+    This reads the router's own mapping table through `upnpc` and reports what it
+    finds. It deliberately offers no fix: repairing a mapping means overriding what
+    the node does for itself, and `--port-mapping.enable-upnp` does not exist —
+    passing it stops the node from starting.
+    """
+
+    name = 'port_mapping'
+    title = 'Router Port Mapping'
+
+    @staticmethod
+    def _local_ips():
+        """This machine's IPv4 addresses, for comparing against mapping targets."""
+        ips = set()
+        try:
+            for iface, addrs in psutil.net_if_addrs().items():
+                if iface == 'lo' or iface.startswith(('myst', 'wg', 'tun', 'docker', 'br-')):
+                    continue
+                for a in addrs:
+                    if getattr(a, 'family', None) == socket.AF_INET and a.address:
+                        ips.add(a.address)
+        except Exception:
+            pass
+        return ips
+
+    @staticmethod
+    def _upnp_list():
+        """Read the IGD mapping table. Returns (available, mappings, error)."""
+        if not shutil.which('upnpc'):
+            return False, [], 'upnpc not installed'
+        rc, out, err = _run(['upnpc', '-l'], timeout=15)
+        text = (out or '') + (err or '')
+        if 'No IGD UPnP Device found' in text or 'no valid UPNP Internet Gateway' in text:
+            return False, [], 'no IGD found on the network'
+        if rc != 0 and not out:
+            return False, [], (err or 'upnpc failed').strip().split('\n')[0][:120]
+
+        mappings = []
+        # Lines look like:
+        #  0 UDP 51820->192.168.1.20:51820 'mysterium' '' 0
+        for line in (out or '').split('\n'):
+            m = re.search(r'\s(UDP|TCP)\s+(\d+)->(\d+\.\d+\.\d+\.\d+):(\d+)', line)
+            if m:
+                mappings.append({
+                    'proto': m.group(1),
+                    'ext_port': int(m.group(2)),
+                    'target_ip': m.group(3),
+                    'int_port': int(m.group(4)),
+                    'desc': line.split("'")[1] if "'" in line else '',
+                })
+        return True, mappings, None
+
+    @staticmethod
+    def scan():
+        result = {
+            'name': PortMapping.name,
+            'title': PortMapping.title,
+            'status': 'ok',
+            'checks': [],
+            'recommendations': [],
+        }
+
+        available, mappings, err = PortMapping._upnp_list()
+
+        if not available:
+            # Not an error in itself — a public IP needs no mapping, and manual
+            # forwarding is a perfectly good alternative. Say what was found.
+            detail = err or 'unavailable'
+            if err == 'upnpc not installed':
+                result['status'] = 'warning'
+                result['recommendations'].append(
+                    'Install miniupnpc to let the toolkit verify router port mappings.')
+            result['checks'].append({
+                'name': 'UPnP gateway', 'status': 'warning', 'detail': detail})
+            result['checks'].append({
+                'name': 'Port forwarding', 'status': 'warning',
+                'detail': 'cannot be verified — check manually if quality stays at 0.00'})
+            if result['status'] == 'ok':
+                result['status'] = 'warning'
+            return result
+
+        result['checks'].append({
+            'name': 'UPnP gateway', 'status': 'ok',
+            'detail': f'IGD reachable, {len(mappings)} mapping(s) present'})
+
+        mine = PortMapping._local_ips()
+        ours = [m for m in mappings if m['target_ip'] in mine]
+        foreign = [m for m in mappings if m['target_ip'] not in mine]
+
+        result['checks'].append({
+            'name': 'Mappings to this host',
+            'status': 'ok' if ours else 'warning',
+            'detail': (f'{len(ours)} mapping(s) point here'
+                       if ours else 'none — inbound traffic will not reach this node'),
+        })
+        if not ours:
+            result['status'] = 'warning'
+            result['recommendations'].append(
+                'No UPnP mapping points to this machine. The node advertises itself but '
+                'consumers cannot connect, which shows up as quality 0.00. Check that '
+                'UPnP is enabled on the router, or forward the node UDP range manually.')
+
+        # A second node behind the same router competes for the same external ports.
+        # The IGD keeps one winner, and the loser goes quiet with no error anywhere.
+        if foreign:
+            others = sorted({m['target_ip'] for m in foreign})
+            clashing = sorted({m['ext_port'] for m in foreign}
+                              & {m['ext_port'] for m in ours}) if ours else []
+            result['checks'].append({
+                'name': 'Mappings to other hosts',
+                'status': 'critical' if clashing else 'warning',
+                'detail': (f'{len(foreign)} mapping(s) point to {", ".join(others[:3])}'
+                           + (f' — port(s) {clashing} contested' if clashing else '')),
+            })
+            if clashing:
+                result['status'] = 'critical'
+                result['recommendations'].append(
+                    f'Another host ({others[0]}) holds a mapping for the same external '
+                    f'port(s) {clashing}. Two nodes behind one router cannot both claim '
+                    f'them — give each node its own UDP range in the node config.')
+            elif result['status'] == 'ok':
+                result['status'] = 'warning'
+
+        return result
+
+    @staticmethod
+    def fix():
+        # Deliberately no repair: see the class docstring.
+        return {'name': PortMapping.name, 'actions': [
+            {'action': 'Port mapping is handled by the node itself — reporting only',
+             'success': True}], 'success': True}
+
 
 class ProcessCleanup:
     """Detect and kill stale toolkit processes from old installations.
@@ -2907,6 +3041,7 @@ SUBSYSTEMS = [
     NicChecksumOffload,
     FirewallBackend,
     PortReachability,
+    PortMapping,
     ProcessCleanup,
     RpsWatcher,
     SwapHealth,
@@ -3441,7 +3576,13 @@ done
             gov_script_path = '/usr/local/bin/mysterium-cpu-governor.sh'
             gov_service = f"""[Unit]
 Description=Mysterium CPU Performance Governor
-After=multi-user.target
+# v1.4.6: previously only After=multi-user.target, which says nothing about the
+# other services that write the same value. cpupower.service and cpupower-gui
+# set scaling_governor too, and with no ordering between the units whichever ran
+# last won — on a Parrot laptop that meant schedutil survived while this script
+# reported success. Ordering after them makes the outcome deterministic.
+After=multi-user.target cpupower.service cpupower-gui.service cpufrequtils.service
+Wants=multi-user.target
 
 [Service]
 Type=oneshot

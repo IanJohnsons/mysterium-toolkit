@@ -1,6 +1,6 @@
 # Mysterium Node Toolkit
 
-![Version](https://img.shields.io/badge/version-1.4.5-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Version](https://img.shields.io/badge/version-1.4.6-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 
 A monitoring and management dashboard for [Mysterium Network](https://mysterium.network) VPN node operators. It runs on your own machine: no account, no cloud backend, no telemetry. Your session history, earnings and consumer data live in local SQLite files. A handful of public APIs are contacted for prices, node quality and update checks — every one of them is listed under [Privacy](#privacy).
 

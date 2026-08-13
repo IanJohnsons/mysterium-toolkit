@@ -10,6 +10,7 @@ import json
 import copy
 import time
 import shutil
+import socket
 import sqlite3
 import psutil
 import subprocess
@@ -404,6 +405,34 @@ def reload_node_registry():
     global MULTI_NODE_MODE, _node_registry
     loaded = _load_nodes_json()
     if loaded:
+        # v1.4.6: enabling TLS changes what this machine serves on port 5000, but
+        # nothing revisits nodes.json. The fleet master's own entry is usually
+        # http://localhost:5000, so the moment https_enabled went on it was talking
+        # plain HTTP to a port that only speaks TLS — every card for the master
+        # answered 502, while the other nodes were fine. Correct the scheme for
+        # entries that point back at this host, and say so.
+        if HTTPS_ENABLED:
+            _self_hosts = {'localhost', '127.0.0.1', '::1', '[::1]'}
+            try:
+                for _a in psutil.net_if_addrs().values():
+                    for _x in _a:
+                        if getattr(_x, 'family', None) == socket.AF_INET and _x.address:
+                            _self_hosts.add(_x.address)
+            except Exception:
+                pass
+            for _n in loaded:
+                _u = _n.get('toolkit_url', '')
+                if not _u.lower().startswith('http://'):
+                    continue
+                _host = _u.split('://', 1)[1].split('/')[0].split(':')[0]
+                if _host in _self_hosts:
+                    _n['toolkit_url'] = 'https://' + _u[7:]
+                    _n.setdefault('tls_verify', False)  # own self-signed cert
+                    logger.warning(
+                        f"Node {_n.get('id')!r} pointed at this host over http while "
+                        f"https_enabled is on — using {_n['toolkit_url']} instead. "
+                        f"Update config/nodes.json to make this permanent."
+                    )
         _node_registry = loaded
         MULTI_NODE_MODE = True
         logger.info(f"Multi-node mode: {len(loaded)} nodes registered")
@@ -7012,7 +7041,13 @@ def check_node_update():
         pass
 
     # Fallback: direct API call (may be rate-limited without token)
-    if not latest:
+    # v1.4.6: also record whether the release actually carries installable files.
+    # A tag on its own is not an available update: 1.39.0 was tagged on 13 August
+    # 2026 with zero assets and was not in the PPA either, so the dashboard offered
+    # an update that neither `apt` nor node_installer.py could deliver — the installer
+    # answers "No .deb found for arch=..." and the operator is left guessing.
+    assets_ready = None
+    if not latest or assets_ready is None:
         try:
             import urllib.request as _ur2
             req2 = _ur2.Request(
@@ -7022,7 +7057,10 @@ def check_node_update():
             with _ur2.urlopen(req2, timeout=5) as resp:
                 import json as _json
                 data = _json.loads(resp.read())
-                latest = data.get('tag_name', '').lstrip('v')
+                if not latest:
+                    latest = data.get('tag_name', '').lstrip('v')
+                _assets = data.get('assets') or []
+                assets_ready = any(a.get('name', '').endswith('.deb') for a in _assets)
         except Exception:
             pass
 
@@ -7040,13 +7078,23 @@ def check_node_update():
     update_available = bool(
         latest_n and current_n and
         current_n != 'unknown' and
-        latest_n != current_n
+        latest_n != current_n and
+        assets_ready is not False
+    )
+    # When the tag is newer but nothing is published yet, say that rather than
+    # offering a button that cannot work.
+    pending_release = bool(
+        latest_n and current_n and
+        current_n != 'unknown' and
+        latest_n != current_n and
+        assets_ready is False
     )
 
     result = {
         'current':          current_n or 'unknown',
         'latest':           latest_n,
         'update_available': update_available,
+        'pending_release':  pending_release,
     }
     if not latest_n:
         result['error'] = 'Could not fetch latest version from GitHub'
@@ -8823,6 +8871,11 @@ def fleet_node_proxy(node_id, endpoint):
             headers=headers,
             data=body,
             timeout=30,
+            # v1.4.6: this call had no verify= at all, while every other peer request
+            # goes through _peer_verify() to pin the self-signed certificate. An https
+            # node with a pinned cert therefore worked for the collector and failed
+            # here, and the card reported 502 with no indication that TLS was the cause.
+            verify=_peer_verify(node_entry),
         )
         # Forward non-JSON responses (e.g. CSV/TXT file downloads) raw, preserving the
         # content type and download filename. Only JSON bodies are re-serialized.
