@@ -2241,9 +2241,27 @@ APPLIED=0
 ethtool -C "$IFACE" rx-usecs {coal_value} 2>/dev/null
 
 # Primary NIC RPS
-for q in /sys/class/net/$IFACE/queues/rx-*/rps_cpus; do
-    echo "$MASK" > "$q" 2>/dev/null
+# v1.4.6: skipped while an IDS is running. This timer fires every 30 seconds, so
+# before this check it rewrote the mask the health check had just cleared — the
+# warning came back within half a minute of every fix and no button could resolve
+# it. Evaluated per run, so installing or removing an IDS needs no regeneration.
+IDS_RUNNING=""
+for svc in suricata snort zeek; do
+    if systemctl is-active --quiet "$svc" 2>/dev/null; then
+        IDS_RUNNING="$svc"
+        break
+    fi
 done
+
+if [ -n "$IDS_RUNNING" ]; then
+    for q in /sys/class/net/$IFACE/queues/rx-*/rps_cpus; do
+        echo "0" > "$q" 2>/dev/null
+    done
+else
+    for q in /sys/class/net/$IFACE/queues/rx-*/rps_cpus; do
+        echo "$MASK" > "$q" 2>/dev/null
+    done
+fi
 
 # VPN interfaces — set RPS on any that have queue dirs
 for iface in /sys/class/net/myst* /sys/class/net/wg* /sys/class/net/tun*; do
@@ -3355,9 +3373,29 @@ IFACE="{primary or 'eth0'}"
 ethtool -C "$IFACE" rx-usecs {coal_value} 2>/dev/null
 
 # === RPS: Primary NIC ===
-for q in /sys/class/net/$IFACE/queues/rx-*/rps_cpus; do
-    echo "$MASK" > "$q" 2>/dev/null
+# v1.4.6: skipped while an IDS is running. Suricata, Snort and Zeek balance flows
+# across their own workers in af-packet mode; RPS on the same interface distributes
+# a second time by a different key, which leaves workers unevenly loaded and can
+# reorder packets. This is decided at run time rather than when the script was
+# written, so installing or removing an IDS later needs no regeneration — otherwise
+# this timer would quietly undo the health check's fix every 30 seconds.
+IDS_RUNNING=""
+for svc in suricata snort zeek; do
+    if systemctl is-active --quiet "$svc" 2>/dev/null; then
+        IDS_RUNNING="$svc"
+        break
+    fi
 done
+
+if [ -n "$IDS_RUNNING" ]; then
+    for q in /sys/class/net/$IFACE/queues/rx-*/rps_cpus; do
+        echo "0" > "$q" 2>/dev/null
+    done
+else
+    for q in /sys/class/net/$IFACE/queues/rx-*/rps_cpus; do
+        echo "$MASK" > "$q" 2>/dev/null
+    done
+fi
 
 # VPN interfaces handled by mysterium-rps-watcher.timer (every 30s)
 # This boot script only covers the primary NIC
