@@ -765,6 +765,25 @@ class CpuLoadBalance:
                 if flow_path.exists():
                     _write_file(str(flow_path), '32768')
 
+        # v1.4.6: the watcher timer rewrites the primary NIC every 30 seconds from
+        # its own script, so clearing RPS here without regenerating that script
+        # lasted less than a minute — and nothing on screen connected the two. The
+        # operator had to find a second Fix button under a different subsystem to
+        # make the first one stick. Regenerate it here when it exists.
+        try:
+            if Path(RPS_WATCHER_SCRIPT).exists():
+                _w = RpsWatcher.fix()
+                _wrote = [a for a in _w.get('actions', [])
+                          if 'Wrote' in a.get('action', '')]
+                if _wrote:
+                    actions.append({
+                        'action': 'Regenerated the RPS watcher script so it honours this setting',
+                        'success': all(a.get('success', True) for a in _wrote),
+                    })
+        except Exception as e:
+            actions.append({'action': 'Regenerate RPS watcher script',
+                            'success': False, 'error': str(e)[:100]})
+
         return {'name': 'cpu_balance', 'actions': actions,
                 'success': all(a.get('success', True) for a in actions) if actions else True}
 

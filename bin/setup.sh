@@ -1843,6 +1843,7 @@ $_REAL_USER ALL=(ALL) NOPASSWD: \
   /usr/sbin/ip6tables, /sbin/ip6tables, \
   /usr/sbin/nft, /sbin/nft, \
   /usr/bin/tee /sys/devices/system/cpu/*/cpufreq/scaling_governor, \
+  /usr/bin/tee /sys/class/net/*/queues/rx-*/rps_cpus, \
   /usr/bin/cpupower, \
   /usr/bin/fail2ban-client, /usr/local/bin/fail2ban-client, /bin/fail2ban-client, \
   /usr/bin/tee /etc/fail2ban/jail.d/mysterium-toolkit.conf, \
