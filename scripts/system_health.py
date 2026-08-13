@@ -599,18 +599,30 @@ class CpuLoadBalance:
                     if result['status'] == 'ok':
                         result['status'] = 'warning'
             else:
-                rps_service = Path('/etc/systemd/system/mysterium-rps-tuning.service')
-                rps_script  = Path('/usr/local/bin/mysterium-rps-setup.sh')
-                boot_pending = rps_service.exists() and rps_script.exists()
-                result['checks'].append({
-                    'name': f'{primary} RPS',
-                    'status': 'warning',
-                    'detail': ('Disabled — boot service running, will apply shortly'
-                               if boot_pending else
-                               'Disabled — 1 core handles all packets'),
-                })
-                if result['status'] == 'ok':
-                    result['status'] = 'warning'
+                # v1.4.6: RPS being off used to mean one of two things, both bad —
+                # not yet applied, or never configured. Since the IDS check it can
+                # also be the intended end state, and reporting "will apply shortly"
+                # there says the opposite of the line directly above it and keeps the
+                # whole subsystem amber for a machine that is correctly configured.
+                if _ids:
+                    result['checks'].append({
+                        'name': f'{primary} RPS',
+                        'status': 'ok',
+                        'detail': f'Off — left to {_ids}, which balances this interface itself',
+                    })
+                else:
+                    rps_service = Path('/etc/systemd/system/mysterium-rps-tuning.service')
+                    rps_script  = Path('/usr/local/bin/mysterium-rps-setup.sh')
+                    boot_pending = rps_service.exists() and rps_script.exists()
+                    result['checks'].append({
+                        'name': f'{primary} RPS',
+                        'status': 'warning',
+                        'detail': ('Disabled — boot service running, will apply shortly'
+                                   if boot_pending else
+                                   'Disabled — 1 core handles all packets'),
+                    })
+                    if result['status'] == 'ok':
+                        result['status'] = 'warning'
 
         # Check VPN interface RPS
         vpn_ifaces = [i for i in psutil.net_io_counters(pernic=True)

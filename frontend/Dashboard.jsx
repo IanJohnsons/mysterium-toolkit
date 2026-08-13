@@ -1062,6 +1062,7 @@ const MysteriumDashboard = () => {
   const [fleetConfigNodes, setFleetConfigNodes] = useState([]);
   const [healthBusy, setHealthBusy] = useState(false);   // scan in progress
   const [fixResults, setFixResults] = useState({});       // subsystem name → actions[]
+  const [fixStamp, setFixStamp] = useState({});           // subsystem name → Date of that fix
   const [lastUpdate, setLastUpdate] = useState(null);
   const [tickCount, setTickCount] = useState(0); // 1s counter for live countdown
   const [activePanel, setActivePanel] = useState(null); // 'services' | 'sessions' | 'firewall' | 'fail2ban' | 'health' | 'data' | 'fleet' | null
@@ -3939,6 +3940,18 @@ const MysteriumDashboard = () => {
                           const merged = {};
                           (data.subsystems || []).forEach(s => { merged[s.name] = s.actions || []; });
                           setFixResults(prev => ({ ...prev, ...merged }));
+                          const now = new Date();
+                          setFixStamp(prev => {
+                            const n = { ...prev };
+                            Object.keys(merged).forEach(k => { n[k] = now; });
+                            return n;
+                          });
+                          try {
+                            await fetch(`${healthFixUrl('system-health/scan')}`, {
+                              method: 'POST',
+                              headers: { ...authHeaderRef.current, 'Content-Type': 'application/json' },
+                            });
+                          } catch (e) { console.error('post-fix scan failed', e); }
                         }
                         fetchMetrics();
                       } catch (e) { console.error(e); } finally { setHealthBusy(false); }
@@ -3996,6 +4009,19 @@ const MysteriumDashboard = () => {
                                 headers: { ...authHeaderRef.current, 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ subsystem: sub.name }),
                               });
+                              // v1.4.6: re-scan, not just re-fetch. fetchMetrics()
+                              // returns the health status from the last scan, so
+                              // after a fix the panel still showed the state that
+                              // prompted it — a fix that had worked looked like it
+                              // had failed, and one that had not looked fine. Three
+                              // separate debugging sessions went down that path.
+                              try {
+                                await fetch(`${healthFixUrl('system-health/scan')}`, {
+                                  method: 'POST',
+                                  headers: { ...authHeaderRef.current, 'Content-Type': 'application/json' },
+                                });
+                              } catch (e) { console.error('post-fix scan failed', e); }
+                              setFixStamp(prev => ({ ...prev, [sub.name]: new Date() }));
                               fetchMetrics();
                             } catch (e) { console.error(e); }
                           }}
@@ -4060,7 +4086,14 @@ const MysteriumDashboard = () => {
                       {fixResults[sub.name] && fixResults[sub.name].length > 0 && (
                         <div className="mt-2 pt-2 border-t border-slate-700/40">
                           <div className="flex items-center justify-between mb-1">
-                            <span className="text-xs text-slate-500 font-medium">Last fix result</span>
+                            <span className="text-xs text-slate-500 font-medium">
+                              Last fix result
+                              {fixStamp[sub.name] && (
+                                <span className="text-slate-600 font-normal ml-1.5">
+                                  {fixStamp[sub.name].toLocaleTimeString()}
+                                </span>
+                              )}
+                            </span>
                             <button
                               onClick={() => setFixResults(prev => { const n = {...prev}; delete n[sub.name]; return n; })}
                               className="text-xs text-slate-600 hover:text-slate-400 transition"
