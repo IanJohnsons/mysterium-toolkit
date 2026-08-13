@@ -6572,8 +6572,11 @@ const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, 
             <div>Version: <span className="text-slate-300">{nodeVersion}</span></div>
             {nodeUpdateInfo?.update_available && (
               <div className="mt-0.5">
-                <span className="text-xs text-amber-400 border border-amber-500/40 bg-amber-500/10 rounded px-1.5 py-0.5" title={`Mysterium node v${nodeUpdateInfo.latest} available`}>
-                  ↑ {nodeUpdateInfo.latest} available
+                <span className="text-xs text-amber-400 border border-amber-500/40 bg-amber-500/10 rounded px-1.5 py-0.5"
+                      title={nodeUpdateInfo.self_updating
+                        ? `Node v${nodeUpdateInfo.latest} available — myst-updater.timer will install it on its own schedule`
+                        : `Mysterium node v${nodeUpdateInfo.latest} available`}>
+                  ↑ {nodeUpdateInfo.latest}{nodeUpdateInfo.self_updating ? ' — self-updating' : ' available'}
                 </span>
               </div>
             )}

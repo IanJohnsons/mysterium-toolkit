@@ -199,6 +199,23 @@ def log_result(msg):
     logger.log(logging.INFO if logger.isEnabledFor(logging.INFO) else logging.WARNING, msg)
 
 
+def _node_self_updating():
+    """Whether the node has its own update timer running.
+
+    v1.4.6: node 1.39.x installs `myst-updater.timer` — every six hours with up to
+    six hours of jitter — so the node now updates itself. Offering our own update
+    button next to that invites two things racing over the same package, and the
+    version we report can change without anyone touching the dashboard. Detect it
+    and say so rather than pretending we are in charge.
+    """
+    try:
+        rc = subprocess.run(['systemctl', 'is-active', 'myst-updater.timer'],
+                            capture_output=True, text=True, timeout=5)
+        return rc.stdout.strip() == 'active'
+    except Exception:
+        return False
+
+
 def local_provider_id():
     """This node's identity, for stamping database rows.
 
@@ -7095,6 +7112,7 @@ def check_node_update():
         'latest':           latest_n,
         'update_available': update_available,
         'pending_release':  pending_release,
+        'self_updating':    _node_self_updating(),
     }
     if not latest_n:
         result['error'] = 'Could not fetch latest version from GitHub'

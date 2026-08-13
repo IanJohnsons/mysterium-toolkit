@@ -1732,6 +1732,32 @@ class PortMapping:
         return True, mappings, None
 
     @staticmethod
+    def _nat_and_quality():
+        """What the node itself reports: NAT type and whether it is earning.
+
+        Without this the check has no way to tell a broken mapping from one that
+        was never needed. A node on a public IP maps nothing because there is
+        nothing to map, and hole punching (traversal defaults to
+        manual,upnp,holepunching) carries sessions with no mapping at all.
+        """
+        nat, quality = '', None
+        try:
+            nat = (PortReachability._check_nat_type() or '').lower()
+        except Exception:
+            pass
+        try:
+            import requests as _rq
+            r = _rq.get(f'http://localhost:{PortReachability.TEQUILAPI_PORT}/sessions',
+                        timeout=3)
+            if r.status_code == 200:
+                d = r.json()
+                items = d.get('items', d) if isinstance(d, dict) else d
+                quality = len(items) if isinstance(items, list) else None
+        except Exception:
+            pass
+        return nat, quality
+
+    @staticmethod
     def scan():
         result = {
             'name': PortMapping.name,
@@ -1741,23 +1767,28 @@ class PortMapping:
             'recommendations': [],
         }
 
+        nat, sessions = PortMapping._nat_and_quality()
+        public_ip = nat in ('none', 'no nat', 'public')
+
         available, mappings, err = PortMapping._upnp_list()
 
         if not available:
-            # Not an error in itself — a public IP needs no mapping, and manual
-            # forwarding is a perfectly good alternative. Say what was found.
+            # A public host needs no gateway at all, so this is not a finding there.
+            if public_ip:
+                result['checks'].append({
+                    'name': 'Port mapping', 'status': 'ok',
+                    'detail': 'not required — node reports a public address'})
+                return result
             detail = err or 'unavailable'
             if err == 'upnpc not installed':
-                result['status'] = 'warning'
                 result['recommendations'].append(
-                    'Install miniupnpc to let the toolkit verify router port mappings.')
+                    'Install miniupnpc to let the toolkit read the router mapping table.')
             result['checks'].append({
                 'name': 'UPnP gateway', 'status': 'warning', 'detail': detail})
             result['checks'].append({
                 'name': 'Port forwarding', 'status': 'warning',
                 'detail': 'cannot be verified — check manually if quality stays at 0.00'})
-            if result['status'] == 'ok':
-                result['status'] = 'warning'
+            result['status'] = 'warning'
             return result
 
         result['checks'].append({
@@ -1768,18 +1799,32 @@ class PortMapping:
         ours = [m for m in mappings if m['target_ip'] in mine]
         foreign = [m for m in mappings if m['target_ip'] not in mine]
 
-        result['checks'].append({
-            'name': 'Mappings to this host',
-            'status': 'ok' if ours else 'warning',
-            'detail': (f'{len(ours)} mapping(s) point here'
-                       if ours else 'none — inbound traffic will not reach this node'),
-        })
-        if not ours:
+        # v1.4.6: absence of a mapping is not by itself a fault. A public address
+        # needs none, and hole punching carries sessions without one — all three of
+        # the author's nodes reported "inbound traffic will not reach this node"
+        # while earning normally. Only say something is wrong when there is also a
+        # symptom: no mapping, no public address, and no sessions either.
+        if ours:
+            result['checks'].append({
+                'name': 'Mappings to this host', 'status': 'ok',
+                'detail': f'{len(ours)} mapping(s) point here'})
+        elif public_ip:
+            result['checks'].append({
+                'name': 'Mappings to this host', 'status': 'ok',
+                'detail': 'none needed — node reports a public address'})
+        elif sessions:
+            result['checks'].append({
+                'name': 'Mappings to this host', 'status': 'ok',
+                'detail': f'none, but {sessions} session(s) active — hole punching is working'})
+        else:
+            result['checks'].append({
+                'name': 'Mappings to this host', 'status': 'warning',
+                'detail': 'none, and no active sessions'})
             result['status'] = 'warning'
             result['recommendations'].append(
-                'No UPnP mapping points to this machine. The node advertises itself but '
-                'consumers cannot connect, which shows up as quality 0.00. Check that '
-                'UPnP is enabled on the router, or forward the node UDP range manually.')
+                'No UPnP mapping points here and the node has no sessions. Hole punching '
+                'usually covers this, so check quality first — if it stays at 0.00, enable '
+                'UPnP on the router or forward the node UDP range manually.')
 
         # A second node behind the same router competes for the same external ports.
         # The IGD keeps one winner, and the loser goes quiet with no error anywhere.
@@ -1789,9 +1834,10 @@ class PortMapping:
                               & {m['ext_port'] for m in ours}) if ours else []
             result['checks'].append({
                 'name': 'Mappings to other hosts',
-                'status': 'critical' if clashing else 'warning',
+                'status': 'critical' if clashing else 'ok',
                 'detail': (f'{len(foreign)} mapping(s) point to {", ".join(others[:3])}'
-                           + (f' — port(s) {clashing} contested' if clashing else '')),
+                           + (f' — port(s) {clashing} contested' if clashing else
+                              ' — different ports, no conflict')),
             })
             if clashing:
                 result['status'] = 'critical'
@@ -1799,8 +1845,6 @@ class PortMapping:
                     f'Another host ({others[0]}) holds a mapping for the same external '
                     f'port(s) {clashing}. Two nodes behind one router cannot both claim '
                     f'them — give each node its own UDP range in the node config.')
-            elif result['status'] == 'ok':
-                result['status'] = 'warning'
 
         return result
 
