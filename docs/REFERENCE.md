@@ -513,8 +513,17 @@ myst --version
 
 A later `apt upgrade` may put the repository version back once it catches up, which is
 harmless. From node 1.39.0 onwards the package also installs `myst-updater.timer`,
-which updates the node on its own six-hourly schedule — see the self-updater toggle in
-the dashboard, or set `MYST_UPDATER_ENABLED=false` in `/etc/default/myst-updater`.
+which updates the node on its own six-hourly schedule. The dashboard shows whether it
+is active, under the node version. Changing it is left to the operator, because the
+file belongs to the node package and writing it would need a sudo right the toolkit has
+no other use for:
+
+```bash
+sudo sed -i 's/^MYST_UPDATER_ENABLED=true/MYST_UPDATER_ENABLED=false/' /etc/default/myst-updater
+```
+
+Both switches matter: the systemd timer and that flag. An active timer with the flag
+set to false does nothing, which is why the dashboard reads both.
 
 **Raspberry Pi** is detected from `/proc/device-tree/model`. When found, the wizard
 enables `pi_mode`: log level WARNING instead of INFO, to cut down on SD card writes,

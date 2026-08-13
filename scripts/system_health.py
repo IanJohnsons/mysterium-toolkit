@@ -522,20 +522,30 @@ class CpuLoadBalance:
         _ids = next((s for s in ('suricata', 'snort', 'zeek')
                      if _service_active(s)), None)
         if _ids:
-            result['checks'].append({
-                'name': 'IDS on this interface',
-                'status': 'warning',
-                'detail': f'{_ids} is running and balances flows itself — RPS does it again',
-            })
-            result['recommendations'].append(
-                f'{_ids} distributes packets across its own workers (af-packet, '
-                f'cluster_flow). RPS on the same interface adds a second, different '
-                f'distribution, which can leave workers unevenly loaded and reorder '
-                f'packets. Consider leaving RPS off the primary interface and letting '
-                f'{_ids} balance, while keeping RPS on the myst* tunnel interfaces.'
-            )
-            if result['status'] == 'ok':
-                result['status'] = 'warning'
+            _primary_now = CpuLoadBalance._get_primary_iface()
+            _mask_now = (CpuLoadBalance._get_rps_mask(_primary_now) or '0').strip() if _primary_now else '0'
+            _rps_on_primary = _mask_now not in ('0', '00', '')
+            if _rps_on_primary:
+                result['checks'].append({
+                    'name': 'IDS on this interface',
+                    'status': 'warning',
+                    'detail': f'{_ids} is running and balances flows itself — RPS does it again',
+                })
+                result['recommendations'].append(
+                    f'{_ids} distributes packets across its own workers (af-packet, '
+                    f'cluster_flow). RPS on the same interface adds a second, different '
+                    f'distribution, which can leave workers unevenly loaded and reorder '
+                    f'packets. Fix & Lock leaves RPS off {_primary_now} and keeps it on '
+                    f'the tunnel interfaces, where no IDS is listening.'
+                )
+                if result['status'] == 'ok':
+                    result['status'] = 'warning'
+            else:
+                result['checks'].append({
+                    'name': 'IDS on this interface',
+                    'status': 'ok',
+                    'detail': f'{_ids} balances {_primary_now}; RPS is off there, as it should be',
+                })
 
         # Check if irqbalance is installed
         installed, msg = _ensure_tool('irqbalance')
@@ -702,7 +712,33 @@ class CpuLoadBalance:
         # Step 3: Set RPS on all interfaces
         primary = CpuLoadBalance._get_primary_iface()
         all_ifaces = []
-        if primary:
+        # v1.4.6: skip the primary interface when an IDS is balancing it. Setting RPS
+        # there is what the scan warns about, so a Fix that sets it anyway leaves a
+        # warning no button can clear — and it stacks two different distributions on
+        # the same packets. The tunnel interfaces still get RPS, which is where it
+        # helps and where no IDS is listening.
+        _ids_here = next((s for s in ('suricata', 'snort', 'zeek')
+                          if _service_active(s)), None)
+        if primary and _ids_here:
+            # Clear whatever is already set, otherwise a mask applied before the IDS
+            # was installed keeps both distributions running and the scan keeps
+            # warning about a state no button changed.
+            _cleared = 0
+            try:
+                for q in sorted(Path(f'/sys/class/net/{primary}/queues/').glob('rx-*')):
+                    p = q / 'rps_cpus'
+                    if p.exists() and (_read_file(str(p)) or '0').strip() not in ('0', '00', ''):
+                        if _write_file(str(p), '0'):
+                            _cleared += 1
+            except Exception as e:
+                logger.debug(f"RPS clear on {primary} failed: {e}")
+            actions.append({
+                'action': (f'{primary}: RPS cleared on {_cleared} queue(s) — {_ids_here} '
+                           f'balances this interface itself' if _cleared else
+                           f'{primary}: RPS left off — {_ids_here} balances this interface itself'),
+                'success': True,
+            })
+        elif primary:
             all_ifaces.append(primary)
         vpn_ifaces = [i for i in psutil.net_io_counters(pernic=True)
                       if i.startswith(('myst', 'wg', 'tun'))]

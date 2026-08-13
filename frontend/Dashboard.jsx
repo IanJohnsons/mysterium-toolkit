@@ -6580,35 +6580,24 @@ const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, 
                 </span>
               </div>
             )}
-            {/* v1.4.6: node 1.39.x updates itself on a timer. Whether that is wanted
-                differs per machine — a fleet master restarting mid-session is not the
-                same as a spare node — so show the state and let it be changed. */}
-            {nodeUpdateInfo && nodeUpdateInfo.self_updating !== undefined && !fleetNode && (
+            {/* v1.4.6: node 1.39.x updates itself on a timer. Show the state so the
+                operator knows whether the version can change unannounced, but do not
+                offer to change it here: the config file belongs to the node package,
+                writing it needs a sudo right on /etc/default that the toolkit has no
+                other reason to hold, and the format is theirs to change. Turning it
+                off is one sed line, documented in the reference. */}
+            {nodeUpdateInfo && nodeUpdateInfo.self_updating !== undefined && (
               <div className="mt-0.5">
-                <button
-                  onClick={async () => {
-                    try {
-                      const r = await fetch(`${backendUrl}/node/self-updater`, {
-                        method: 'POST',
-                        headers: { ...(authHeaders || {}), 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ enabled: !nodeUpdateInfo.self_updating }),
-                      });
-                      const d = await r.json();
-                      if (!r.ok) alert(d.error || 'Could not change the node self-updater');
-                    } catch (e) {
-                      alert('Could not reach the backend: ' + e.message);
-                    }
-                  }}
-                  className={`text-[10px] rounded px-1.5 py-0.5 border transition ${
+                <span className={`text-[10px] rounded px-1.5 py-0.5 border ${
                     nodeUpdateInfo.self_updating
-                      ? 'text-emerald-400/80 border-emerald-500/30 hover:bg-emerald-500/10'
-                      : 'text-slate-500 border-slate-700 hover:bg-slate-800'}`}
+                      ? 'text-emerald-400/70 border-emerald-500/30'
+                      : 'text-slate-500 border-slate-700'}`}
                   title={nodeUpdateInfo.self_updating
-                    ? 'The node installs its own updates on a six-hourly timer. Click to disable — useful on a fleet master you do not want restarting unannounced.'
-                    : 'The node will not update itself. Click to enable.'}
+                    ? 'The node installs its own updates on a six-hourly timer, so its version can change without anyone touching the dashboard. Disable with MYST_UPDATER_ENABLED=false in /etc/default/myst-updater.'
+                    : 'The node will not update itself — you decide when it changes version.'}
                 >
-                  self-updater: {nodeUpdateInfo.self_updating ? 'on' : 'off'}
-                </button>
+                  node self-updater: {nodeUpdateInfo.self_updating ? 'on' : 'off'}
+                </span>
               </div>
             )}
             {nodeUpdateInfo?.pending_release && (

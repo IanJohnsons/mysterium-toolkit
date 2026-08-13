@@ -250,39 +250,6 @@ def _node_self_updating():
     return True
 
 
-def _set_node_self_updating(enabled: bool):
-    """Rewrite MYST_UPDATER_ENABLED in the node's updater config.
-
-    The file belongs to the node package, not to the toolkit, so it is written
-    through the same sudo tee route used for the fail2ban and sudoers files rather
-    than by giving the service write access to /etc/default. Only this one key is
-    touched; the healthcheck URL and timeouts the node sets are preserved.
-    """
-    p = Path('/etc/default/myst-updater')
-    if not p.exists():
-        return False, 'myst-updater config not present — node predates 1.39.0'
-    try:
-        lines = p.read_text().split('\n')
-        out, found = [], False
-        for line in lines:
-            if line.strip().startswith('MYST_UPDATER_ENABLED='):
-                out.append(f'MYST_UPDATER_ENABLED={"true" if enabled else "false"}')
-                found = True
-            else:
-                out.append(line)
-        if not found:
-            out.append(f'MYST_UPDATER_ENABLED={"true" if enabled else "false"}')
-        body = '\n'.join(out)
-        r = subprocess.run(['sudo', '-n', 'tee', str(p)], input=body,
-                           capture_output=True, text=True, timeout=10)
-        if r.returncode != 0:
-            return False, (r.stderr or 'sudo tee failed').strip()[:120]
-        log_result(f"Node self-updater set to {'enabled' if enabled else 'disabled'}")
-        return True, None
-    except Exception as e:
-        return False, str(e)[:120]
-
-
 def local_provider_id():
     """This node's identity, for stamping database rows.
 
@@ -7225,27 +7192,6 @@ def check_node_update():
     check_node_update._cache      = result
     check_node_update._cache_time = now
     return jsonify(result), 200
-
-
-@app.route('/node/self-updater', methods=['POST'])
-@require_auth
-def set_node_self_updater():
-    """Enable or disable the node's own package updater.
-
-    v1.4.6: node 1.39.x ships myst-updater.timer, so a node can change version on
-    its own schedule. Whether that is wanted depends on the machine — a fleet
-    master restarting mid-session is a different proposition from a spare node —
-    so it is a setting rather than an assumption. The config file belongs to the
-    node package, hence the sudo tee route and the matching sudoers entry.
-    """
-    body = request.get_json() or {}
-    if 'enabled' not in body:
-        return jsonify({'error': "Body must contain 'enabled': true|false"}), 400
-    ok, err = _set_node_self_updating(bool(body['enabled']))
-    if not ok:
-        return jsonify({'error': err}), 500
-    check_node_update._cache_time = 0  # force a fresh read on the next poll
-    return jsonify({'success': True, 'self_updating': _node_self_updating()}), 200
 
 
 @app.route('/system/update', methods=['POST'])

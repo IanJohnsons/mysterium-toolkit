@@ -1850,8 +1850,7 @@ $_REAL_USER ALL=(ALL) NOPASSWD: \
   /usr/bin/tee /etc/sudoers.d/mysterium-toolkit, \
   /usr/bin/chmod 440 /etc/sudoers.d/mysterium-toolkit, \
   /usr/sbin/visudo -c -f /etc/sudoers.d/mysterium-toolkit, \
-  /usr/bin/rm -f /etc/sudoers.d/mysterium-toolkit, \
-  /usr/bin/tee /etc/default/myst-updater
+  /usr/bin/rm -f /etc/sudoers.d/mysterium-toolkit
 SUDOERS_EOF
     sudo chmod 440 "$_SUDOERS_FILE"
     if sudo visudo -c -f "$_SUDOERS_FILE" >/dev/null 2>&1; then
