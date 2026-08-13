@@ -2121,8 +2121,15 @@ const MysteriumDashboard = () => {
 
                   {/* Modal */}
                   {fleetModalOpen && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm px-4">
-                      <div className="w-full max-w-md bg-slate-900 border border-violet-500/20 rounded-xl shadow-2xl">
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm px-4 py-6 overflow-y-auto">
+                      {/* v1.4.6: the dialog had no height limit and no scroll, so on a
+                          short viewport — a laptop screen, and every phone — the lower
+                          half simply ran off the bottom, taking Save Changes with it.
+                          It grew worse in v1.4.5 with the TequilAPI field and the TLS
+                          block. Cap it to the viewport and let the body scroll; the
+                          header and the buttons stay put so the way out is always
+                          visible. */}
+                      <div className="w-full max-w-md bg-slate-900 border border-violet-500/20 rounded-xl shadow-2xl flex flex-col max-h-[90vh] my-auto">
                         {/* Modal header */}
                         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800">
                           <div className="flex items-center gap-2">
@@ -2135,7 +2142,7 @@ const MysteriumDashboard = () => {
                         </div>
 
                         {/* Modal body */}
-                        <div className="px-5 py-4 space-y-4">
+                        <div className="px-5 py-4 space-y-4 overflow-y-auto flex-1 min-h-0">
                           {/* Toolkit URL */}
                           <div>
                             <label className="block text-xs text-slate-400 mb-1">Toolkit URL <span className="text-red-400">*</span></label>
@@ -2426,7 +2433,10 @@ const MysteriumDashboard = () => {
                       {n.error && <div className="text-red-400/80 text-[10px]">⚠ {n.error}</div>}
                     </div>
                     <div className="mt-3 pt-2 border-t border-slate-700/50 text-[10px] text-slate-600 flex items-center justify-between">
-                      <span>{n.peer_mode ? 'Peer mode (full data)' : 'TequilAPI mode (live only)'}</span>
+                      {/* v1.4.6: "Peer mode" described our own plumbing rather than
+                          what the operator gets. Both labels now say what data is
+                          available, which is the only thing the distinction changes. */}
+                      <span>{n.peer_mode ? 'Toolkit node — full history' : 'Node API only — live data'}</span>
                       <div className="flex items-center gap-2">
                         <button onClick={(e) => { e.stopPropagation(); document.querySelector(`[data-edit-node="${n.id}"]`)?.click(); }}
                           className="text-slate-600 hover:text-violet-400 transition px-1" title="Edit node">✎</button>
@@ -4391,7 +4401,7 @@ const MysteriumDashboard = () => {
 
                 <div>
                   <h4 className="text-emerald-400 font-semibold mb-1">Fleet Card Fields</h4>
-                  <p className="text-slate-400"><strong className="text-slate-300">Up:</strong> — share of the last 24 hours the node was reachable. When it is below 100%, the figure after the arrow (for example <code className="bg-slate-800 px-1 rounded">Up: 85.4% → 5.0904/day at 100%</code>) is today's earnings divided by that uptime: what the day would have produced had the node been reachable throughout. It is not extra income — it is the cost of the downtime. At 100% uptime it would only repeat today's number, so it is left out. <strong className="text-slate-300">Peer mode (full data)</strong> — the remote node runs the toolkit, so history, quality and system metrics come across; <strong className="text-slate-300">TequilAPI mode (live only)</strong> means only the node API is reachable and nothing historical is available. <strong className="text-slate-300">MYST</strong> in bold is the unsettled balance, <strong className="text-slate-300">Today</strong> is earned since midnight in your configured timezone.</p>
+                  <p className="text-slate-400"><strong className="text-slate-300">Up:</strong> — share of the last 24 hours the node was reachable. When it is below 100%, the figure after the arrow (for example <code className="bg-slate-800 px-1 rounded">Up: 85.4% → 5.0904/day at 100%</code>) is today's earnings divided by that uptime: what the day would have produced had the node been reachable throughout. It is not extra income — it is the cost of the downtime. At 100% uptime it would only repeat today's number, so it is left out. <strong className="text-slate-300">Toolkit node — full history</strong> means that node runs the toolkit as well, so history, quality and system metrics come across; <strong className="text-slate-300">Node API only — live data</strong> means just the node's own API is reachable, which gives current figures but nothing historical. <strong className="text-slate-300">MYST</strong> in bold is the unsettled balance, <strong className="text-slate-300">Today</strong> is earned since midnight in your configured timezone.</p>
                 </div>
 
                 <div>
