@@ -93,6 +93,7 @@ Never run `update.sh` with sudo. It repairs file ownership itself, and running i
 
 ```bash
 systemctl status mysterium-toolkit
+tail -f logs/backend.log      # the toolkit's own log — start here
 journalctl -u mysterium-toolkit -f
 ```
 

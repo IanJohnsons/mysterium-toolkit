@@ -16,6 +16,8 @@ import psutil
 import subprocess
 import requests
 import base64
+import hashlib
+import hmac
 import logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timezone, timedelta
@@ -97,6 +99,25 @@ try:
     _existing = Path('logs/backend.log')
     if _existing.exists() and _existing.stat().st_size > _LOG_MAX_BYTES:
         _existing.replace(Path('logs/backend.log.oversized'))
+except Exception:
+    pass
+
+# v1.4.6: and then remove it once it has served its purpose. RotatingFileHandler
+# manages .1, .2 and .3 but knows nothing about .oversized, so the file it sets
+# aside is never touched again — one install carried 32 MB from August onwards.
+# A week is long enough to read it after a rotation, and short enough that it does
+# not quietly become the largest file in the directory.
+try:
+    _over = Path('logs/backend.log.oversized')
+    if _over.exists():
+        _age_days = (time.time() - _over.stat().st_mtime) / 86400
+        if _age_days > 7:
+            _size_mb = _over.stat().st_size / 1024 / 1024
+            _over.unlink()
+            logging.getLogger(__name__).warning(
+                f"Removed logs/backend.log.oversized ({_size_mb:.0f} MB, "
+                f"{_age_days:.0f} days old) — rotation never reclaimed it"
+            )
 except Exception:
     pass
 
@@ -200,20 +221,66 @@ def log_result(msg):
 
 
 def _node_self_updating():
-    """Whether the node has its own update timer running.
+    """Whether the node has its own update timer running, and whether it will act.
 
     v1.4.6: node 1.39.x installs `myst-updater.timer` — every six hours with up to
-    six hours of jitter — so the node now updates itself. Offering our own update
-    button next to that invites two things racing over the same package, and the
-    version we report can change without anyone touching the dashboard. Detect it
-    and say so rather than pretending we are in charge.
+    six hours of jitter — so the node now updates itself. Two separate switches
+    decide whether anything happens: the systemd timer, and MYST_UPDATER_ENABLED in
+    /etc/default/myst-updater. A timer that is active while the flag is false does
+    nothing at all, so reporting only the timer would be misleading.
     """
+    active = False
     try:
         rc = subprocess.run(['systemctl', 'is-active', 'myst-updater.timer'],
                             capture_output=True, text=True, timeout=5)
-        return rc.stdout.strip() == 'active'
+        active = rc.stdout.strip() == 'active'
     except Exception:
         return False
+    if not active:
+        return False
+    try:
+        p = Path('/etc/default/myst-updater')
+        if p.exists():
+            for line in p.read_text().split('\n'):
+                line = line.strip()
+                if line.startswith('MYST_UPDATER_ENABLED='):
+                    return line.split('=', 1)[1].strip().strip('"\'').lower() == 'true'
+    except Exception:
+        pass
+    return True
+
+
+def _set_node_self_updating(enabled: bool):
+    """Rewrite MYST_UPDATER_ENABLED in the node's updater config.
+
+    The file belongs to the node package, not to the toolkit, so it is written
+    through the same sudo tee route used for the fail2ban and sudoers files rather
+    than by giving the service write access to /etc/default. Only this one key is
+    touched; the healthcheck URL and timeouts the node sets are preserved.
+    """
+    p = Path('/etc/default/myst-updater')
+    if not p.exists():
+        return False, 'myst-updater config not present — node predates 1.39.0'
+    try:
+        lines = p.read_text().split('\n')
+        out, found = [], False
+        for line in lines:
+            if line.strip().startswith('MYST_UPDATER_ENABLED='):
+                out.append(f'MYST_UPDATER_ENABLED={"true" if enabled else "false"}')
+                found = True
+            else:
+                out.append(line)
+        if not found:
+            out.append(f'MYST_UPDATER_ENABLED={"true" if enabled else "false"}')
+        body = '\n'.join(out)
+        r = subprocess.run(['sudo', '-n', 'tee', str(p)], input=body,
+                           capture_output=True, text=True, timeout=10)
+        if r.returncode != 0:
+            return False, (r.stderr or 'sudo tee failed').strip()[:120]
+        log_result(f"Node self-updater set to {'enabled' if enabled else 'disabled'}")
+        return True, None
+    except Exception as e:
+        return False, str(e)[:120]
 
 
 def local_provider_id():
@@ -489,6 +556,44 @@ NODE_API_URL = NODE_API_URLS[0] if NODE_API_URLS else f"http://{node_host}:{node
 API_KEY = os.getenv('DASHBOARD_API_KEY', setup_config.get('dashboard_api_key'))
 USERNAME = os.getenv('DASHBOARD_USERNAME', setup_config.get('dashboard_username'))
 PASSWORD = os.getenv('DASHBOARD_PASSWORD', setup_config.get('dashboard_password'))
+
+
+def _hash_password(plain: str) -> str:
+    """Hash a dashboard password with scrypt, salted, from the standard library.
+
+    v1.4.6: the password was stored in plain text in setup.json and .env, compared
+    directly, and printed on screen by the setup wizard. Anyone who could read the
+    config — a backup, a stray chmod, a support paste — had the credential itself.
+    scrypt needs no extra dependency and is deliberately slow, which is what makes
+    a stolen hash worth little.
+    """
+    salt = os.urandom(16)
+    dk = hashlib.scrypt(plain.encode(), salt=salt, n=16384, r=8, p=1, dklen=32)
+    return 'scrypt$' + base64.b64encode(salt).decode() + '$' + base64.b64encode(dk).decode()
+
+
+def _verify_password(plain: str, stored: str) -> bool:
+    """Check a password against either a hash or a legacy plain-text value.
+
+    Existing installs keep working: a stored value without the scrypt prefix is
+    compared directly, so nobody is locked out by upgrading. The comparison is
+    constant-time in both branches — a plain-text comparison that returns early
+    leaks the length and the matching prefix through timing.
+    """
+    if not stored or plain is None:
+        return False
+    if stored.startswith('scrypt$'):
+        try:
+            _, salt_b64, dk_b64 = stored.split('$', 2)
+            salt = base64.b64decode(salt_b64)
+            expected = base64.b64decode(dk_b64)
+            dk = hashlib.scrypt(plain.encode(), salt=salt, n=16384, r=8, p=1,
+                                dklen=len(expected))
+            return hmac.compare_digest(dk, expected)
+        except Exception as e:
+            logger.warning(f"Password hash could not be read: {e}")
+            return False
+    return hmac.compare_digest(plain.encode(), stored.encode())
 ALLOW_NO_AUTH = os.getenv('ALLOW_NO_AUTH', 'false').lower() == 'true'
 
 # Log auth source for debugging
@@ -1044,7 +1149,7 @@ def require_auth(f):
             try:
                 credentials = base64.b64decode(auth.split(' ', 1)[1]).decode('utf-8')
                 user, pwd = credentials.split(':', 1)
-                if user == USERNAME and pwd == PASSWORD:
+                if user == USERNAME and _verify_password(pwd, PASSWORD):
                     return f(*args, **kwargs)
             except Exception as e:
                 logger.warning(f"Basic auth error: {e}")
@@ -7120,6 +7225,27 @@ def check_node_update():
     check_node_update._cache      = result
     check_node_update._cache_time = now
     return jsonify(result), 200
+
+
+@app.route('/node/self-updater', methods=['POST'])
+@require_auth
+def set_node_self_updater():
+    """Enable or disable the node's own package updater.
+
+    v1.4.6: node 1.39.x ships myst-updater.timer, so a node can change version on
+    its own schedule. Whether that is wanted depends on the machine — a fleet
+    master restarting mid-session is a different proposition from a spare node —
+    so it is a setting rather than an assumption. The config file belongs to the
+    node package, hence the sudo tee route and the matching sudoers entry.
+    """
+    body = request.get_json() or {}
+    if 'enabled' not in body:
+        return jsonify({'error': "Body must contain 'enabled': true|false"}), 400
+    ok, err = _set_node_self_updating(bool(body['enabled']))
+    if not ok:
+        return jsonify({'error': err}), 500
+    check_node_update._cache_time = 0  # force a fresh read on the next poll
+    return jsonify({'success': True, 'self_updating': _node_self_updating()}), 200
 
 
 @app.route('/system/update', methods=['POST'])

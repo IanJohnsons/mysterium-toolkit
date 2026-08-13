@@ -86,6 +86,19 @@ def print_warning(text):
     """Print warning message"""
     print(f"{Colors.WARNING}⚠ {text}{Colors.ENDC}")
 
+def _hash_dashboard_password(plain: str) -> str:
+    """Salted scrypt hash, in the same format app.py verifies against.
+
+    Kept deliberately simple and dependency-free: hashlib is standard library, and
+    the format string ('scrypt$<salt>$<key>', both base64) is parsed by
+    _verify_password() in backend/app.py. Change one and the other must follow.
+    """
+    import hashlib
+    salt = os.urandom(16)
+    dk = hashlib.scrypt(plain.encode(), salt=salt, n=16384, r=8, p=1, dklen=32)
+    return 'scrypt$' + base64.b64encode(salt).decode() + '$' + base64.b64encode(dk).decode()
+
+
 def print_info(text):
     """Print info message"""
     print(f"{Colors.OKCYAN}{text}{Colors.ENDC}")
@@ -797,21 +810,28 @@ def _run_advanced_wizard() -> bool:
 
     elif "Username" in auth_method:
         config['dashboard_username'] = input_text("Dashboard username", "admin")
-        config['dashboard_password'] = input_text("Dashboard password (choose a strong one!)", "")
-        if not config['dashboard_password']:
+        _plain_pw = input_text("Dashboard password (choose a strong one!)", "")
+        if not _plain_pw:
             print_warning("Empty password is insecure! Consider re-running setup.")
+        # v1.4.6: store a salted scrypt hash rather than the password itself. It used
+        # to sit in plain text in setup.json and .env, which means a backup or a
+        # support paste carried the credential. The hash cannot be turned back into
+        # the password, so the note below no longer promises it can be looked up.
+        config['dashboard_password'] = _hash_dashboard_password(_plain_pw) if _plain_pw else ''
         config['dashboard_auth_method'] = 'userpass'
 
         print_info("")
         print_info("=" * 60)
-        print_info("  IMPORTANT — SAVE YOUR CREDENTIALS")
+        print_info("  IMPORTANT — SAVE YOUR CREDENTIALS NOW")
         print_info("=" * 60)
         print_info("")
         print_success(f"  Username : {config['dashboard_username']}")
-        print_success(f"  Password : {config['dashboard_password']}")
+        print_success(f"  Password : {_plain_pw}")
         print_info("")
         print_info("  The login screen asks for these credentials.")
-        print_info("  Find them later in: .env  and  config/setup.json")
+        print_info("  The password is stored as a salted hash, so it cannot be read")
+        print_info("  back from the config later. Write it down now; if you lose it,")
+        print_info("  re-run setup to set a new one.")
         print_info("=" * 60)
         print_info("")
         input("  Press Enter to continue...")

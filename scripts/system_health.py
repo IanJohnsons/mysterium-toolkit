@@ -204,6 +204,16 @@ def _is_installed(binary):
     return shutil.which(binary) is not None
 
 
+def _service_active(name):
+    """Whether a systemd unit is currently running."""
+    try:
+        r = subprocess.run(['systemctl', 'is-active', name],
+                           capture_output=True, text=True, timeout=5)
+        return r.stdout.strip() == 'active'
+    except Exception:
+        return False
+
+
 def _install_package(package_name):
     """Install a package using the system package manager.
     Returns (success, message)."""
@@ -501,6 +511,31 @@ class CpuLoadBalance:
 
         cpus = CpuLoadBalance._get_cpu_count()
         all_mask = CpuLoadBalance._all_cores_mask()
+
+        # v1.4.6: an IDS in af-packet mode does its own flow-based load balancing
+        # across worker threads. RPS on the same interface spreads packets a second
+        # time, by a different key, and the two disagree — measured on a Parrot
+        # laptop running Suricata with cluster_flow: a 2.6x spread in packets between
+        # workers and 0.41% drops overall, worst worker 0.64%. Not an error to fix
+        # automatically, since which one should give way depends on what the machine
+        # is for, but the operator should know the two are stacked.
+        _ids = next((s for s in ('suricata', 'snort', 'zeek')
+                     if _service_active(s)), None)
+        if _ids:
+            result['checks'].append({
+                'name': 'IDS on this interface',
+                'status': 'warning',
+                'detail': f'{_ids} is running and balances flows itself — RPS does it again',
+            })
+            result['recommendations'].append(
+                f'{_ids} distributes packets across its own workers (af-packet, '
+                f'cluster_flow). RPS on the same interface adds a second, different '
+                f'distribution, which can leave workers unevenly loaded and reorder '
+                f'packets. Consider leaving RPS off the primary interface and letting '
+                f'{_ids} balance, while keeping RPS on the myst* tunnel interfaces.'
+            )
+            if result['status'] == 'ok':
+                result['status'] = 'warning'
 
         # Check if irqbalance is installed
         installed, msg = _ensure_tool('irqbalance')
@@ -1171,10 +1206,22 @@ class NicCoalescing:
                 msg += ' [e1000e freezes under high IRQ rate]'
             result['recommendations'].append(msg)
         else:
+            # v1.4.6: the value alone says nothing about what it costs. 250µs caps
+            # interrupts at roughly 4000/s, which is what stops the e1000e freezing,
+            # but it also delays every packet by up to a quarter of a millisecond and
+            # lets the ring buffer run fuller — a plausible contributor to drops under
+            # load. Worth knowing before anyone tunes it down, and worth not touching
+            # on hardware with a freeze history.
+            _detail = f'{rx_usecs}µs'
+            if rx_usecs >= NicCoalescing.TARGET_RX_USECS:
+                _max_irq = int(1_000_000 / rx_usecs) if rx_usecs else 0
+                _detail += f' — caps interrupts at ~{_max_irq:,}/s, adds up to {rx_usecs}µs latency'
+                if driver == 'e1000e':
+                    _detail += '; e1000e needs this to avoid freezing'
             result['checks'].append({
                 'name': 'rx-usecs',
                 'status': 'ok',
-                'detail': f'{rx_usecs}µs',
+                'detail': _detail,
             })
 
         # Check adaptive-rx (dynamic coalescing — pairs with rx-usecs)

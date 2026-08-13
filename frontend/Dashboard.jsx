@@ -6580,9 +6580,37 @@ const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, 
                 </span>
               </div>
             )}
-            {/* v1.4.6: a tag with no published files is not an available update.
-                Showing it as one sends the operator to an installer that answers
-                "No .deb found" through no fault of their own. */}
+            {/* v1.4.6: node 1.39.x updates itself on a timer. Whether that is wanted
+                differs per machine — a fleet master restarting mid-session is not the
+                same as a spare node — so show the state and let it be changed. */}
+            {nodeUpdateInfo && nodeUpdateInfo.self_updating !== undefined && !fleetNode && (
+              <div className="mt-0.5">
+                <button
+                  onClick={async () => {
+                    try {
+                      const r = await fetch(`${backendUrl}/node/self-updater`, {
+                        method: 'POST',
+                        headers: { ...(authHeaders || {}), 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ enabled: !nodeUpdateInfo.self_updating }),
+                      });
+                      const d = await r.json();
+                      if (!r.ok) alert(d.error || 'Could not change the node self-updater');
+                    } catch (e) {
+                      alert('Could not reach the backend: ' + e.message);
+                    }
+                  }}
+                  className={`text-[10px] rounded px-1.5 py-0.5 border transition ${
+                    nodeUpdateInfo.self_updating
+                      ? 'text-emerald-400/80 border-emerald-500/30 hover:bg-emerald-500/10'
+                      : 'text-slate-500 border-slate-700 hover:bg-slate-800'}`}
+                  title={nodeUpdateInfo.self_updating
+                    ? 'The node installs its own updates on a six-hourly timer. Click to disable — useful on a fleet master you do not want restarting unannounced.'
+                    : 'The node will not update itself. Click to enable.'}
+                >
+                  self-updater: {nodeUpdateInfo.self_updating ? 'on' : 'off'}
+                </button>
+              </div>
+            )}
             {nodeUpdateInfo?.pending_release && (
               <div className="mt-0.5">
                 <span className="text-xs text-slate-500 border border-slate-700 rounded px-1.5 py-0.5" title="The release is tagged but carries no installable files yet, and may not be in the package repository either. Nothing to do — it will install normally once published.">

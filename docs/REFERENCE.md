@@ -487,6 +487,35 @@ Once saved via the dashboard, the daily prune deletes rows older than your chose
 boards. The installer says so and skips the step. Type 3 works — the node reports to a
 fleet master that renders the screen.
 
+**`provider_tunnel_ip` (node 1.39.0)** appears in the node's connection contract
+(`tequilapi/contract/connection.go`), which describes an outgoing connection made by a
+consumer. It is not present in the provider's sessions, node status or identity
+endpoints, so on a machine that only provides service the field never has a value.
+Nothing for the toolkit to read; recorded here so the question is not reopened.
+
+### Node versions: apt and GitHub can disagree
+
+The toolkit installs the Mysterium node through the project's own `install.sh`, which
+picks its package source itself — the toolkit adds no repository of its own. That
+source can lag behind the GitHub releases by days: node 1.39.2 was published on GitHub
+while `apt` still offered 1.38.5, so `apt-get install --only-upgrade myst` reported
+everything was current.
+
+To install a newer release directly:
+
+```bash
+ARCH=$(dpkg --print-architecture)
+curl -fsSL -o /tmp/myst.deb \
+  "https://github.com/mysteriumnetwork/node/releases/download/<VERSION>/myst_linux_${ARCH}.deb"
+sudo dpkg -i /tmp/myst.deb && sudo apt-get install -f -y && rm -f /tmp/myst.deb
+myst --version
+```
+
+A later `apt upgrade` may put the repository version back once it catches up, which is
+harmless. From node 1.39.0 onwards the package also installs `myst-updater.timer`,
+which updates the node on its own six-hourly schedule — see the self-updater toggle in
+the dashboard, or set `MYST_UPDATER_ENABLED=false` in `/etc/default/myst-updater`.
+
 **Raspberry Pi** is detected from `/proc/device-tree/model`. When found, the wizard
 enables `pi_mode`: log level WARNING instead of INFO, to cut down on SD card writes,
 and a web server thread pool of 10 instead of 30. Both can be changed afterwards in
@@ -541,7 +570,14 @@ Installs a systemd service that starts automatically at boot, after the Mysteriu
 
 ```bash
 sudo systemctl status mysterium-toolkit
+tail -f logs/backend.log
 sudo journalctl -u mysterium-toolkit -f
 ```
+
+The toolkit writes its own log to `logs/backend.log`, rotated at 10 MB with three
+backups. That file is where the application's own messages go — database repairs,
+fleet reloads, configuration warnings. `journalctl` shows what systemd captured
+around the service, which on most installs is little more than sudo entries, so
+start with the log file.
 
 ---
