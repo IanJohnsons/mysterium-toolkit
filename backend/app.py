@@ -310,6 +310,128 @@ def _node_self_updating():
     return _node_self_updater_state()['state'] == 'on'
 
 
+# Same two hosts and the same base path that the node's own updater accepts —
+# updater/deb/parse.go, isAllowedRepositoryURL(). Anything else is not the
+# Mysterium PPA as far as myst-updater is concerned, whatever it calls itself.
+_MYST_PPA_HOSTS = ('ppa.launchpadcontent.net', 'ppa.mysterium.network')
+_MYST_PPA_PATH = '/mysteriumnetwork/node/ubuntu'
+
+
+def _apt_source_is_myst_ppa(line):
+    """Whether an apt-cache policy source line points at the Mysterium PPA."""
+    for host in _MYST_PPA_HOSTS:
+        marker = 'https://' + host + _MYST_PPA_PATH
+        if marker in line:
+            return True
+    return False
+
+
+def _apt_myst_state():
+    """What APT itself would install, and where it would get it.
+
+    v1.4.7. Knowing that myst-updater fails is half an answer; the other half is in
+    `apt-cache policy myst`, which is readable without root. Two shapes seen in the
+    field on 15 August 2026, both of which leave the node stuck:
+
+      1. no Mysterium PPA line at all (Debian trixie has no suite in that PPA), so
+         the updater stops at "authenticated APT metadata for origin ... was not
+         found" before it looks at any version;
+      2. a .deb installed by hand ranking above the PPA, so APT offers the local
+         package as the candidate and the updater answers "candidate X is not
+         supplied by the Mysterium node PPA".
+
+    Returns None where apt does not exist — Arch and Alpine installs get no badge
+    rather than a misleading empty one.
+
+    reason: 'ok' | 'no_ppa_source' | 'local_package_outranks_ppa' | 'ppa_update_pending'
+    """
+    try:
+        rc = subprocess.run(['apt-cache', 'policy', 'myst'],
+                            capture_output=True, text=True, timeout=15)
+    except FileNotFoundError:
+        return None
+    except Exception:
+        return None
+    if rc.returncode != 0 or 'Installed:' not in rc.stdout:
+        return None
+
+    installed = candidate = ''
+    ppa_version = ''
+    candidate_from_ppa = False
+    current_version = None
+
+    for raw in rc.stdout.split('\n'):
+        line = raw.strip()
+        if line.startswith('Installed:'):
+            installed = line.split(':', 1)[1].strip()
+            continue
+        if line.startswith('Candidate:'):
+            candidate = line.split(':', 1)[1].strip()
+            continue
+        fields = line.replace('***', '').split()
+        # A version row: "<version> <priority>". A source row underneath it:
+        # "<priority> <url> <suite>/<component> <arch> Packages".
+        if len(fields) == 2 and fields[1].isdigit() and not fields[0].isdigit():
+            current_version = fields[0]
+            continue
+        if fields and fields[0].isdigit() and _apt_source_is_myst_ppa(line):
+            if current_version:
+                if not ppa_version or _deb_version_key(current_version) > _deb_version_key(ppa_version):
+                    ppa_version = current_version
+                if current_version == candidate:
+                    candidate_from_ppa = True
+
+    if not ppa_version:
+        reason = 'no_ppa_source'
+    elif not candidate_from_ppa:
+        reason = 'local_package_outranks_ppa'
+    elif candidate == installed:
+        reason = 'ok'
+    else:
+        reason = 'ppa_update_pending'
+
+    return {
+        'installed':   _deb_version_short(installed),
+        'candidate':   _deb_version_short(candidate),
+        'ppa_version': _deb_version_short(ppa_version),
+        'reason':      reason,
+    }
+
+
+def _apt_myst_state_cached():
+    """`apt-cache policy` reads the APT lists from disk, so it is not free.
+
+    Fifteen minutes: long enough that a dashboard left open does not re-read the
+    package lists on every poll, short enough that adding the PPA and running
+    `apt update` shows up while the operator is still looking at the screen.
+    """
+    cached = getattr(_apt_myst_state_cached, '_value', None)
+    stamp = getattr(_apt_myst_state_cached, '_time', 0)
+    if cached is not None and time.time() - stamp < 900:
+        return cached
+    value = _apt_myst_state()
+    _apt_myst_state_cached._value = value
+    _apt_myst_state_cached._time = time.time()
+    return value
+
+
+def _deb_version_short(version):
+    """Strip the build suffix: '1.37.9+build24173085846+focal' -> '1.37.9'."""
+    return str(version or '').split('+', 1)[0].strip()
+
+
+def _deb_version_key(version):
+    """Rough numeric ordering, only used to pick the highest PPA row on offer.
+
+    `re` is not imported at module level in this file; the other users import it
+    locally, so this one does too rather than adding a top-level import that would
+    be easy to lose in a later merge.
+    """
+    import re as _re
+    parts = _re.findall(r'\d+', _deb_version_short(version))
+    return tuple(int(p) for p in parts[:4])
+
+
 def local_provider_id():
     """This node's identity, for stamping database rows.
 
@@ -7168,6 +7290,7 @@ def check_node_update():
         updater_state = _node_self_updater_state()
         fresh['self_updater'] = updater_state
         fresh['self_updating'] = updater_state['state'] == 'on'
+        fresh['apt'] = _apt_myst_state_cached()
         return jsonify(fresh), 200
 
     latest = None
@@ -7255,6 +7378,7 @@ def check_node_update():
         # Kept for a fleet master proxying a node still on v1.4.6.
         'self_updating':    updater_state['state'] == 'on',
         'self_updater':     updater_state,
+        'apt':              _apt_myst_state_cached(),
     }
     if not latest_n:
         result['error'] = 'Could not fetch latest version from GitHub'

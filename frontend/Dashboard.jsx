@@ -221,6 +221,25 @@ const selfUpdaterState = (info) => {
   return null;
 };
 
+// v1.4.7: one line explaining what APT would install, shown only when that differs
+// from what the operator sees on GitHub. Returns null on a healthy node, on a
+// machine without apt, and on a node still running v1.4.6 which sends no apt field.
+const aptExplanation = (info) => {
+  const apt = info?.apt;
+  if (!apt || !apt.reason || apt.reason === 'ok') return null;
+  if (apt.reason === 'no_ppa_source') {
+    return 'APT: no Mysterium PPA on this system — the node updater has no source to install from';
+  }
+  if (apt.reason === 'local_package_outranks_ppa') {
+    return 'APT: PPA offers ' + (apt.ppa_version || 'an older build') + ', installed ' +
+           (apt.installed || 'package') + ' came from a .deb — the node updater will not touch it';
+  }
+  if (apt.reason === 'ppa_update_pending') {
+    return 'APT: ' + (apt.candidate || 'a newer build') + ' available from the PPA';
+  }
+  return null;
+};
+
 // NAT labels lived inside the node dashboard only, so the fleet cards printed the
 // raw value from the node — `prcone` instead of `Port Restricted`. Same mistake as
 // fmtType once had. Module level so every view reads the same table.
@@ -6663,6 +6682,18 @@ const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, 
                     : selfUpdaterState(nodeUpdateInfo) === 'absent'
                       ? 'not installed'
                       : selfUpdaterState(nodeUpdateInfo)}
+                </span>
+              </div>
+            )}
+            {/* v1.4.7: the self-updater state says something is wrong; this line says
+                what APT itself would do, which is where the answer actually is.
+                Only shown when the two disagree — on a node whose package tracks the
+                PPA normally there is nothing to explain. */}
+            {aptExplanation(nodeUpdateInfo) && (
+              <div className="mt-0.5">
+                <span className="text-[10px] text-slate-500 border border-slate-700 rounded px-1.5 py-0.5"
+                      title="What `apt-cache policy myst` reports on this machine. The node's own updater installs only what APT offers from the Mysterium PPA, so this is the version it is working from — not the one tagged on GitHub.">
+                  {aptExplanation(nodeUpdateInfo)}
                 </span>
               </div>
             )}
