@@ -2,6 +2,13 @@
 All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.4.7
+
+The node's own updater was failing on every run while the dashboard reported it as healthy.
+
+- fix (the self-updater badge promised an update that could never arrive): `_node_self_updating()` asked `systemctl is-active myst-updater.timer` and read `MYST_UPDATER_ENABLED`, then reported a boolean. Both were true on the VPS and the Pi while `myst-updater.service` exited 1 on every cycle, so the version badge read `1.39.3 — self-updating` on a node that had been failing to update for days. The timer being active says nothing about the service getting anywhere. The state now also carries the outcome of the last run, read from `systemctl show`, which needs neither root nor journal access, and the badge distinguishes four cases: on, on but failing every run, off, and not installed. The version badge only claims a pending self-update when the last run actually succeeded
+- note (why it fails is not a toolkit problem, but it is now visible): `myst-updater` only installs candidates that come from the Mysterium PPA. On Debian trixie that PPA has no suite at all, which gives `authenticated APT metadata for origin LP-PPA-mysteriumnetwork-node was not found`. On a machine where the node was installed from a GitHub `.deb`, that hand-installed package outranks the PPA version and APT offers it as the candidate, which gives `candidate 1.39.2 is not supplied by the Mysterium node PPA`. The PPA also trails GitHub by some distance — 1.37.9 on focal and 1.38.5 on noble against 1.39.3 tagged. The tooltip on a failing badge names the command that shows which of the two applies
+
 ## v1.4.6
 
 Health checks that report on things they could not actually see, and a chart that drew a line through periods when nothing was measured.

@@ -209,6 +209,18 @@ const SERVICE_LABELS = {
 };
 const fmtType = (t) => SERVICE_LABELS[t] || t;
 
+// v1.4.7: the node's own updater has four outcomes, not two. Top level on purpose —
+// the version block renders in both the fleet branch and the node dashboard, and a
+// const declared inside one of those is invisible to the other.
+// A fleet master can be proxying a node still on v1.4.6, which sends only the
+// boolean, so fall back to it rather than showing nothing.
+const selfUpdaterState = (info) => {
+  if (info?.self_updater?.state) return info.self_updater.state;
+  if (info?.self_updating === true) return 'on';
+  if (info?.self_updating === false) return 'off';
+  return null;
+};
+
 // NAT labels lived inside the node dashboard only, so the fleet cards printed the
 // raw value from the node — `prcone` instead of `Port Restricted`. Same mistake as
 // fmtType once had. Module level so every view reads the same table.
@@ -6616,10 +6628,10 @@ const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, 
             {nodeUpdateInfo?.update_available && (
               <div className="mt-0.5">
                 <span className="text-xs text-amber-400 border border-amber-500/40 bg-amber-500/10 rounded px-1.5 py-0.5"
-                      title={nodeUpdateInfo.self_updating
+                      title={selfUpdaterState(nodeUpdateInfo) === 'on'
                         ? `Node v${nodeUpdateInfo.latest} available — myst-updater.timer will install it on its own schedule`
                         : `Mysterium node v${nodeUpdateInfo.latest} available`}>
-                  ↑ {nodeUpdateInfo.latest}{nodeUpdateInfo.self_updating ? ' — self-updating' : ' available'}
+                  ↑ {nodeUpdateInfo.latest}{selfUpdaterState(nodeUpdateInfo) === 'on' ? ' — self-updating' : ' available'}
                 </span>
               </div>
             )}
@@ -6629,17 +6641,28 @@ const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, 
                 writing it needs a sudo right on /etc/default that the toolkit has no
                 other reason to hold, and the format is theirs to change. Turning it
                 off is one sed line, documented in the reference. */}
-            {nodeUpdateInfo && nodeUpdateInfo.self_updating !== undefined && (
+            {selfUpdaterState(nodeUpdateInfo) && (
               <div className="mt-0.5">
                 <span className={`text-[10px] rounded px-1.5 py-0.5 border ${
-                    nodeUpdateInfo.self_updating
+                    selfUpdaterState(nodeUpdateInfo) === 'on'
                       ? 'text-emerald-400/70 border-emerald-500/30'
-                      : 'text-slate-500 border-slate-700'}`}
-                  title={nodeUpdateInfo.self_updating
-                    ? 'The node installs its own updates on a six-hourly timer, so its version can change without anyone touching the dashboard. Disable with MYST_UPDATER_ENABLED=false in /etc/default/myst-updater.'
-                    : 'The node will not update itself — you decide when it changes version.'}
+                      : selfUpdaterState(nodeUpdateInfo) === 'failing'
+                        ? 'text-amber-400/80 border-amber-500/40'
+                        : 'text-slate-500 border-slate-700'}`}
+                  title={
+                    selfUpdaterState(nodeUpdateInfo) === 'on'
+                      ? 'The node installs its own updates on a six-hourly timer, so its version can change without anyone touching the dashboard. Disable with MYST_UPDATER_ENABLED=false in /etc/default/myst-updater.'
+                      : selfUpdaterState(nodeUpdateInfo) === 'failing'
+                        ? 'The timer runs but myst-updater exits with an error every cycle, so no update will ever be installed. It only accepts packages from the Mysterium PPA: check that the PPA is present for this distribution, and note that a .deb installed by hand outranks it. Run: journalctl -u myst-updater.service -n 20'
+                        : selfUpdaterState(nodeUpdateInfo) === 'absent'
+                          ? 'This node has no myst-updater.timer — it was installed before node 1.38 shipped one, or the timer is disabled. You decide when it changes version.'
+                          : 'The node will not update itself — you decide when it changes version.'}
                 >
-                  node self-updater: {nodeUpdateInfo.self_updating ? 'on' : 'off'}
+                  node self-updater: {selfUpdaterState(nodeUpdateInfo) === 'failing'
+                    ? 'on, but failing every run'
+                    : selfUpdaterState(nodeUpdateInfo) === 'absent'
+                      ? 'not installed'
+                      : selfUpdaterState(nodeUpdateInfo)}
                 </span>
               </div>
             )}

@@ -220,34 +220,94 @@ def log_result(msg):
     logger.log(logging.INFO if logger.isEnabledFor(logging.INFO) else logging.WARNING, msg)
 
 
-def _node_self_updating():
-    """Whether the node has its own update timer running, and whether it will act.
+def _node_self_updater_state():
+    """What the node's own update timer is doing — and whether it is getting anywhere.
 
-    v1.4.6: node 1.39.x installs `myst-updater.timer` — every six hours with up to
-    six hours of jitter — so the node now updates itself. Two separate switches
-    decide whether anything happens: the systemd timer, and MYST_UPDATER_ENABLED in
-    /etc/default/myst-updater. A timer that is active while the flag is false does
-    nothing at all, so reporting only the timer would be misleading.
+    v1.4.6 read `systemctl is-active myst-updater.timer` plus MYST_UPDATER_ENABLED
+    and reported a boolean. That boolean was true on two of Ian's nodes while the
+    service failed on every single run, so the dashboard promised an update that
+    could never arrive.
+
+    The timer being active says nothing about the service succeeding. `myst-updater`
+    only accepts a candidate that comes from the Mysterium PPA (origin
+    LP-PPA-mysteriumnetwork-node, hosts ppa.launchpadcontent.net or
+    ppa.mysterium.network — see updater/deb/parse.go in the node source). Two ways
+    that fails in the field, both observed on 15 August 2026:
+      - no PPA source at all -> "authenticated APT metadata for origin ... was not
+        found", exit 1. Debian trixie has no suite in that PPA.
+      - a .deb installed by hand that outranks the PPA version -> APT picks the local
+        package as candidate and the updater answers "candidate X is not supplied by
+        the Mysterium node PPA", exit 1.
+    Neither is a toolkit fault and neither is fixable from here, but both must be
+    visible: a unit that fails every six hours is exactly the kind of silent failure
+    this project keeps finding months late.
+
+    `systemctl show` on the service carries the outcome of the last run and needs no
+    root and no journal access. Returns a dict:
+      state      'on' | 'failing' | 'off' | 'absent'
+      last_run   ISO-ish timestamp of the last run, or ''
+      exit_code  exit status of the last run, or None
     """
-    active = False
+    state = {'state': 'absent', 'last_run': '', 'exit_code': None}
+
     try:
         rc = subprocess.run(['systemctl', 'is-active', 'myst-updater.timer'],
                             capture_output=True, text=True, timeout=5)
-        active = rc.stdout.strip() == 'active'
+        if rc.stdout.strip() != 'active':
+            return state
     except Exception:
-        return False
-    if not active:
-        return False
+        return state
+
+    enabled = True
     try:
         p = Path('/etc/default/myst-updater')
         if p.exists():
             for line in p.read_text().split('\n'):
                 line = line.strip()
                 if line.startswith('MYST_UPDATER_ENABLED='):
-                    return line.split('=', 1)[1].strip().strip('"\'').lower() == 'true'
+                    enabled = line.split('=', 1)[1].strip().strip('"\'').lower() == 'true'
+                    break
     except Exception:
         pass
-    return True
+    if not enabled:
+        state['state'] = 'off'
+        return state
+
+    # Timer is running and the flag is on, so the only remaining question is whether
+    # the last run achieved anything.
+    state['state'] = 'on'
+    try:
+        rc = subprocess.run(
+            ['systemctl', 'show', 'myst-updater.service',
+             '-p', 'Result', '-p', 'ExecMainStatus', '-p', 'ExecMainExitTimestamp'],
+            capture_output=True, text=True, timeout=5)
+        props = {}
+        for line in rc.stdout.split('\n'):
+            if '=' in line:
+                key, value = line.split('=', 1)
+                props[key.strip()] = value.strip()
+        state['last_run'] = props.get('ExecMainExitTimestamp', '')
+        raw_status = props.get('ExecMainStatus', '')
+        if raw_status.isdigit():
+            state['exit_code'] = int(raw_status)
+        # No run recorded yet is not a failure — a fresh install has simply not
+        # reached its first cycle.
+        if state['last_run']:
+            result = props.get('Result', '')
+            if result not in ('', 'success') or (state['exit_code'] or 0) != 0:
+                state['state'] = 'failing'
+    except Exception:
+        pass
+    return state
+
+
+def _node_self_updating():
+    """Backwards-compatible boolean: the node will update itself unattended.
+
+    A fleet master on v1.4.7 can be proxying a node still on v1.4.6, so the boolean
+    stays in the payload alongside the richer state.
+    """
+    return _node_self_updater_state()['state'] == 'on'
 
 
 def local_provider_id():
@@ -7101,7 +7161,14 @@ def check_node_update():
 
     now = time.time()
     if _cache is not None and now - _cache_time < 3600:
-        return jsonify(_cache), 200
+        # The GitHub answer is worth caching for an hour; the local updater state is
+        # not. Someone who has just repaired the unit should not have to wait out the
+        # cache to see it, and two systemctl calls are cheap.
+        fresh = dict(_cache)
+        updater_state = _node_self_updater_state()
+        fresh['self_updater'] = updater_state
+        fresh['self_updating'] = updater_state['state'] == 'on'
+        return jsonify(fresh), 200
 
     latest = None
     try:
@@ -7179,12 +7246,15 @@ def check_node_update():
         assets_ready is False
     )
 
+    updater_state = _node_self_updater_state()
     result = {
         'current':          current_n or 'unknown',
         'latest':           latest_n,
         'update_available': update_available,
         'pending_release':  pending_release,
-        'self_updating':    _node_self_updating(),
+        # Kept for a fleet master proxying a node still on v1.4.6.
+        'self_updating':    updater_state['state'] == 'on',
+        'self_updater':     updater_state,
     }
     if not latest_n:
         result['error'] = 'Could not fetch latest version from GitHub'
