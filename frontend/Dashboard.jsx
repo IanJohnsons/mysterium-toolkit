@@ -6782,13 +6782,16 @@ const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, 
                       : nodeUpdate && nodeUpdate.done === false
                         ? 'text-red-300 border-red-500/40'
                         : 'text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/10'}`}
-                  title={'Downloads myst_linux_<arch>.deb from the Mysterium GitHub release, checks its SHA256 against the checksum GitHub publishes, installs it with dpkg and restarts the node. No APT repository is involved, so the distribution does not have to be one the node project recognises — Parrot and Kali work here even though install.sh rejects them. Afterwards this package outranks the PPA, so myst-updater will keep failing until you set MYST_UPDATER_ENABLED=false.'}
+                  title={'Downloads myst_linux_<arch>.deb from the Mysterium GitHub release, checks its SHA256 against the checksum GitHub publishes, installs it with dpkg and restarts the node. No APT repository is involved, so the distribution does not have to be one the node project recognises — Parrot and Kali work here even though install.sh rejects them. Note that restarting settles the unsettled balance regardless of your threshold: handleNodeStart() in the node calls ForceSettleInactiveHermeses() on every start, which bypasses the payments.zero-stake-unsettled-amount check entirely. The Hermes fee is proportional either way, so an early settlement costs you only the transaction fee — around 0.03 MYST. Afterwards this package outranks the PPA, so myst-updater will keep failing until you set MYST_UPDATER_ENABLED=false.'}
                 >
                   {nodeUpdate === 'running'
                     ? 'installing ' + nodeUpdateInfo.latest + ' on ' + (nodeLabel || 'this node') + '…'
                     : nodeUpdate === 'confirm'
                       ? 'confirm — restarts ' + (nodeLabel || 'this node') +
-                        (clients ? ', drops ' + clients + ' session' + (clients === 1 ? '' : 's') : '')
+                        (clients ? ', drops ' + clients + ' session' + (clients === 1 ? '' : 's') : '') +
+                        (Number(earnings?.unsettled) > 0
+                          ? ', settles ' + Number(earnings.unsettled).toFixed(4) + ' MYST'
+                          : '')
                       : nodeUpdate && nodeUpdate.done !== undefined
                         ? nodeUpdate.text
                         : 'install ' + nodeUpdateInfo.latest + ' from GitHub'}
