@@ -1795,6 +1795,7 @@ Defaults:$_REAL_USER !use_pty
 #   chmod/mkswap/swapon/rm — configure and activate swap
 #   iptables/ip6tables/nft — read firewall rules
 $_REAL_USER ALL=(ALL) NOPASSWD: \
+  ${TOOLKIT_DIR}/bin/node_update.sh, \
   /sbin/sysctl, \
   /usr/sbin/ethtool, \
   /usr/sbin/conntrack, \

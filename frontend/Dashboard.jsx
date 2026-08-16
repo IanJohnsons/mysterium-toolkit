@@ -1288,11 +1288,38 @@ const MysteriumDashboard = () => {
     fetch('/myst-price').then(r => r.ok ? r.json() : null).then(d => {
       if (d?.usd) setFleetMystPrice(d);
     }).catch(() => {});
-    // Check for available Mysterium node update (cached 1h on backend)
-    fetch('/api/node-update-check').then(r => r.ok ? r.json() : null).then(d => {
-      if (d) setNodeUpdateInfo(d);
-    }).catch(() => {});
+    // Check for available Mysterium node update — see the node-bound effect below.
   }, []);
+
+  // v1.4.8: the node version block belongs to the node being viewed, so its data
+  // has to come from that node.
+  //
+  // Until now this was a bare `fetch('/api/node-update-check')` on mount with an
+  // empty dependency array: always the local backend, never re-fetched. Viewing a
+  // remote node from the fleet master therefore showed the MASTER's updater state
+  // and APT candidate underneath the remote node's name — the same wrong
+  // attribution that cost two days in v1.4.5, and it matters more now that this
+  // block carries three separate claims about the machine. Someone running a
+  // hundred nodes on a mix of distributions would have been reading one machine's
+  // package state for all of them.
+  //
+  // Cleared first so a failed fetch cannot leave the previous node's answer on
+  // screen, which is the same reason nodeKey remounts the cards.
+  //
+  // Waits for isConnected for the same reason the auto-update fetch does: the
+  // proxy route requires auth and authHeaderRef is empty until the first
+  // successful /metrics call. Fetching earlier returns 401 and hides the block
+  // with no visible error.
+  useEffect(() => {
+    if (!isConnected) return;
+    let cancelled = false;
+    setNodeUpdateInfo(null);
+    fetch(`${getNodeAwareUrl()}/api/node-update-check`, { headers: authHeaderRef.current })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d && !cancelled) setNodeUpdateInfo(d); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [selectedNodeId, isConnected]);
 
   // Auto-update timer state. Deliberately not fetched on mount: /api/autoupdate
   // requires auth, and authHeaderRef is still empty until the first successful
@@ -6573,6 +6600,10 @@ const NodeRestartButton = ({ backendUrl, authHeaders }) => {
 const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, backendUrl, authHeaders, fleetNode, nodeUpdateInfo }) => {
   const [restartStatus, setRestartStatus] = useState(null);
   const [showConfig, setShowConfig] = useState(false);
+  // v1.4.8: null → idle, 'confirm' → armed, 'running' → installing,
+  // {done, text} → finished. Declared with the other hooks so it can never end up
+  // after an early return.
+  const [nodeUpdate, setNodeUpdate] = useState(null);
   const status = nodeStatus?.status || 'offline';
   const uptime = nodeStatus?.uptime || '0s';
   const nodesOnline = nodeStatus?.nodes_online || 0;
@@ -6695,6 +6726,50 @@ const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, 
                       title="What `apt-cache policy myst` reports on this machine. The node's own updater installs only what APT offers from the Mysterium PPA, so this is the version it is working from — not the one tagged on GitHub.">
                   {aptExplanation(nodeUpdateInfo)}
                 </span>
+              </div>
+            )}
+            {/* v1.4.8: the deliberate override. Only offered when there is something
+                to install, and only for the machine this dashboard runs on —
+                passwordless sudo does not cross the fleet, so a remote install
+                would die halfway through. Two clicks, because it restarts the node
+                and drops whatever sessions are open. */}
+            {nodeUpdateInfo?.update_available && nodeUpdateInfo?.latest && (
+              <div className="mt-1">
+                <button
+                  onClick={() => {
+                    if (fleetNode) return;
+                    if (nodeUpdate !== 'confirm') { setNodeUpdate('confirm'); return; }
+                    setNodeUpdate('running');
+                    fetch(`${backendUrl}/api/node-update`, {
+                      method: 'POST',
+                      headers: { ...(authHeaders || {}), 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ version: nodeUpdateInfo.latest }),
+                    })
+                      .then(r => r.json().then(d => ({ ok: r.ok, d })))
+                      .then(({ d }) => setNodeUpdate(d?.ok
+                        ? { done: true, text: 'installed ' + (d.installed || nodeUpdateInfo.latest) }
+                        : { done: false, text: (d?.error || 'update failed') }))
+                      .catch(e => setNodeUpdate({ done: false, text: String(e) }));
+                  }}
+                  disabled={!!fleetNode || nodeUpdate === 'running' || (nodeUpdate && nodeUpdate.done !== undefined)}
+                  className={`text-[10px] rounded px-1.5 py-0.5 border transition ${
+                    fleetNode
+                      ? 'text-slate-600 border-slate-700 cursor-not-allowed'
+                      : nodeUpdate === 'confirm'
+                        ? 'text-amber-300 border-amber-500/50 bg-amber-500/10'
+                        : 'text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/10'}`}
+                  title={fleetNode
+                    ? 'Run this on the node itself — passwordless sudo does not work across the fleet'
+                    : 'Downloads the .deb from the Mysterium GitHub release, checks its SHA256 against the checksum GitHub publishes, installs it and restarts the node. Bypasses APT, which is the point: the PPA cannot reach this version. Afterwards the node package outranks the PPA, so myst-updater will keep failing until you set MYST_UPDATER_ENABLED=false.'}
+                >
+                  {nodeUpdate === 'running'
+                    ? 'installing ' + nodeUpdateInfo.latest + '…'
+                    : nodeUpdate === 'confirm'
+                      ? 'confirm — restarts the node' + (clients ? ', drops ' + clients + ' session' + (clients === 1 ? '' : 's') : '')
+                      : nodeUpdate && nodeUpdate.done !== undefined
+                        ? nodeUpdate.text
+                        : 'install ' + nodeUpdateInfo.latest + ' from GitHub'}
+                </button>
               </div>
             )}
             {nodeUpdateInfo?.pending_release && (

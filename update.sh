@@ -309,6 +309,14 @@ else
     echo -e "  ${YELLOW}⚠ npm not found — frontend not rebuilt${NC}"
 fi
 
+# ── Executable bits ───────────────────────────────────────────────────────
+# A file copied by hand out of a browser download loses its executable bit, and
+# git does not restore it on a file that is already tracked. bin/node_update.sh
+# is invoked through sudo, so a missing bit shows up as a permission error with
+# no obvious cause.
+chmod +x "$TOOLKIT_DIR"/bin/*.sh 2>/dev/null || true
+chmod +x "$TOOLKIT_DIR"/*.sh 2>/dev/null || true
+
 # ── Update systemd service path and sudoers ───────────────────────────────
 _SERVICE_FILE="/etc/systemd/system/mysterium-toolkit.service"
 if [ -f "$_SERVICE_FILE" ]; then
@@ -387,6 +395,7 @@ Defaults:${_REAL_USER} !use_pty
 #
 ${_REAL_USER} ALL=(ALL) NOPASSWD: \
   ${TOOLKIT_DIR}/update.sh, \
+  ${TOOLKIT_DIR}/bin/node_update.sh, \
   /sbin/sysctl, /usr/sbin/sysctl, \
   /usr/sbin/ethtool, \
   /usr/sbin/conntrack, \

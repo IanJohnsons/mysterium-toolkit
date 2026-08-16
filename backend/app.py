@@ -7388,6 +7388,83 @@ def check_node_update():
     return jsonify(result), 200
 
 
+@app.route('/api/node-update', methods=['POST'])
+@require_auth
+def node_update():
+    """Install a Mysterium node release from GitHub, bypassing APT.
+
+    v1.4.8. The node's own updater only accepts packages from the Mysterium PPA.
+    That PPA has no suite for Debian, trails the GitHub tags, and will not touch a
+    node whose package was installed from a .deb by hand — which leaves those nodes
+    with a timer that fails every six hours and no way forward. This is the
+    deliberate override.
+
+    Local only, and deliberately so. Passwordless sudo does not cross machines, so
+    running this for a remote node through the fleet proxy would fail halfway
+    through an install. The UI disables the button rather than letting that happen.
+
+    The request carries a version number and nothing else — no URL, no file name.
+    bin/node_update.sh derives the rest and verifies the SHA256 that GitHub
+    publishes per asset before it hands anything to dpkg.
+    """
+    if not is_local_request():
+        return jsonify({
+            'ok': False,
+            'error': 'Node updates can only be run on the machine itself — '
+                     'passwordless sudo does not work across the fleet'
+        }), 403
+
+    payload = request.get_json(silent=True) or {}
+    version = str(payload.get('version', '')).strip().lstrip('v')
+    import re as _re
+    if not _re.match(r'^\d+\.\d+\.\d+$', version):
+        return jsonify({'ok': False, 'error': 'Invalid version'}), 400
+
+    script = Path(__file__).parent.parent / 'bin' / 'node_update.sh'
+    if not script.exists():
+        return jsonify({'ok': False, 'error': 'bin/node_update.sh is missing'}), 500
+
+    try:
+        # Invoked directly, not via `sudo bash <script>`: the sudoers entry names
+        # this script by path, and going through bash would match the far broader
+        # /bin/bash rule instead. update.sh sets the executable bit, which a file
+        # copied by hand out of a download would otherwise be missing.
+        proc = subprocess.run(
+            ['sudo', '-n', str(script), version],
+            capture_output=True, text=True, timeout=600)
+    except subprocess.TimeoutExpired:
+        logger.error("Node update to %s timed out after 10 minutes", version)
+        return jsonify({'ok': False, 'error': 'Update timed out after 10 minutes'}), 504
+    except Exception as e:
+        logger.error("Node update to %s could not start: %s", version, e)
+        return jsonify({'ok': False, 'error': f'Could not start the update: {e}'}), 500
+
+    # The script reports one JSON object. If it did not, something went wrong
+    # before it could — a sudo refusal being the likeliest — and that must be said
+    # out loud rather than reported as a generic failure.
+    try:
+        result = json.loads((proc.stdout or '').strip().split('\n')[-1])
+    except Exception:
+        detail = (proc.stderr or proc.stdout or '').strip()[-300:]
+        if 'password is required' in detail or 'sudo:' in detail:
+            detail = ('sudo refused. Re-run ./update.sh on this machine so the '
+                      'sudoers entry for node_update.sh is written.')
+        logger.error("Node update to %s produced no result: %s", version, detail)
+        return jsonify({'ok': False, 'error': detail or 'The update produced no result'}), 500
+
+    if result.get('ok'):
+        logger.info("Node updated to %s (%s, verified: %s)",
+                    result.get('installed'), result.get('arch'), result.get('verified'))
+        # The installed version has changed, so the cached answer is stale.
+        check_node_update._cache_time = 0
+        _apt_myst_state_cached._time = 0
+    else:
+        logger.error("Node update to %s failed at stage '%s': %s",
+                     version, result.get('stage'), result.get('error'))
+
+    return jsonify(result), 200 if result.get('ok') else 500
+
+
 @app.route('/system/update', methods=['POST'])
 @require_auth
 def system_update():
@@ -9109,6 +9186,12 @@ def fleet_node_proxy(node_id, endpoint):
         'data/quality/history', 'data/system/history',
         'analytics/service-split', 'analytics/earnings-efficiency',
         'system/update', 'system/update/status', 'api/update-check',
+        # v1.4.8: the node version block is bound to the node being viewed, so its
+        # data has to come from that node. Note that 'api/node-update' — the
+        # install itself — is deliberately NOT here: passwordless sudo does not
+        # cross machines, so it would fail halfway through an install on the
+        # remote side.
+        'api/node-update-check',
         'services/wireguard-mode',
         'sessions/live',
         'sessions/by-wallet',

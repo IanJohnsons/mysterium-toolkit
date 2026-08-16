@@ -2,6 +2,14 @@
 All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.4.8
+
+An override for nodes the Mysterium PPA cannot reach, and a version block that describes the node you are actually looking at.
+
+- feat (install a node release from GitHub, bypassing APT): `myst-updater` only accepts packages from the Mysterium PPA. That PPA has no suite for Debian, trails the GitHub tags by two minor versions, and refuses to touch a node whose package was installed from a `.deb` by hand — leaving those nodes with a timer that fails every six hours and no way forward. `bin/node_update.sh` is the deliberate override: it takes a version number and nothing else, derives the architecture itself, and rejects anything that is not three numbers separated by dots. It downloads only from the `mysteriumnetwork/node` release path, verifies the SHA256 that GitHub publishes per asset before handing anything to dpkg, falls back to `apt-get install -f` when dependencies are missing, and reports failure if the node does not come back up. A release without a published digest is installed on the strength of HTTPS alone and says so rather than claiming to be verified. The button sits beside the version badge, asks for a second click that names how many sessions the restart will drop, and is disabled when you are viewing a remote node — passwordless sudo does not cross machines, so a fleet install would die halfway through
+- fix (the version block described the wrong machine): `nodeUpdateInfo` was fetched with a bare `fetch('/api/node-update-check')` on mount with an empty dependency array — always the local backend, never re-fetched on a node switch. Viewing a remote node from the fleet master therefore showed the master's updater state and APT candidate underneath the remote node's name. Harmless-looking on a fleet of three where every machine runs the same distribution; on a mixed fleet it means reading one machine's package state for all of them. The fetch now goes through `getNodeAwareUrl()`, re-runs when the selected node changes, clears the previous answer first so a failed fetch cannot leave stale data on screen, and waits for `isConnected` because the proxy route requires auth
+- chore: `update.sh` restores the executable bit on `bin/*.sh` and the root wrappers. Files copied by hand out of a browser download lose it, and git does not restore it on a file it already tracks — which would surface as a permission error with no obvious cause on a script invoked through sudo
+
 ## v1.4.7
 
 The node's own updater was failing on every run while the dashboard reported it as healthy.
