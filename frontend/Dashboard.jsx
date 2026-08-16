@@ -221,23 +221,69 @@ const selfUpdaterState = (info) => {
   return null;
 };
 
-// v1.4.7: one line explaining what APT would install, shown only when that differs
-// from what the operator sees on GitHub. Returns null on a healthy node, on a
-// machine without apt, and on a node still running v1.4.6 which sends no apt field.
-const aptExplanation = (info) => {
-  const apt = info?.apt;
-  if (!apt || !apt.reason || apt.reason === 'ok') return null;
+// v1.4.8: one line about the node's own updater, weighted by whether anything is
+// actually at stake.
+//
+// This started as three separate lines — updater state, APT candidate, and the
+// version badge — which is fine while something is wrong and permanent wallpaper
+// afterwards. On a node kept current through the GitHub button, myst-updater fails
+// every six hours forever, by design: the hand-installed .deb outranks the PPA and
+// always will. Shouting about that on a node that is already on the latest release
+// trains the operator to ignore the line, and then it is worth nothing on the day
+// it matters.
+//
+// So: amber only when the node is actually missing a release it cannot reach on its
+// own. Otherwise the same fact, stated once, in grey.
+//
+// Returns null when there is nothing to say, or when a fleet master is proxying a
+// node on v1.4.6 that sends no updater state at all.
+// tone: 'ok' | 'warn' | 'muted'
+const updaterLine = (info) => {
+  const state = selfUpdaterState(info);
+  if (!state) return null;
+
+  const apt = info?.apt || {};
+  const behind = Boolean(info?.update_available);
+
+  // Why it cannot install anything, in the fewest words that stay true.
+  let why = '';
   if (apt.reason === 'no_ppa_source') {
-    return 'APT: no Mysterium PPA on this system — the node updater has no source to install from';
+    why = 'no Mysterium PPA on this system';
+  } else if (apt.reason === 'local_package_outranks_ppa') {
+    why = 'PPA has ' + (apt.ppa_version || 'an older build') +
+          ', you run ' + (apt.installed || 'a newer build') + ' from a .deb';
+  } else if (apt.reason === 'ppa_update_pending') {
+    why = (apt.candidate || 'a newer build') + ' waiting in the PPA';
   }
-  if (apt.reason === 'local_package_outranks_ppa') {
-    return 'APT: PPA offers ' + (apt.ppa_version || 'an older build') + ', installed ' +
-           (apt.installed || 'package') + ' came from a .deb — the node updater will not touch it';
+
+  if (state === 'failing') {
+    return behind
+      ? { tone: 'warn',
+          text: 'node self-updater: failing every run' + (why ? ' — ' + why : '') }
+      : { tone: 'muted',
+          text: 'node self-updater: inactive' + (why ? ' — ' + why : '') };
   }
-  if (apt.reason === 'ppa_update_pending') {
-    return 'APT: ' + (apt.candidate || 'a newer build') + ' available from the PPA';
+  if (state === 'on') {
+    return { tone: 'ok', text: 'node self-updater: on' + (why ? ' — ' + why : '') };
   }
-  return null;
+  if (state === 'absent') {
+    return { tone: 'muted', text: 'node self-updater: not installed' };
+  }
+  return { tone: 'muted', text: 'node self-updater: off' + (why ? ' — ' + why : '') };
+};
+
+const updaterTitle = (info) => {
+  const state = selfUpdaterState(info);
+  if (state === 'on') {
+    return 'The node installs its own updates on a six-hourly timer, so its version can change without anyone touching the dashboard. Disable with MYST_UPDATER_ENABLED=false in /etc/default/myst-updater.';
+  }
+  if (state === 'failing') {
+    return 'myst-updater.timer runs but the service exits with an error every cycle, so it will never install anything. It only accepts packages from the Mysterium PPA — that PPA has no suite for some distributions, and a .deb installed by hand always outranks it. Harmless while this node is already on the latest release; it only costs you something on the day it is not. Check with: journalctl -u myst-updater.service -n 20';
+  }
+  if (state === 'absent') {
+    return 'This node has no myst-updater.timer — it was installed before node 1.38 shipped one, or the timer is disabled. You decide when it changes version.';
+  }
+  return 'The node will not update itself — you decide when it changes version.';
 };
 
 // NAT labels lived inside the node dashboard only, so the fleet cards printed the
@@ -6701,49 +6747,23 @@ const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, 
                 offer to change it here: the config file belongs to the node package,
                 writing it needs a sudo right on /etc/default that the toolkit has no
                 other reason to hold, and the format is theirs to change. Turning it
-                off is one sed line, documented in the reference. */}
-            {selfUpdaterState(nodeUpdateInfo) && (
+                off is one sed line, documented in the reference.
+                v1.4.8: state and APT candidate folded into one line — see
+                updaterLine(). Amber only when a release is actually out of reach. */}
+            {updaterLine(nodeUpdateInfo) && (
               <div className="mt-0.5">
                 <span className={`text-[10px] rounded px-1.5 py-0.5 border ${
-                    selfUpdaterState(nodeUpdateInfo) === 'on'
+                    updaterLine(nodeUpdateInfo).tone === 'ok'
                       ? 'text-emerald-400/70 border-emerald-500/30'
-                      : selfUpdaterState(nodeUpdateInfo) === 'failing'
+                      : updaterLine(nodeUpdateInfo).tone === 'warn'
                         ? 'text-amber-400/80 border-amber-500/40'
                         : 'text-slate-500 border-slate-700'}`}
-                  title={
-                    selfUpdaterState(nodeUpdateInfo) === 'on'
-                      ? 'The node installs its own updates on a six-hourly timer, so its version can change without anyone touching the dashboard. Disable with MYST_UPDATER_ENABLED=false in /etc/default/myst-updater.'
-                      : selfUpdaterState(nodeUpdateInfo) === 'failing'
-                        ? 'The timer runs but myst-updater exits with an error every cycle, so no update will ever be installed. It only accepts packages from the Mysterium PPA: check that the PPA is present for this distribution, and note that a .deb installed by hand outranks it. Run: journalctl -u myst-updater.service -n 20'
-                        : selfUpdaterState(nodeUpdateInfo) === 'absent'
-                          ? 'This node has no myst-updater.timer — it was installed before node 1.38 shipped one, or the timer is disabled. You decide when it changes version.'
-                          : 'The node will not update itself — you decide when it changes version.'}
+                  title={updaterTitle(nodeUpdateInfo)}
                 >
-                  node self-updater: {selfUpdaterState(nodeUpdateInfo) === 'failing'
-                    ? 'on, but failing every run'
-                    : selfUpdaterState(nodeUpdateInfo) === 'absent'
-                      ? 'not installed'
-                      : selfUpdaterState(nodeUpdateInfo)}
+                  {updaterLine(nodeUpdateInfo).text}
                 </span>
               </div>
             )}
-            {/* v1.4.7: the self-updater state says something is wrong; this line says
-                what APT itself would do, which is where the answer actually is.
-                Only shown when the two disagree — on a node whose package tracks the
-                PPA normally there is nothing to explain. */}
-            {aptExplanation(nodeUpdateInfo) && (
-              <div className="mt-0.5">
-                <span className="text-[10px] text-slate-500 border border-slate-700 rounded px-1.5 py-0.5"
-                      title="What `apt-cache policy myst` reports on this machine. The node's own updater installs only what APT offers from the Mysterium PPA, so this is the version it is working from — not the one tagged on GitHub.">
-                  {aptExplanation(nodeUpdateInfo)}
-                </span>
-              </div>
-            )}
-            {/* v1.4.8: the deliberate override. Only offered when there is something
-                to install, and only for the machine this dashboard runs on —
-                passwordless sudo does not cross the fleet, so a remote install
-                would die halfway through. Two clicks, because it restarts the node
-                and drops whatever sessions are open. */}
             {/* v1.4.8: the deliberate override, on every node tab. backendUrl is
                 already node-aware, so this lands on the node being viewed: locally
                 when that is this machine, through the proxy when it is not. The
