@@ -7399,21 +7399,25 @@ def node_update():
     with a timer that fails every six hours and no way forward. This is the
     deliberate override.
 
-    Local only, and deliberately so. Passwordless sudo does not cross machines, so
-    running this for a remote node through the fleet proxy would fail halfway
-    through an install. The UI disables the button rather than letting that happen.
+    Works for every node in the fleet, not only this machine. The earlier
+    is_local_request() gate here came from a wrong picture of how the fleet works:
+    it assumed sudo would have to travel between machines. It does not. The master
+    proxies the request to the remote toolkit, and that toolkit runs sudo locally,
+    against the NOPASSWD entry its own setup.sh wrote. /system/update — the toolkit
+    self-update, which is no less invasive — has always worked exactly this way,
+    behind @require_auth and nothing else.
+
+    Distribution-agnostic on purpose. The official install.sh reads ID from
+    /etc/os-release and only falls back to ID_LIKE when ID is empty, so Parrot
+    (ID=parrot), Kali, Mint and Devuan all come out unsupported even though they
+    are Debian underneath — that installer has to know the name because it adds an
+    APT suite. This route adds no repository and needs no such list: a .deb and
+    dpkg are enough, whatever the distribution calls itself.
 
     The request carries a version number and nothing else — no URL, no file name.
     bin/node_update.sh derives the rest and verifies the SHA256 that GitHub
     publishes per asset before it hands anything to dpkg.
     """
-    if not is_local_request():
-        return jsonify({
-            'ok': False,
-            'error': 'Node updates can only be run on the machine itself — '
-                     'passwordless sudo does not work across the fleet'
-        }), 403
-
     payload = request.get_json(silent=True) or {}
     version = str(payload.get('version', '')).strip().lstrip('v')
     import re as _re
@@ -9187,11 +9191,10 @@ def fleet_node_proxy(node_id, endpoint):
         'analytics/service-split', 'analytics/earnings-efficiency',
         'system/update', 'system/update/status', 'api/update-check',
         # v1.4.8: the node version block is bound to the node being viewed, so its
-        # data has to come from that node. Note that 'api/node-update' — the
-        # install itself — is deliberately NOT here: passwordless sudo does not
-        # cross machines, so it would fail halfway through an install on the
-        # remote side.
-        'api/node-update-check',
+        # data has to come from that node — and so does the install itself. The
+        # remote toolkit runs sudo on its own machine, exactly as /system/update
+        # does; nothing has to cross the fleet except the request.
+        'api/node-update-check', 'api/node-update',
         'services/wireguard-mode',
         'sessions/live',
         'sessions/by-wallet',

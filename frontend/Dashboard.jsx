@@ -2735,7 +2735,7 @@ const MysteriumDashboard = () => {
           )}
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-            <StatusCard nodeStatus={metrics.nodeStatus} resources={metrics.resources} earnings={metrics.earnings} clients={metrics.clients} activeSessions={metrics.sessions?.active_unique_consumers ?? metrics.sessions?.active ?? 0} backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} fleetNode={metrics._fleet_node} nodeUpdateInfo={nodeUpdateInfo} />
+            <StatusCard nodeStatus={metrics.nodeStatus} resources={metrics.resources} earnings={metrics.earnings} clients={metrics.clients} activeSessions={metrics.sessions?.active_unique_consumers ?? metrics.sessions?.active ?? 0} backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} fleetNode={metrics._fleet_node} nodeLabel={metrics._node_label} nodeUpdateInfo={nodeUpdateInfo} />
             <EarningsCard earnings={metrics.earnings} backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
           </div>
 
@@ -6597,7 +6597,7 @@ const NodeRestartButton = ({ backendUrl, authHeaders }) => {
   );
 };
 
-const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, backendUrl, authHeaders, fleetNode, nodeUpdateInfo }) => {
+const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, backendUrl, authHeaders, fleetNode, nodeLabel, nodeUpdateInfo }) => {
   const [restartStatus, setRestartStatus] = useState(null);
   const [showConfig, setShowConfig] = useState(false);
   // v1.4.8: null → idle, 'confirm' → armed, 'running' → installing,
@@ -6733,11 +6733,18 @@ const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, 
                 passwordless sudo does not cross the fleet, so a remote install
                 would die halfway through. Two clicks, because it restarts the node
                 and drops whatever sessions are open. */}
+            {/* v1.4.8: the deliberate override, on every node tab. backendUrl is
+                already node-aware, so this lands on the node being viewed: locally
+                when that is this machine, through the proxy when it is not. The
+                remote toolkit then runs sudo on its own machine, the same way
+                /system/update has always worked. Two clicks, because it restarts
+                the node and drops whatever sessions are open — and the second click
+                names the node, so a mis-click on the wrong tab is visible before it
+                happens rather than after. */}
             {nodeUpdateInfo?.update_available && nodeUpdateInfo?.latest && (
               <div className="mt-1">
                 <button
                   onClick={() => {
-                    if (fleetNode) return;
                     if (nodeUpdate !== 'confirm') { setNodeUpdate('confirm'); return; }
                     setNodeUpdate('running');
                     fetch(`${backendUrl}/api/node-update`, {
@@ -6747,25 +6754,24 @@ const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, 
                     })
                       .then(r => r.json().then(d => ({ ok: r.ok, d })))
                       .then(({ d }) => setNodeUpdate(d?.ok
-                        ? { done: true, text: 'installed ' + (d.installed || nodeUpdateInfo.latest) }
+                        ? { done: true, text: 'installed ' + (d.installed || nodeUpdateInfo.latest) + ' — reload to refresh' }
                         : { done: false, text: (d?.error || 'update failed') }))
                       .catch(e => setNodeUpdate({ done: false, text: String(e) }));
                   }}
-                  disabled={!!fleetNode || nodeUpdate === 'running' || (nodeUpdate && nodeUpdate.done !== undefined)}
-                  className={`text-[10px] rounded px-1.5 py-0.5 border transition ${
-                    fleetNode
-                      ? 'text-slate-600 border-slate-700 cursor-not-allowed'
-                      : nodeUpdate === 'confirm'
-                        ? 'text-amber-300 border-amber-500/50 bg-amber-500/10'
+                  disabled={nodeUpdate === 'running' || (nodeUpdate && nodeUpdate.done !== undefined)}
+                  className={`text-[10px] rounded px-1.5 py-0.5 border transition text-left ${
+                    nodeUpdate === 'confirm'
+                      ? 'text-amber-300 border-amber-500/50 bg-amber-500/10'
+                      : nodeUpdate && nodeUpdate.done === false
+                        ? 'text-red-300 border-red-500/40'
                         : 'text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/10'}`}
-                  title={fleetNode
-                    ? 'Run this on the node itself — passwordless sudo does not work across the fleet'
-                    : 'Downloads the .deb from the Mysterium GitHub release, checks its SHA256 against the checksum GitHub publishes, installs it and restarts the node. Bypasses APT, which is the point: the PPA cannot reach this version. Afterwards the node package outranks the PPA, so myst-updater will keep failing until you set MYST_UPDATER_ENABLED=false.'}
+                  title={'Downloads myst_linux_<arch>.deb from the Mysterium GitHub release, checks its SHA256 against the checksum GitHub publishes, installs it with dpkg and restarts the node. No APT repository is involved, so the distribution does not have to be one the node project recognises — Parrot and Kali work here even though install.sh rejects them. Afterwards this package outranks the PPA, so myst-updater will keep failing until you set MYST_UPDATER_ENABLED=false.'}
                 >
                   {nodeUpdate === 'running'
-                    ? 'installing ' + nodeUpdateInfo.latest + '…'
+                    ? 'installing ' + nodeUpdateInfo.latest + ' on ' + (nodeLabel || 'this node') + '…'
                     : nodeUpdate === 'confirm'
-                      ? 'confirm — restarts the node' + (clients ? ', drops ' + clients + ' session' + (clients === 1 ? '' : 's') : '')
+                      ? 'confirm — restarts ' + (nodeLabel || 'this node') +
+                        (clients ? ', drops ' + clients + ' session' + (clients === 1 ? '' : 's') : '')
                       : nodeUpdate && nodeUpdate.done !== undefined
                         ? nodeUpdate.text
                         : 'install ' + nodeUpdateInfo.latest + ' from GitHub'}

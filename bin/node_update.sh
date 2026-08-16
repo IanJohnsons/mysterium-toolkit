@@ -44,9 +44,16 @@ if ! printf '%s' "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
   fail "version must look like 1.39.3"
 fi
 
-for tool in curl dpkg sha256sum; do
-  command -v "$tool" >/dev/null 2>&1 || fail "$tool is not installed"
-done
+# The distribution name is deliberately never checked. The official install.sh
+# reads ID from /etc/os-release and calls anything it does not recognise
+# unsupported — which is why Parrot (ID=parrot), Kali and Mint fall over there
+# despite being Debian underneath. It has to know the name because it adds an APT
+# suite. This script adds no repository, so dpkg is the only thing that matters.
+command -v curl >/dev/null 2>&1 || fail "curl is not installed"
+command -v sha256sum >/dev/null 2>&1 || fail "sha256sum is not installed"
+if ! command -v dpkg >/dev/null 2>&1; then
+  fail "this system has no dpkg, so the .deb cannot be installed here — the release also ships myst_linux_<arch>.tar.gz, which needs a different install path than this script provides"
+fi
 
 # ── Architecture ──────────────────────────────────────────────────────────────
 STAGE="arch"
