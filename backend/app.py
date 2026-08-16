@@ -7283,14 +7283,30 @@ def check_node_update():
 
     now = time.time()
     if _cache is not None and now - _cache_time < 3600:
-        # The GitHub answer is worth caching for an hour; the local updater state is
-        # not. Someone who has just repaired the unit should not have to wait out the
-        # cache to see it, and two systemctl calls are cheap.
+        # Only the GitHub answer is worth caching for an hour. Everything derived
+        # from the node's own state has to be recomputed, or the block describes a
+        # machine as it was up to an hour ago.
+        #
+        # v1.4.8: this used to hand back `current` and `update_available` straight
+        # from the cache, so a node that had just been updated to the latest
+        # release still carried "↑ 1.39.3 available" next to "Version: 1.39.3" —
+        # the update button appeared to have done nothing. The comparison costs
+        # nothing; only the network call is expensive.
         fresh = dict(_cache)
         updater_state = _node_self_updater_state()
         fresh['self_updater'] = updater_state
         fresh['self_updating'] = updater_state['state'] == 'on'
         fresh['apt'] = _apt_myst_state_cached()
+
+        with metrics_lock:
+            live = metrics_cache.get('nodeStatus', {}).get('version', 'unknown')
+        live_n = str(live or '').strip().lstrip('v')
+        latest_c = fresh.get('latest')
+        fresh['current'] = live_n or 'unknown'
+        if latest_c and live_n and live_n != 'unknown':
+            differs = latest_c != live_n
+            fresh['update_available'] = differs and fresh.get('_assets_ready') is not False
+            fresh['pending_release'] = differs and fresh.get('_assets_ready') is False
         return jsonify(fresh), 200
 
     latest = None
@@ -7379,6 +7395,10 @@ def check_node_update():
         'self_updating':    updater_state['state'] == 'on',
         'self_updater':     updater_state,
         'apt':              _apt_myst_state_cached(),
+        # Carried so the cache-hit path above can redo the comparison rather than
+        # replaying an hour-old verdict. Underscored: it is bookkeeping, not part
+        # of the answer the UI reads.
+        '_assets_ready':    assets_ready,
     }
     if not latest_n:
         result['error'] = 'Could not fetch latest version from GitHub'

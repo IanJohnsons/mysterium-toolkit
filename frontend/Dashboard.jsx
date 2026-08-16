@@ -1310,6 +1310,17 @@ const MysteriumDashboard = () => {
   // proxy route requires auth and authHeaderRef is empty until the first
   // successful /metrics call. Fetching earlier returns 401 and hides the block
   // with no visible error.
+  // Pulled out of the effect so the update button can call it too: after a
+  // successful install the version block is stale until something re-reads it,
+  // and telling the operator to reload the page is not an answer.
+  const refreshNodeUpdateInfo = () => {
+    if (!isConnected) return;
+    fetch(`${getNodeAwareUrl()}/api/node-update-check`, { headers: authHeaderRef.current })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setNodeUpdateInfo(d); })
+      .catch(() => {});
+  };
+
   useEffect(() => {
     if (!isConnected) return;
     let cancelled = false;
@@ -2735,7 +2746,7 @@ const MysteriumDashboard = () => {
           )}
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-            <StatusCard nodeStatus={metrics.nodeStatus} resources={metrics.resources} earnings={metrics.earnings} clients={metrics.clients} activeSessions={metrics.sessions?.active_unique_consumers ?? metrics.sessions?.active ?? 0} backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} fleetNode={metrics._fleet_node} nodeLabel={metrics._node_label} nodeUpdateInfo={nodeUpdateInfo} />
+            <StatusCard nodeStatus={metrics.nodeStatus} resources={metrics.resources} earnings={metrics.earnings} clients={metrics.clients} activeSessions={metrics.sessions?.active_unique_consumers ?? metrics.sessions?.active ?? 0} backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} fleetNode={metrics._fleet_node} nodeLabel={metrics._node_label} nodeUpdateInfo={nodeUpdateInfo} onNodeUpdated={refreshNodeUpdateInfo} />
             <EarningsCard earnings={metrics.earnings} backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
           </div>
 
@@ -6597,7 +6608,7 @@ const NodeRestartButton = ({ backendUrl, authHeaders }) => {
   );
 };
 
-const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, backendUrl, authHeaders, fleetNode, nodeLabel, nodeUpdateInfo }) => {
+const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, backendUrl, authHeaders, fleetNode, nodeLabel, nodeUpdateInfo, onNodeUpdated }) => {
   const [restartStatus, setRestartStatus] = useState(null);
   const [showConfig, setShowConfig] = useState(false);
   // v1.4.8: null → idle, 'confirm' → armed, 'running' → installing,
@@ -6753,9 +6764,15 @@ const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, 
                       body: JSON.stringify({ version: nodeUpdateInfo.latest }),
                     })
                       .then(r => r.json().then(d => ({ ok: r.ok, d })))
-                      .then(({ d }) => setNodeUpdate(d?.ok
-                        ? { done: true, text: 'installed ' + (d.installed || nodeUpdateInfo.latest) + ' — reload to refresh' }
-                        : { done: false, text: (d?.error || 'update failed') }))
+                      .then(({ d }) => {
+                        setNodeUpdate(d?.ok
+                          ? { done: true, text: 'installed ' + (d.installed || nodeUpdateInfo.latest) }
+                          : { done: false, text: (d?.error || 'update failed') });
+                        // The node restarts, so give it a moment before asking it
+                        // what version it is now. Without this the block keeps
+                        // offering an update that has already been installed.
+                        if (d?.ok && onNodeUpdated) setTimeout(onNodeUpdated, 6000);
+                      })
                       .catch(e => setNodeUpdate({ done: false, text: String(e) }));
                   }}
                   disabled={nodeUpdate === 'running' || (nodeUpdate && nodeUpdate.done !== undefined)}
