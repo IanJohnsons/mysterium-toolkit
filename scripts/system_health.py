@@ -3208,6 +3208,178 @@ class NicChecksumOffload:
 # UNIFIED API
 # =============================================================================
 
+class NatChainHealth:
+    """Detect a node that is up, in discovery, and earning nothing because its
+    NAT chain is missing.
+
+    The node creates an iptables chain called MYST in the nat table at startup,
+    in nat/service_iptables.go:prepare(). Every session then inserts a jump into
+    it: `-I PREROUTING 1 --source 10.182.x.x --jump MYST`.
+
+    prepare() runs `sudo /usr/sbin/iptables --new MYST --table nat` exactly once,
+    without -w, and bootstrapServiceComponents only logs the failure:
+
+        err := svc.prepare()
+        if err != nil {
+            log.Warn().Err(err).Msg("Failed to prepare iptables setup")
+        }
+
+    One lost race for /run/xtables.lock therefore leaves the node running
+    without the chain for the rest of its uptime. Every session after that dies
+    with "Couldn't load target `MYST'", the tunnel interface is created and
+    stays at exactly zero bytes, and nothing surfaces anywhere: the node reports
+    itself healthy, stays in discovery, and keeps its quality score. A VPS node
+    ran twelve hours in that state on 13 September 2026 — twenty-four tunnels
+    up, not one byte carried, dashboard green throughout.
+
+    The signature is unambiguous: myst* interfaces exist while the MYST chain
+    does not. Nothing else produces that combination.
+
+    Read-only. Recovery is a node restart, which drops live sessions, so this
+    reports and never acts on its own.
+    """
+
+    # The node hardcodes this path in firewall/iptables/iptables.go:33.
+    # Checking a different backend would look in the wrong table and report a
+    # missing chain that is actually there — or worse, the reverse.
+    NODE_IPTABLES = '/usr/sbin/iptables'
+
+    @staticmethod
+    def _tunnel_interfaces():
+        """Names of myst* interfaces, read straight from /proc/net/dev."""
+        names = []
+        try:
+            with open('/proc/net/dev', 'r') as fh:
+                for line in fh:
+                    if ':' not in line:
+                        continue
+                    name = line.split(':', 1)[0].strip()
+                    if name.startswith('myst'):
+                        names.append(name)
+        except Exception:
+            return []
+        return names
+
+    @staticmethod
+    def _tunnel_bytes(names):
+        """Total rx+tx bytes across the given interfaces."""
+        total = 0
+        try:
+            with open('/proc/net/dev', 'r') as fh:
+                for line in fh:
+                    if ':' not in line:
+                        continue
+                    name, rest = line.split(':', 1)
+                    if name.strip() not in names:
+                        continue
+                    parts = rest.split()
+                    if len(parts) >= 9:
+                        total += int(parts[0]) + int(parts[8])
+        except Exception:
+            return -1
+        return total
+
+    @staticmethod
+    def _chain_state():
+        """Return ('present'|'absent'|'unknown', detail).
+
+        Distinguishes "the chain is not there" from "we could not look",
+        because reporting a missing chain when the read failed would send the
+        operator restarting a node for no reason.
+        """
+        binaries = [NatChainHealth.NODE_IPTABLES, 'iptables']
+        last_err = ''
+        for binary in binaries:
+            for cmd in (
+                ['sudo', '-n', binary, '-w', '2', '-t', 'nat', '-L', 'MYST', '-n'],
+                [binary, '-w', '2', '-t', 'nat', '-L', 'MYST', '-n'],
+            ):
+                rc, out, err = _run(cmd, timeout=6)
+                if rc == 0:
+                    return 'present', out
+                blob = f'{out} {err}'.lower()
+                # iptables says this for a chain that does not exist. Anything
+                # else (permission denied, binary missing, lock busy) is a
+                # failed read, not a verdict.
+                if 'no chain/target/match by that name' in blob:
+                    return 'absent', err or out
+                last_err = err or out or f'exit {rc}'
+        return 'unknown', last_err
+
+    @staticmethod
+    def scan():
+        result = {
+            'name': 'nat_chain',
+            'title': 'NAT Chain (MYST)',
+            'status': 'ok',
+            'checks': [],
+            'recommendations': [],
+        }
+
+        tunnels = NatChainHealth._tunnel_interfaces()
+        if not tunnels:
+            result['checks'].append({
+                'name': 'Tunnels',
+                'status': 'ok',
+                'detail': 'No myst interfaces — nothing to check',
+            })
+            return result
+
+        state, detail = NatChainHealth._chain_state()
+
+        if state == 'unknown':
+            # Not a verdict. Say so plainly instead of guessing either way.
+            result['status'] = 'warning'
+            result['checks'].append({
+                'name': 'MYST chain',
+                'status': 'warning',
+                'detail': f'Could not read the nat table: {detail[:120]}',
+            })
+            result['recommendations'].append(
+                f'sudo {NatChainHealth.NODE_IPTABLES} -t nat -L MYST -n')
+            return result
+
+        if state == 'absent':
+            result['status'] = 'critical'
+            result['checks'].append({
+                'name': 'MYST chain',
+                'status': 'critical',
+                'detail': f'Missing while {len(tunnels)} tunnel(s) exist — every session fails',
+            })
+            result['checks'].append({
+                'name': 'Impact',
+                'status': 'critical',
+                'detail': 'Node is online and in discovery but carries no traffic and earns nothing',
+            })
+            result['recommendations'].append(
+                'sudo systemctl stop mysterium-node && sleep 3 && sudo systemctl start mysterium-node')
+            result['recommendations'].append(
+                'Restarting drops live sessions — they are carrying no data anyway')
+            return result
+
+        # Chain is present. Report what the tunnels are doing, without turning a
+        # quiet node into an alarm: zero bytes is normal when nobody connects.
+        total = NatChainHealth._tunnel_bytes(tunnels)
+        if total > 0:
+            detail_txt = f'{len(tunnels)} tunnel(s), {total / (1024 * 1024):.1f} MB carried'
+        elif total == 0:
+            detail_txt = f'{len(tunnels)} tunnel(s), no traffic yet'
+        else:
+            detail_txt = f'{len(tunnels)} tunnel(s)'
+
+        result['checks'].append({
+            'name': 'MYST chain',
+            'status': 'ok',
+            'detail': 'Present with blackhole rules',
+        })
+        result['checks'].append({
+            'name': 'Tunnels',
+            'status': 'ok',
+            'detail': detail_txt,
+        })
+        return result
+
+
 SUBSYSTEMS = [
     ConntrackHealth,
     CpuLoadBalance,
@@ -3216,6 +3388,7 @@ SUBSYSTEMS = [
     NicCoalescing,
     NicChecksumOffload,
     FirewallBackend,
+    NatChainHealth,
     PortReachability,
     PortMapping,
     ProcessCleanup,

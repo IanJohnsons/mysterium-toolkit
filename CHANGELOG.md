@@ -2,6 +2,12 @@
 All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.4.10
+
+A node can be online, in discovery, and earning nothing, and until now nothing said so.
+
+- feat (detect a node whose NAT chain is gone): the node creates an iptables chain called MYST in the nat table at startup, in `nat/service_iptables.go:prepare()`, and every session afterwards inserts a jump into it. `prepare()` runs `sudo /usr/sbin/iptables --new MYST --table nat` exactly once, without `-w`, and `bootstrapServiceComponents` logs the failure as a WARN and carries on. One lost race for `/run/xtables.lock` therefore leaves the node running without the chain for the rest of its uptime — and two processes on this machine take that lock every two minutes, this toolkit among them. Every session after that dies with "Couldn't load target `MYST'", the tunnel interface is created and stays at exactly zero bytes, and the node reports itself healthy throughout: still in discovery, quality score intact, dashboard green. A VPS node ran twelve hours in that state on 13 September 2026 with twenty-four tunnels up and not one byte carried, and the only trace anywhere was a single WARN line in the node's own journal. The new `NatChainHealth` subsystem looks for the one combination nothing else produces: `myst*` interfaces present while the MYST chain is not. It reads the nat table through `/usr/sbin/iptables` specifically, because that is the binary the node hardcodes and checking the other backend would answer about the wrong table. A read that fails for any other reason — permission denied, a busy lock, a missing binary — is reported as a warning that says the table could not be read, never as a missing chain: sending an operator to restart a node on the strength of a failed read would be the same class of mistake in the other direction. It reports and never acts, because recovery means restarting the node and that is the operator's call
+
 ## v1.4.9
 
 The fiat value under the earnings never arrived on any fleet node, and nothing said so.
