@@ -12489,12 +12489,24 @@ def set_fail2ban_managed():
 @app.route('/data/retention', methods=['GET'])
 @require_auth
 def get_data_retention():
-    """Return current data retention configuration (days per type)."""
+    """Return current data retention configuration (days per type).
+
+    `retention` is what the editor shows; `active` is what the daily prune will
+    actually do. Those were the same field for a long time, and they are not the
+    same thing: the display falls back to defaults whenever nothing is
+    configured, while the prune requires data_retention_enabled and deletes
+    nothing without it. The card therefore announced "Pruned daily" over a set of
+    numbers that no prune would ever read — alarming on a machine keeping
+    everything, and indistinguishable from a machine that really was deleting.
+    """
     try:
         retention = _get_retention_config()
+        active = _get_user_retention_config()
         return jsonify({
             'retention':  retention,
             'defaults':   _DEFAULT_RETENTION,
+            'enabled':    bool(active),
+            'active':     active,
             'last_prune': _last_prune_date or None,
         }), 200
     except Exception as e:

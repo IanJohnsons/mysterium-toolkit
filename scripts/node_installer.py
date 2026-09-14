@@ -68,7 +68,7 @@ def ask(prompt, options=None, default=None):
             print()
             sys.exit(0)
 
-def run(cmd, timeout=60, check=False, capture=False):
+def run(cmd, timeout=60, check=False, capture=False, env=None):
     """Run a shell command. Returns (returncode, stdout)."""
     try:
         r = subprocess.run(
@@ -76,7 +76,8 @@ def run(cmd, timeout=60, check=False, capture=False):
             shell=isinstance(cmd, str),
             capture_output=capture,
             text=True,
-            timeout=timeout
+            timeout=timeout,
+            env=env
         )
         return r.returncode, (r.stdout or '').strip()
     except subprocess.TimeoutExpired:
@@ -97,6 +98,61 @@ def sudo(cmd):
             return ['sudo'] + cmd
         return 'sudo ' + cmd
     return cmd
+
+def detect_container():
+    """Return the container type this is running in, or '' on bare metal / a VM.
+
+    Mysterium's own install.sh already guards its kernel-header step:
+
+        if [[ "$container" != "docker" ]]; then
+            apt install -y "linux-headers-$(uname -r)"
+        fi
+
+    But `container` is never set inside that script — it comes from the
+    environment, and only Docker images set it to `docker`. An LXD container
+    such as ChromeOS/FydeOS Penguin sets `container=lxc`, so the guard misses
+    and the script installs kernel headers for a kernel that does not belong to
+    the container. `uname -r` there is the host's ChromeOS kernel, for which no
+    Debian header package exists, and with `set -e` at the top the install stops
+    part-way. `apt install wireguard` then pulls in dkms, which compiles against
+    a kernel that is not there and triggers update-initramfs. What is left is a
+    half-configured dpkg that blocks every later apt operation — an install that
+    takes the machine's package manager with it.
+
+    Detection order matters: systemd-detect-virt is authoritative when present,
+    the environment variable is what install.sh itself reads, and /proc/1/cgroup
+    is the fallback for systems with neither.
+    """
+    rc, out = run(['systemd-detect-virt', '--container'], capture=True)
+    if rc == 0 and out and out != 'none':
+        return out.strip()
+    env = os.environ.get('container', '').strip()
+    if env:
+        return env
+    try:
+        with open('/proc/1/cgroup') as f:
+            blob = f.read()
+        for marker in ('docker', 'lxc', 'kubepods', 'containerd'):
+            if marker in blob:
+                return marker
+    except Exception:
+        pass
+    return ''
+
+
+def _container_env():
+    """Environment for install.sh that makes it skip the kernel-header step.
+
+    Setting `container=docker` is not a lie about what we are running in — it is
+    the only value that script tests for, and skipping kernel headers is exactly
+    the right behaviour in any container. A container shares the host kernel; it
+    has no business installing headers for it, and no way to build modules
+    against it.
+    """
+    env = dict(os.environ)
+    env['container'] = 'docker'
+    return env
+
 
 # ── Distro detection ──────────────────────────────────────────────────────────
 def detect_distro():
@@ -184,11 +240,20 @@ def install_apt(distro):
     import shutil
     has_apt_key = shutil.which('apt-key') is not None
 
+    ctype = detect_container()
+    if ctype:
+        c(YELLOW, '⚠', f"Running inside a {ctype} container.")
+        c(CYAN, '·', "Kernel headers will be skipped — a container shares the host")
+        c(CYAN, '·', "kernel and cannot build modules against it. Installing them")
+        c(CYAN, '·', "anyway is what leaves dpkg half-configured and apt unusable.")
+        print()
+
     if has_apt_key:
         c(CYAN, '→', "Using official Mysterium install script...")
         rc, _ = run(
             "curl -sSf https://raw.githubusercontent.com/mysteriumnetwork/node/master/install.sh | bash",
-            timeout=300
+            timeout=300,
+            env=_container_env() if ctype else None
         )
         if rc == 0:
             time.sleep(2)

@@ -279,8 +279,12 @@ def load_config():
         try:
             cfg = json.loads(config_file.read_text())
             port = cfg.get('dashboard_port', port)
-        except (json.JSONDecodeError, KeyError):
-            pass
+        except (json.JSONDecodeError, KeyError) as e:
+            # A corrupt setup.json silently sent the CLI to the default port,
+            # where it found nothing and reported the dashboard as unreachable.
+            # curses has not started yet here, so stderr is safe to write to.
+            print(f'Warning: could not read {config_file} ({e}) — '
+                  f'falling back to port {port}', file=sys.stderr)
 
     return port
 
@@ -1308,8 +1312,15 @@ class CLIDashboard:
                 if resp.ok:
                     data = resp.json()
                     self._config_current = data.get('current', {})
-            except Exception:
-                pass
+                    self._config_results.pop('_load', None)
+                else:
+                    self._config_results['_load'] = f'HTTP {resp.status_code}'
+            except Exception as e:
+                # Silence here left the config screen empty with no reason for it,
+                # which is indistinguishable from a node that has no config set.
+                # _config_results already drives the per-key status column, so the
+                # load error rides along under a reserved key.
+                self._config_results['_load'] = str(e)[:40]
         threading.Thread(target=_fetch, daemon=True).start()
 
     def _apply_config_key(self, key):

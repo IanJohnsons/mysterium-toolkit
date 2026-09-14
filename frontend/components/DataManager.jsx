@@ -26,8 +26,14 @@ const RetentionEditor = ({ base, authHeaders, retention, onSaved }) => {
   const defaults = retention.defaults || {};
   const current  = retention.retention || {};
 
-  // Local editable state — initialised from current retention values
+  // Local editable state — initialised from current retention values.
+  // The effect below is not optional. Without it the editor keeps the previous
+  // node's numbers after a node switch: `current` updates, `values` does not,
+  // isDirty turns true on its own, and saving writes node A's retention onto
+  // node B. It also made the card show 730 while the node's setup.json said 90.
   const [values, setValues]     = useState({ ...current });
+  const currentKey = JSON.stringify(current);
+  useEffect(() => { setValues({ ...current }); }, [currentKey]);
   const [saving, setSaving]     = useState(false);
   const [saveStatus, setSaveStatus] = useState(null); // null | 'ok' | 'error'
   const [errorMsg, setErrorMsg] = useState('');
@@ -76,7 +82,11 @@ const RetentionEditor = ({ base, authHeaders, retention, onSaved }) => {
         <div className="text-xs text-slate-400 font-semibold tracking-wide uppercase">
           Auto-retention (days kept)
         </div>
-        <div className="text-[10px] text-slate-600">Pruned daily · edit and save to apply</div>
+        {retention.enabled
+          ? <div className="text-[10px] text-slate-600">Pruned daily · edit and save to apply</div>
+          : <div className="text-[10px] text-amber-500/70" title="Nothing is deleted until you save retention here once. The values below are defaults shown for editing, not a schedule that is running.">
+              Not pruning · all data is kept · save once to start applying these
+            </div>}
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
         {Object.entries(labels).map(([key, label]) => (
@@ -428,6 +438,7 @@ const DataManagerInner = ({ nodeId, isFleetMode = false, authHeaders = {} }) => 
       {/* Retention settings — editable */}
       {retention?.retention && (
         <RetentionEditor
+          key={nodeId || 'local'}
           base={isFleetMode ? `/fleet/node/${nodeId}/proxy` : ''}
           authHeaders={authHeaders}
           retention={retention}

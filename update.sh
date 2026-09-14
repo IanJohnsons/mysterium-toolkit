@@ -213,24 +213,16 @@ if [ "$_REAL_USER" != "root" ]; then
     fi
 fi
 
-# ── Add data_retention defaults to setup.json if missing ─────────────────────
-if [ -f "config/setup.json" ]; then
-    python3 - << 'PYEOF'
-import json, pathlib
-cfg = pathlib.Path('config/setup.json')
-try:
-    d = json.loads(cfg.read_text())
-    if 'data_retention' not in d:
-        d['data_retention'] = {
-            'earnings': 365, 'sessions': 90, 'traffic': 730,
-            'quality': 90, 'system': 30, 'services': 30, 'uptime': 90,
-        }
-        cfg.write_text(json.dumps(d, indent=2))
-        print('  ✓ data_retention defaults added to config/setup.json')
-except Exception as e:
-    print(f'  ⚠ Could not migrate setup.json: {e}')
-PYEOF
-fi
+# ── Retention defaults are deliberately NOT written here ─────────────────────
+# This block used to add a data_retention dict to setup.json when one was
+# missing. scripts/setup_wizard.py stopped doing exactly that in v1.3.3, for a
+# reason: pre-writing defaults makes every install look user-configured, and the
+# Data Manager then shows retention windows the operator never chose. One Pi
+# carried 30/90/365/730 purely because this ran on its first update.
+#
+# Data is kept forever until the operator saves retention in the Data Manager,
+# which is also what sets data_retention_enabled. Leave it to them.
+
 
 # ── New version ───────────────────────────────────────────────────────────
 NEW_VERSION=$(cat VERSION 2>/dev/null || echo "unknown")

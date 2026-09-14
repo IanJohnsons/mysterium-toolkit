@@ -485,6 +485,12 @@ const formatDataSize = (mb) => {
 // "fiat value loading…" forever on every fleet node, with nothing logged.
 const localBase = (url) => (url || '').replace(/\/fleet\/node\/[^/]+\/proxy$/, '');
 
+// WireGuard adds a fixed header to every packet: 20 bytes IPv4 + 8 UDP +
+// 16 WireGuard + 16 Poly1305 tag. The myst interfaces run at MTU 1420, so the
+// real transport overhead is that header over the payload — about 4.2%.
+const WG_HEADER_BYTES = 60;
+const MYST_MTU = 1420;
+
 const countryFlag = (code) => {
   if (!code || code.length !== 2) return '';
   const offset = 127397;
@@ -4584,7 +4590,7 @@ const MysteriumDashboard = () => {
 
                 <div>
                   <h4 className="text-emerald-400 font-semibold mb-1">Traffic Explained</h4>
-                  <p className="text-slate-400"><strong className="text-slate-300">↑ Out to consumers</strong> = content forwarded (earns MYST). <strong className="text-slate-300">↓ In from consumers</strong> = their requests (small). <strong className="text-slate-300">NIC total</strong> = everything the physical interface carried, which on a busy machine is far more than the VPN: SSH, package updates, fleet polling and anything else running there. <strong className="text-slate-300">Tunnel overhead</strong> is an estimate, not a measurement — each VPN byte crosses the NIC twice, so it comes to roughly the VPN volume itself. <strong className="text-slate-300">Other traffic</strong> is what is left after subtracting both, and on a fleet master it is normally the largest figure of the three. <strong className="text-slate-300">VNSTAT</strong> = persistent counters (survive reboot). <strong className="text-slate-300">PSUTIL</strong> = since-boot fallback.</p>
+                  <p className="text-slate-400"><strong className="text-slate-300">↑ Out to consumers</strong> = content forwarded (earns MYST). <strong className="text-slate-300">↓ In from consumers</strong> = their requests (small). <strong className="text-slate-300">NIC total</strong> = everything the physical interface carried, which on a busy machine is far more than the VPN: SSH, package updates, fleet polling and anything else running there. <strong className="text-slate-300">Internet side</strong> is what the node fetched from the internet and forwarded on a consumer’s behalf — the other half of every transfer, and the work you are paid for rather than waste. It is an estimate: each VPN byte crosses the NIC twice, once encrypted through the tunnel and once in the clear to or from the internet. <strong className="text-slate-300">Encapsulation</strong> is the real transport overhead — WireGuard adds 60 bytes to every packet on the 1420-byte tunnel MTU, about 4.2%. <strong className="text-slate-300">Other traffic</strong> is what is left after subtracting both, and on a fleet master it is normally the largest figure. <strong className="text-slate-300">VNSTAT</strong> = persistent counters (survive reboot). <strong className="text-slate-300">PSUTIL</strong> = since-boot fallback.</p>
                 </div>
 
                 <div>
@@ -5574,14 +5580,31 @@ const DataTrafficCard = ({ bandwidth, backendUrl, authHeaders }) => {
             // conclusion that the tunnels were wasting fifty times their own volume.
             // Tunnel overhead is roughly the VPN volume itself, because each byte
             // crosses the NIC twice; the rest belongs under its own name.
-            const tunnel = Math.min(d.vpn_tot, d.nic_tot);
+            // v1.4.16: this row was labelled "Tunnel overhead" and showed the whole
+            // VPN volume, on the reasoning that every byte crosses the NIC twice.
+            // The arithmetic is right and the word is wrong. The second crossing is
+            // the internet side of the same transaction — what the node fetched on
+            // the consumer's behalf and forwarded. That is the work being paid for,
+            // not waste, and calling 23.55 GiB of it "overhead" suggested the
+            // tunnels were burning bandwidth.
+            //
+            // Real overhead is WireGuard's encapsulation: 60 bytes per packet on
+            // the 1420-byte MTU the myst interfaces use, so about 4.2% — one GiB
+            // where the old row claimed twenty-three.
+            const internetSide = Math.min(d.vpn_tot, d.nic_tot);
+            const encapsulation = d.vpn_tot * (WG_HEADER_BYTES / MYST_MTU);
             const other  = Math.max(0, d.nic_tot - d.vpn_tot * 2);
             return (
               <>
                 <div className="grid grid-cols-4 gap-1 py-1 text-xs">
-                  <div className="text-slate-600">Tunnel overhead</div>
-                  <div className="col-span-2 text-slate-700 text-[10px] self-center">estimated — each VPN byte crosses the NIC twice</div>
-                  <div className="text-slate-500 text-right tabular-nums">≈ {fmtGB(tunnel)}</div>
+                  <div className="text-slate-600">Internet side</div>
+                  <div className="col-span-2 text-slate-700 text-[10px] self-center">fetched and forwarded on behalf of consumers — the other half of each transfer</div>
+                  <div className="text-slate-500 text-right tabular-nums">≈ {fmtGB(internetSide)}</div>
+                </div>
+                <div className="grid grid-cols-4 gap-1 py-1 text-xs">
+                  <div className="text-slate-600">Encapsulation</div>
+                  <div className="col-span-2 text-slate-700 text-[10px] self-center">WireGuard headers — {WG_HEADER_BYTES} bytes per packet at MTU {MYST_MTU}</div>
+                  <div className="text-slate-500 text-right tabular-nums">≈ {fmtGB(encapsulation)} ({(WG_HEADER_BYTES / MYST_MTU * 100).toFixed(1)}%)</div>
                 </div>
                 {other > 0 && (
                   <div className="grid grid-cols-4 gap-1 py-1 text-xs">
