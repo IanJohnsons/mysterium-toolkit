@@ -2627,7 +2627,15 @@ class RollupDB:
             a['sessions'] += 1
             a['bs']  += int(r.get('bytes_sent', 0) or 0)
             a['br']  += int(r.get('bytes_received', 0) or 0)
-            a['tok'] += int(r.get('tokens', 0) or 0)
+            # tokens is a TEXT column holding wei. int() on an empty or
+            # non-numeric value raises ValueError, and this runs inside
+            # refresh_recent's try, so a single odd row used to abort the whole
+            # rollup pass with nothing but a warning behind it.
+            try:
+                a['tok'] += int(r.get('tokens', 0) or 0)
+            except (TypeError, ValueError):
+                logger.warning(f"RollupDB: unusable tokens value {r.get('tokens')!r} "
+                               f"in session {r.get('id', '?')} — counted as 0")
         return agg
 
     @classmethod
@@ -2656,20 +2664,63 @@ class RollupDB:
 
     @classmethod
     def backfill_if_empty(cls):
-        """One-time: build the full rollup from all current sessions, only when empty."""
+        """Build the full rollup from all current sessions when it is empty — or
+        when it is incomplete, which is the case the original version missed.
+
+        The rollup used to be built once, the first time the table was empty, and
+        `refresh_recent()` covered only the last few days from then on. On a fresh
+        install those two run in the wrong order: the toolkit starts, the backfill
+        aggregates a nearly empty sessions table and sets its flag, and only then
+        does the collector pull months of history from the node. Everything older
+        than the refresh window never reaches the rollup, and nothing notices —
+        the dashboard's lifetime totals and service breakdown read from here, so
+        they quietly describe a fraction of the data.
+
+        Measured on a Pi: 620 sessions spanning 1 June to 14 September, a rollup
+        holding 130 sessions across four days, and two of five service types
+        missing entirely from the analytics card.
+
+        The check is two indexed MIN() queries. If the oldest session predates the
+        oldest rollup day, the rollup cannot be complete and is rebuilt once.
+        """
         cls.init()
         try:
             with cls._lock:
                 conn = cls._conn()
                 n = conn.execute("SELECT COUNT(*) FROM daily_totals").fetchone()[0]
+                oldest_rollup = conn.execute(
+                    "SELECT MIN(date) FROM daily_totals").fetchone()[0] if n else None
                 conn.close()
-            if n > 0:
+
+            reason = None
+            if n == 0:
+                reason = 'empty'
+            else:
+                with SessionDB._lock:
+                    sconn = SessionDB._conn()
+                    oldest_session = sconn.execute(
+                        "SELECT MIN(substr(started_at,1,10)) FROM sessions").fetchone()[0]
+                    sconn.close()
+                if oldest_session and oldest_rollup and oldest_session < oldest_rollup:
+                    reason = f'incomplete (sessions from {oldest_session}, rollup from {oldest_rollup})'
+
+            if reason is None:
                 cls._backfilled = True
                 return
+
             rows = SessionDB.get_range(limit=10_000_000, offset=0)
-            cls._upsert(cls._aggregate(rows))
+            agg = cls._aggregate(rows)
+            # No DELETE before the rebuild. daily_totals is the permanent record:
+            # sessions are pruned after 90 days by default, this table never is,
+            # so it holds days whose sessions no longer exist anywhere. Clearing
+            # it and rebuilding from the sessions table would destroy exactly the
+            # history it is kept for. _upsert already does ON CONFLICT DO UPDATE
+            # on (date, provider_id, service_type), so the days the aggregate
+            # covers are corrected and every other row is left untouched.
+            cls._upsert(agg)
             cls._backfilled = True
-            logger.info(f"RollupDB backfill: aggregated {len(rows)} sessions into daily_totals")
+            logger.info(f"RollupDB backfill [{reason}]: aggregated {len(rows)} sessions "
+                        f"into {len(agg)} daily_totals rows")
         except Exception as e:
             logger.warning(f"RollupDB backfill failed: {e}")
 
@@ -10749,7 +10800,10 @@ def get_service_split():
             FROM sessions
             WHERE started_at >= ?
               AND service_type NOT IN ('monitoring', 'noop', '')
-              AND tokens > 0
+              -- tokens is TEXT (wei exceeds SQLite's 64-bit INTEGER). In SQLite
+              -- TEXT sorts above INTEGER, so `tokens > 0` is true even for '0'
+              -- and the filter let through exactly what it meant to exclude.
+              AND CAST(tokens AS REAL) > 0
         """
         params = [cutoff]
         if node_id:
@@ -10812,7 +10866,10 @@ def get_earnings_efficiency():
             FROM sessions
             WHERE started_at >= ?
               AND service_type NOT IN ('monitoring', 'noop', '')
-              AND tokens > 0
+              -- tokens is TEXT (wei exceeds SQLite's 64-bit INTEGER). In SQLite
+              -- TEXT sorts above INTEGER, so `tokens > 0` is true even for '0'
+              -- and the filter let through exactly what it meant to exclude.
+              AND CAST(tokens AS REAL) > 0
               AND (bytes_sent > 0 OR bytes_received > 0)
         """
         params = [cutoff]
@@ -10830,7 +10887,10 @@ def get_earnings_efficiency():
             FROM sessions
             WHERE started_at >= ?
               AND service_type NOT IN ('monitoring', 'noop', '')
-              AND tokens > 0
+              -- tokens is TEXT (wei exceeds SQLite's 64-bit INTEGER). In SQLite
+              -- TEXT sorts above INTEGER, so `tokens > 0` is true even for '0'
+              -- and the filter let through exactly what it meant to exclude.
+              AND CAST(tokens AS REAL) > 0
               AND (bytes_sent > 0 OR bytes_received > 0)
         """
         params_typed = [cutoff]

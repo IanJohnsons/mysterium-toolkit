@@ -744,6 +744,34 @@ UNIT_EOF
     read -r
 }
 
+_action_node_installer() {
+    # node_installer.py has been a standalone script with its own --install and
+    # --method flags all along, but the only way to reach it was setup.sh, and
+    # only when no node was detected at all. Anyone already running a node who
+    # later wanted to reinstall it, switch from apt to docker, or install a node
+    # on a machine that started as a remote-mode dashboard had to re-run the
+    # whole setup. This is the missing entry point, not a second installer.
+    clear
+    echo
+    echo -e "  ${BOLD}╔══════════════════════════════════════════╗${NC}"
+    echo -e "  ${BOLD}║   Mysterium Node Installer               ║${NC}"
+    echo -e "  ${BOLD}╚══════════════════════════════════════════╝${NC}"
+    echo
+    if [ ! -f "$TOOLKIT_DIR/scripts/node_installer.py" ]; then
+        echo -e "  ${RED}✗ scripts/node_installer.py not found${NC}"
+        echo -e "  ${DIM}    Run ./update.sh to restore it.${NC}"
+        echo
+        read -p "  Press Enter to continue..." _
+        return
+    fi
+    echo -e "  ${DIM}Detects an existing node first; installs only if you confirm.${NC}"
+    echo -e "  ${DIM}Methods: apt, docker, script, deb.${NC}"
+    echo
+    "$PYTHON_CMD" "$TOOLKIT_DIR/scripts/node_installer.py" --install
+    echo
+    read -p "  Press Enter to continue..." _
+}
+
 _action_exit() {
     echo
     if is_backend_running; then
@@ -1017,10 +1045,12 @@ while true; do
         echo "  5. Maintenance"
         echo "  6. Autostart on Boot"
         echo "  7. Security & Upgrades"
+        echo "  N. Mysterium Node — install / reinstall"
         echo "  0. Exit"
         echo
-        read -p "  Select (0-7): " choice
+        read -p "  Select (0-7, N): " choice
         case $choice in
+            [Nn]) _action_node_installer ;;
             1) _action_start_backend ;;
             2) _action_stop ;;
             3) _action_logs ;;
@@ -1045,10 +1075,12 @@ while true; do
         echo "  7. Maintenance"
         echo "  8. Autostart on Boot"
         echo "  9. Security & Upgrades"
+        echo "  N. Mysterium Node — install / reinstall"
         echo "  0. Exit"
         echo
-        read -p "  Select (0-9): " choice
+        read -p "  Select (0-9, N): " choice
         case $choice in
+            [Nn]) _action_node_installer ;;
             1) _action_start_dashboard ;;
             2) _action_stop ;;
             3) _action_logs ;;
