@@ -7978,6 +7978,28 @@ def _f2b_read_conf(path):
     return result
 
 
+def _f2b_find_foreign_jail(jail_name):
+    """Locate a jail definition that is NOT in the toolkit's own file.
+
+    Returns (path, values) or (None, {}). Used to tell "our jail is missing"
+    apart from "someone else took our jail name over", which need opposite
+    advice: recreating our file in the second case produces two definitions of
+    one jail, and fail2ban reads jail.d alphabetically, so the other tool's file
+    keeps winning while the toolkit reports success.
+    """
+    import glob as _glob
+    for fpath in sorted(_glob.glob('/etc/fail2ban/jail.d/*.conf')) + ['/etc/fail2ban/jail.local']:
+        if fpath == TOOLKIT_JAIL_FILE or not os.path.exists(fpath):
+            continue
+        try:
+            data = _f2b_read_conf(fpath)
+        except Exception:
+            continue
+        if jail_name in data:
+            return fpath, data[jail_name]
+    return None, {}
+
+
 def _f2b_health():
     """Distinguish between fail2ban failure modes (v1.4.2).
 
@@ -7987,7 +8009,7 @@ def _f2b_health():
     and the dashboard showed the same empty list it shows when everything is fine.
 
     Returns a status of: not_installed, not_running, filter_missing,
-    jail_missing, jail_not_loaded, or ok.
+    jail_missing, jail_foreign, jail_not_loaded, or ok.
     """
     filter_path = Path('/etc/fail2ban/filter.d/mysterium-dashboard.conf')
     jail_path = Path('/etc/fail2ban/jail.d/mysterium-toolkit.conf')
@@ -8054,6 +8076,41 @@ def _f2b_health():
         result.update(status='filter_missing',
                       message='The mysterium-dashboard filter is missing, so fail2ban skips the jail. '
                               'Re-run setup with sudo to recreate it.')
+    elif not result['jail_file_exists'] and result['jail_loaded']:
+        # Our file is gone but the jail runs, so another tool defines it. Writing
+        # our file back would create two sections with the same name; fail2ban
+        # reads jail.d alphabetically and the other file keeps winning, so the
+        # toolkit would report a successful fix that changes nothing.
+        fpath, vals = _f2b_find_foreign_jail('mysterium-dashboard')
+        owner = os.path.basename(fpath) if fpath else 'an unknown file'
+        result['foreign_jail_file'] = fpath or ''
+        problems = []
+
+        # The node's own ports must never end up in a dashboard brute-force jail.
+        # A ban then blocks TequilAPI and the node UI for that address, and 4050
+        # is exactly where a fleet master queries the node.
+        port_raw = (vals.get('port') or '')
+        ports = {p.strip() for p in port_raw.replace(',', ' ').split() if p.strip()}
+        node_ports = sorted(ports & {'4050', '4449'})
+        if node_ports:
+            problems.append(
+                'it covers Mysterium port(s) ' + ', '.join(node_ports) +
+                ' — a ban there blocks TequilAPI and the node UI, not just the dashboard')
+
+        # No logpath means the jail inherits DEFAULT, which does not point at the
+        # toolkit log. The jail then loads, reports zero bans, and protects nothing.
+        if not (vals.get('logpath') or '').strip():
+            problems.append('it sets no logpath, so it reads the default log and can never match')
+
+        result.update(
+            status='jail_foreign', healthy=False,
+            message=f'The mysterium-dashboard jail is defined by {owner}, not by the toolkit. '
+                    'Settings changed here have no effect on it.'
+                    + (' Problems: ' + '; '.join(problems) + '.' if problems else ''))
+        result['recommendation'] = (
+            f'Inspect {fpath or "the file"} and decide who owns this jail. '
+            'Do not re-run setup to recreate the toolkit file — two sections with the same '
+            'name conflict and the alphabetically later file wins.')
     elif not result['jail_file_exists']:
         result.update(status='jail_missing',
                       message='The toolkit jail file is missing. Re-run setup to recreate it.')

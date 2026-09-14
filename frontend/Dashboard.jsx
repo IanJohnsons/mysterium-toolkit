@@ -3769,21 +3769,33 @@ const MysteriumDashboard = () => {
                   const cpuPctColor = (v) => v < 70 ? 'text-green-400' : v < 90 ? 'text-yellow-400' : 'text-red-400';
 
                   if (at.length > 0) {
+                    // A sensor only counts as "the CPU sensor" or "the RAM sensor" when we
+                    // recognise its name. Everything else renders as ambient — temperature
+                    // only. That is how a Pi ended up showing "cpu_thermal: 49°C" and no
+                    // percentages at all: its sensor is called cpu_thermal, not cpu, so it
+                    // fell through to the ambient branch, and CPU% and RAM% live exclusively
+                    // in the two branches above it. Same for any machine whose CPU sensor is
+                    // named coretemp, k10temp or Package id 0.
+                    const isCpuLabel = (l) => l === 'cpu' || l.startsWith('cpu_') || l.startsWith('cpu-');
+                    const isRamLabel = (l) => ['ram', 'sodimm', 'mem'].includes(l);
                     // Sort: Ambient/other first, CPU second, RAM last
                     const sortOrder = (lbl) => {
                       const l = (lbl || '').toLowerCase();
-                      if (l === 'cpu') return 1;
-                      if (['ram', 'sodimm', 'mem'].includes(l)) return 2;
+                      if (isCpuLabel(l)) return 1;
+                      if (isRamLabel(l)) return 2;
                       return 0;
                     };
                     const sorted = [...at].sort((a, b) => sortOrder(a.label) - sortOrder(b.label));
-                    return sorted.map((t, i) => {
+                    let cpuShown = false;
+                    let ramShown = false;
+                    const rows = sorted.map((t, i) => {
                       const lbl = t.label || '';
                       const lblLower = lbl.toLowerCase();
                       const tc = cpuTempColor(t.value);
-                      const isCpu = lblLower === 'cpu';
-                      const isRam = ['ram', 'sodimm', 'mem'].includes(lblLower);
+                      const isCpu = isCpuLabel(lblLower);
+                      const isRam = isRamLabel(lblLower);
                       if (isCpu) {
+                        cpuShown = true;
                         return (
                           <div key={i} className="flex items-center justify-between gap-3 mt-1">
                             <span className={`text-xs font-medium ${tc}`}>CPU: {(t.value ?? 0).toFixed(0)}°C</span>
@@ -3791,6 +3803,7 @@ const MysteriumDashboard = () => {
                           </div>
                         );
                       } else if (isRam) {
+                        ramShown = true;
                         return (
                           <div key={i} className="flex items-center justify-between gap-3 mt-1">
                             <span className={`text-xs font-medium ${tc}`}>RAM: {(t.value ?? 0).toFixed(0)}°C</span>
@@ -3804,6 +3817,20 @@ const MysteriumDashboard = () => {
                         );
                       }
                     });
+                    // The card is called System CPU — the percentages are the point of it,
+                    // and they must not depend on a machine happening to expose a sensor
+                    // under a name we recognise.
+                    if (!cpuShown) {
+                      rows.push(
+                        <div key="cpu-pct" className={`text-xs font-medium mt-1 ${cpuPctColor(safeNum(metrics.resources.cpu))}`}>CPU: {cpuPct}%</div>
+                      );
+                    }
+                    if (!ramShown) {
+                      rows.push(
+                        <div key="ram-pct" className={`text-xs font-medium mt-1 ${cpuPctColor(safeNum(metrics.resources.ram))}`}>RAM: {ramPct}%</div>
+                      );
+                    }
+                    return rows;
                   }
 
                   // Fallback: no all_temps — show cpu% and ram% stacked, plus single cpu_temp if available
