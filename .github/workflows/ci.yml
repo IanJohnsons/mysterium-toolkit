@@ -2,9 +2,11 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    # dev is where the work happens; running only on main meant every check
+    # arrived after the fact.
+    branches: [ main, dev ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, dev ]
 
 jobs:
   # ── Python syntax check ──────────────────────────────────────────────────────
@@ -30,6 +32,7 @@ jobs:
           for f in scripts/*.py; do
             python3 -m py_compile "$f" && echo "✓ $f OK"
           done
+
 
   # ── Frontend build ───────────────────────────────────────────────────────────
   frontend-build:

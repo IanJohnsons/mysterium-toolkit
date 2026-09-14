@@ -1,6 +1,6 @@
 # Mysterium Node Toolkit
 
-![Version](https://img.shields.io/badge/version-1.4.14-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Version](https://img.shields.io/badge/version-1.4.15-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 
 A monitoring and management dashboard for [Mysterium Network](https://mysterium.network) VPN node operators. It runs on your own machine: no account, no cloud backend, no telemetry. Your session history, earnings and consumer data live in local SQLite files. A handful of public APIs are contacted for prices, node quality and update checks — every one of them is listed under [Privacy](#privacy).
 
@@ -81,6 +81,9 @@ Fleet traffic carries API keys, so send it over a private network. [Tailscale](d
 
 ## Daily use
 
+**No node yet?** `./start.sh` → option **N** installs or reinstalls the Mysterium node itself — apt, docker, script or deb — and detects an existing install first. The same option is offered during setup when no node is found.
+
+
 ```bash
 ./start.sh      # control menu: start, stop, autostart, security, upgrades
 ./stop.sh       # stop the toolkit
@@ -136,6 +139,10 @@ A few things on screen are abbreviated. The same explanations are in the dashboa
 UPnP or a manual port forward usually improves a restricted or symmetric result.
 
 **Service types** — the node advertises four, and the toolkit shows friendly names: **Public** (`wireguard`, open to the whole network), **VPN** (`dvpn`, restricted to the Mysterium access policy), and two B2B services for business traffic, usually long-running and the largest earners.
+
+**Earnings per GiB** — Mysterium pays you twice for the same session: a rate per GiB of data and a rate per hour of uptime. Every service type pays the same hourly rate; the data rate differs between them by up to a factor of eighteen. Dividing total earnings by bytes hands the hourly pay to the data, which on a long-running service carrying little traffic is most of the figure. The efficiency card therefore shows the data rate with the hourly component removed, `+X% time` for the share that came from uptime, and your node's own list price in brackets. Rates come from the node's live pricing, so applying them to older sessions is an approximation — prices track the exchange rate.
+
+**Lifetime totals and the service split** are read from a daily rollup, not from the session list. Sessions are pruned after 90 days by default; the rollup is never pruned, which is what keeps a day's earnings after its sessions are gone. If the two ever disagree, the rollup is the one that survived.
 
 **Peer mode (full data)** on a fleet card means that node runs the toolkit, so history and system metrics come across. **TequilAPI mode (live only)** means only the node API is reachable, with no history available.
 

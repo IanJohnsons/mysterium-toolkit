@@ -2,6 +2,14 @@
 All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.4.15
+
+Documentation caught up with four releases of changes, and CI stopped arriving after the fact.
+
+- fix (CI ran only on `main`): the workflow checked syntax and built the frontend on the release branch, which is the branch where the work has already landed. It now runs on `dev` as well, so a broken build is reported while it is still on the branch it was written on
+- docs (README): sections on how earnings per GiB are calculated now that the hourly component is separated out, on the rollup being the permanent record that outlives pruned sessions, and on reaching the node installer from the CLI menu
+- docs (in-app Help): corrected to 15 health subsystems rather than 13, rewrote the Earnings Efficiency entry to describe the two-component pricing and what the card now shows, and documented the node installer as menu option N. The CLI section no longer pins Security & Upgrades to a number, since the numbering shifts with install type
+
 ## v1.4.14
 
 A fleet master never showed its own IP, and nothing anywhere said why.
