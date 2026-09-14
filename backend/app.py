@@ -3486,8 +3486,15 @@ class MetricsCollector:
                         resp = requests.get(f'{primary_url}/connection/ip', headers=headers, timeout=3)
                         if resp.status_code == 200:
                             public_ip = resp.json().get('ip', '')
-                    except Exception:
-                        pass
+                        else:
+                            logger.warning(f'Public IP lookup returned HTTP {resp.status_code} '
+                                           f'from {primary_url}/connection/ip — the node card will '
+                                           f'show no IP')
+                    except Exception as _ip_e:
+                        # The IP simply vanishes from the card when this fails, because
+                        # the render is conditional on a non-empty value. Silence here
+                        # means an operator sees a missing field and no reason for it.
+                        logger.warning(f'Public IP lookup failed: {_ip_e}')
                 except Exception:
                     pass
 
@@ -6573,8 +6580,15 @@ def _collect_single_node(node_entry):
                     'firewall':     cache.get('firewall', {}),
                     'systemHealth': cache.get('systemHealth', {}),
                     'node_quality': cache.get('nodeQuality', {}),
-                    'nat':          ns.get('nat', ''),
-                    'ip':           ns.get('ip', ''),
+                    # nodeStatus stores these as nat_type and public_ip (see the
+                    # dict built in MetricsCollector). Reading 'nat' and 'ip' here
+                    # returned the default on every call: the fleet master reads
+                    # its own data through this path, so no node acting as master
+                    # ever showed its NAT type or IP, while real peers went through
+                    # the branch below that reads both spellings and worked fine.
+                    # Two paths for one payload, one of them updated.
+                    'nat':          ns.get('nat_type', ns.get('nat', '')),
+                    'ip':           ns.get('public_ip', ns.get('ip', '')),
                     'identity':     ns.get('identity', earnings.get('wallet_address', '')),
                     'uptime_stats': cache.get('nodeQuality', {}),
                     'db_stats':     {},
@@ -6630,7 +6644,7 @@ def _collect_single_node(node_entry):
                     'traffic_history':  heavy.get('traffic_history', {}),
                     'analytics':        data.get('analytics', {}),
                     'logs':             heavy.get('logs', []),
-                    'nat':              ns.get('nat', ns.get('nat_type', '')),
+                    'nat':              ns.get('nat_type', ns.get('nat', '')),
                     'ip':               ns.get('public_ip', ns.get('ip', '')),
                     'identity':         ns.get('identity', ''),
                     'wallet':           data.get('earnings', {}).get('wallet_address', ''),
@@ -9334,7 +9348,8 @@ def probe_fleet_node():
                     'identity': ns.get('identity') or earnings.get('wallet_address', ''),
                     'version':  ns.get('version', ''),
                     'status':   ns.get('status', 'unknown'),
-                    'nat':      ns.get('nat', ''),
+                    # Same key mismatch as above: 'nat' is never written.
+                    'nat':      ns.get('nat_type', ns.get('nat', '')),
                     'ip':       ns.get('public_ip', ns.get('ip', '')),
                 }
         except Exception:

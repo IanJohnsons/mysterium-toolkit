@@ -2,6 +2,13 @@
 All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.4.14
+
+A fleet master never showed its own IP, and nothing anywhere said why.
+
+- fix (the master's own node card was missing its IP and NAT type): `nodeStatus` stores these under `nat_type` and `public_ip`, but three call sites asked for `nat` and `ip` — keys the collector has never written. They got the default every time. The peer branch reads both spellings and works, so a real peer showed its IP while the machine acting as fleet master did not, and since the card only renders a field when it is non-empty the line simply disappeared rather than showing as blank. Two paths carrying the same payload, one of them updated. All three now read `nat_type` and `public_ip` first and fall back to the short spelling, so peers sending the older form keep working
+- fix (a failed public IP lookup left no trace): the request to `/connection/ip` sat inside a bare `except: pass`, so a node that could not resolve its address produced a card with one fewer line and no log entry to explain it. The node returns HTTP 503 when its resolver fails — a real outcome, not a hypothetical. Both the non-200 case and the exception now log a warning naming the endpoint
+
 ## v1.4.13
 
 The earnings-per-GB figure was measuring two things and calling it one.
