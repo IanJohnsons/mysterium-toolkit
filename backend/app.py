@@ -1529,6 +1529,80 @@ class SessionStore:
             }
 
 
+class PriceCache:
+    """Current Mysterium prices per service type, from TequilAPI /v2/prices/current.
+
+    Mysterium pays a provider twice for the same session: a rate per GiB and a
+    rate per hour. Measured on a live node in September 2026:
+
+        wireguard      0.000462 MYST/hour   1.663293 MYST/GiB
+        scraping       0.000462 MYST/hour   0.093329 MYST/GiB
+        quic_scraping  0.000462 MYST/hour   0.110886 MYST/GiB
+
+    The hourly rate is identical across service types; only the data rate differs,
+    and by a factor of eighteen between wireguard and scraping.
+
+    This matters because dividing total earnings by bytes attributes the hourly
+    component to the data. A 300-hour scraping session moving 0.15 GiB earns
+    0.1386 MYST for the time and 0.014 for the data, and reporting that as
+    1.01 MYST/GiB is off by a factor of eleven against the advertised 0.093.
+
+    Endpoint verified in the node source (tequilapi/endpoints/proposals.go:433).
+    `/prices` does not exist; `/prices/current` returns wireguard only, while
+    `/v2/prices/current` returns every service type.
+
+    Prices move with the exchange rate, so applying today's rate to an old
+    session is an approximation. It is a far better one than attributing the
+    entire hourly component to bytes, but callers should label it as current
+    pricing rather than as what was actually paid at the time.
+    """
+
+    _prices = {}        # {service_type: {'per_hour': float, 'per_gib': float}}
+    _fetched_at = 0.0
+    _ttl = 3600         # prices change slowly; an hour is plenty
+    _lock = Lock()
+
+    @classmethod
+    def get(cls, headers=None, force=False):
+        """Return {service_type: {per_hour, per_gib}} in MYST. Empty dict on failure."""
+        import time as _t
+        with cls._lock:
+            if not force and cls._prices and (_t.time() - cls._fetched_at) < cls._ttl:
+                return dict(cls._prices)
+        fresh = {}
+        for node_url in NODE_API_URLS:
+            try:
+                resp = requests.get(f'{node_url}/v2/prices/current',
+                                    headers=headers or {}, timeout=6)
+                if resp.status_code != 200:
+                    continue
+                for entry in resp.json() or []:
+                    st = entry.get('service_type')
+                    if not st:
+                        continue
+                    fresh[st] = {
+                        'per_hour': _tokens_to_myst(
+                            (entry.get('price_per_hour_tokens') or {}).get('wei')
+                            or entry.get('price_per_hour') or 0),
+                        'per_gib': _tokens_to_myst(
+                            (entry.get('price_per_gib_tokens') or {}).get('wei')
+                            or entry.get('price_per_gib') or 0),
+                    }
+                if fresh:
+                    break
+            except Exception as e:
+                logger.debug(f'PriceCache: /v2/prices/current failed for {node_url}: {e}')
+        if fresh:
+            with cls._lock:
+                cls._prices = fresh
+                cls._fetched_at = _t.time()
+            return dict(fresh)
+        # Keep the previous values rather than reporting no pricing at all: a
+        # stale hourly rate still splits earnings far better than ignoring it.
+        with cls._lock:
+            return dict(cls._prices)
+
+
 class TequilaCache:
     """Fetch each TequilAPI endpoint ONCE per cycle, share data across all functions.
     Sessions are managed by SessionStore (full pagination). This class handles /services."""
@@ -10862,7 +10936,8 @@ def get_earnings_efficiency():
             SELECT
                 started_at,
                 COALESCE(tokens, 0) AS tokens,
-                COALESCE(bytes_sent, 0) + COALESCE(bytes_received, 0) AS total_bytes
+                COALESCE(bytes_sent, 0) + COALESCE(bytes_received, 0) AS total_bytes,
+                COALESCE(duration_secs, 0) AS duration_secs
             FROM sessions
             WHERE started_at >= ?
               AND service_type NOT IN ('monitoring', 'noop', '')
@@ -10883,7 +10958,8 @@ def get_earnings_efficiency():
                 started_at,
                 COALESCE(tokens, 0) AS tokens,
                 COALESCE(bytes_sent, 0) + COALESCE(bytes_received, 0) AS total_bytes,
-                COALESCE(service_type, 'unknown') AS service_type
+                COALESCE(service_type, 'unknown') AS service_type,
+                COALESCE(duration_secs, 0) AS duration_secs
             FROM sessions
             WHERE started_at >= ?
               AND service_type NOT IN ('monitoring', 'noop', '')
@@ -10909,7 +10985,8 @@ def get_earnings_efficiency():
         from collections import defaultdict
 
         # Combined daily buckets
-        day_map = defaultdict(lambda: {'earnings_myst': 0.0, 'data_mb': 0.0})
+        prices = PriceCache.get(MetricsCollector.get_tequilapi_headers())
+        day_map = defaultdict(lambda: {'earnings_myst': 0.0, 'data_mb': 0.0, 'hours': 0.0})
         for r in rows_combined:
             try:
                 t = datetime.fromisoformat(str(r[0]).replace('Z', '+00:00'))
@@ -10920,9 +10997,10 @@ def get_earnings_efficiency():
                 day = str(r[0])[:10]
             day_map[day]['earnings_myst'] += float(r[1]) / 1e18
             day_map[day]['data_mb']       += float(r[2]) / (1024 * 1024)
+            day_map[day]['hours']         += float(r[3] or 0) / 3600.0
 
         # Per-service-type daily buckets
-        type_day_map = defaultdict(lambda: defaultdict(lambda: {'earnings_myst': 0.0, 'data_mb': 0.0}))
+        type_day_map = defaultdict(lambda: defaultdict(lambda: {'earnings_myst': 0.0, 'data_mb': 0.0, 'hours': 0.0}))
         for r in rows_typed:
             try:
                 t = datetime.fromisoformat(str(r[0]).replace('Z', '+00:00'))
@@ -10934,6 +11012,44 @@ def get_earnings_efficiency():
             svc = norm_svc(r[3])
             type_day_map[svc][day]['earnings_myst'] += float(r[1]) / 1e18
             type_day_map[svc][day]['data_mb']       += float(r[2]) / (1024 * 1024)
+            type_day_map[svc][day]['hours']         += float(r[4] or 0) / 3600.0
+
+
+        def _split(v, svc):
+            """Separate the time component from the data component of a day's earnings.
+
+            Mysterium pays per GiB and per hour for the same session. Dividing the
+            total by bytes hands the hourly component to the data, which on a
+            long-running low-traffic service is most of the figure: a 300-hour
+            scraping session moving 0.15 GiB reported 1.01 MYST/GiB against an
+            advertised 0.093.
+
+            Uses today's hourly rate on historical sessions, which is an
+            approximation — prices track the exchange rate. It is a much smaller
+            error than the one it replaces, but the numbers are current pricing
+            applied to past sessions, not what was actually paid at the time.
+
+            Without a price the split cannot be made, and reporting a guess would
+            be worse than reporting nothing: data_myst_per_gib comes back None so
+            the UI can say the rate is unavailable instead of drawing a wrong bar.
+            """
+            gib = v['data_mb'] / 1024.0
+            total = v['earnings_myst']
+            per_hour = (prices.get(svc) or {}).get('per_hour')
+            if per_hour is None:
+                return {'time_myst': None, 'data_myst': None,
+                        'data_myst_per_gib': None, 'pct_from_time': None}
+            time_myst = v['hours'] * per_hour
+            # Clamped: rounding and a stale rate can push the time component past
+            # the total, and a negative data share would be nonsense on a chart.
+            time_myst = min(time_myst, total)
+            data_myst = max(0.0, total - time_myst)
+            return {
+                'time_myst': round(time_myst, 6),
+                'data_myst': round(data_myst, 6),
+                'data_myst_per_gib': round(data_myst / gib, 6) if gib > 0 else None,
+                'pct_from_time': round(time_myst / total * 100, 1) if total > 0 else None,
+            }
 
         # Build combined result
         result = []
@@ -10941,8 +11057,14 @@ def get_earnings_efficiency():
             v = day_map[day]
             data_gb = v['data_mb'] / 1024 if v['data_mb'] else 0
             myst_per_gb = round(v['earnings_myst'] / data_gb, 6) if data_gb > 0 else None
-            result.append({'date': day, 'earnings_myst': round(v['earnings_myst'], 6),
-                           'data_mb': round(v['data_mb'], 2), 'myst_per_gb': myst_per_gb})
+            # 'wireguard' as the reference rate: the hourly price is identical
+            # across service types on every node measured, so the combined split
+            # does not depend on which one is used.
+            entry = {'date': day, 'earnings_myst': round(v['earnings_myst'], 6),
+                     'data_mb': round(v['data_mb'], 2), 'myst_per_gb': myst_per_gb,
+                     'hours': round(v['hours'], 2)}
+            entry.update(_split(v, 'wireguard'))
+            result.append(entry)
 
         # Build per-service-type result
         all_days = sorted(day_map.keys())
@@ -10950,13 +11072,16 @@ def get_earnings_efficiency():
         for svc, day_data in type_day_map.items():
             svc_result = []
             for day in all_days:
-                v = day_data.get(day, {'earnings_myst': 0.0, 'data_mb': 0.0})
+                v = day_data.get(day, {'earnings_myst': 0.0, 'data_mb': 0.0, 'hours': 0.0})
                 data_gb = v['data_mb'] / 1024 if v['data_mb'] else 0
                 myst_per_gb = round(v['earnings_myst'] / data_gb, 6) if data_gb > 0 else None
                 if myst_per_gb is not None:
-                    svc_result.append({'date': day, 'myst_per_gb': myst_per_gb,
-                                       'earnings_myst': round(v['earnings_myst'], 6),
-                                       'data_mb': round(v['data_mb'], 2)})
+                    entry = {'date': day, 'myst_per_gb': myst_per_gb,
+                             'earnings_myst': round(v['earnings_myst'], 6),
+                             'data_mb': round(v['data_mb'], 2),
+                             'hours': round(v.get('hours', 0.0), 2)}
+                    entry.update(_split(v, svc))
+                    svc_result.append(entry)
             # Noise floor: days with negligible data (a few hundred KB) divide a tiny
             # earnings figure by a near-zero GB value, producing a meaningless MYST/GB
             # ratio that collapses the chart line into a sharp V-drop. Clamp each day's
@@ -10972,7 +11097,9 @@ def get_earnings_efficiency():
             if svc_result:
                 by_type[svc] = svc_result
 
-        return jsonify({'data': result, 'by_type': by_type, 'days': days}), 200
+        return jsonify({'data': result, 'by_type': by_type, 'days': days,
+                        'prices': prices,
+                        'price_basis': 'current' if prices else 'unavailable'}), 200
     except Exception as e:
         logger.error(f'earnings-efficiency error: {e}')
         return jsonify({'error': str(e)}), 500

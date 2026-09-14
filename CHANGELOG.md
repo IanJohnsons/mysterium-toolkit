@@ -2,6 +2,14 @@
 All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.4.13
+
+The earnings-per-GB figure was measuring two things and calling it one.
+
+- fix (MYST per GB was overstated by up to eleven times): Mysterium pays a provider twice for the same session — a rate per GiB and a rate per hour. Measured on a live node: every service type pays 0.000462 MYST/hour, while the data rate ranges from 0.093329 for scraping to 1.663293 for wireguard, a factor of eighteen apart. The efficiency card divided total earnings by bytes, which hands the entire hourly component to the data. On a long-running low-traffic service that is most of the figure: a 300-hour scraping session moving 0.15 GiB earns 0.1386 MYST for the time and 0.014 for the data, and the card reported 1.01 MYST/GB against an advertised 0.093. Public was overstated too, by a smaller margin, because its data rate is high enough to dominate. The card now shows the data rate with the hourly component removed, the share of earnings that came from uptime instead, and the node's own current list price beside it for comparison. Against the real numbers the split lands at 0.0893 for scraping (listed 0.0933) and 1.7038 for Public (listed 1.6633)
+- feat (`PriceCache`): reads `/v2/prices/current` from TequilAPI, cached for an hour. `/prices` does not exist and `/prices/current` returns wireguard only — both verified in the node source at `tequilapi/endpoints/proposals.go:433` rather than guessed. Prices are forwarded to the frontend so the card can name what it is comparing against. When the node returns nothing the card says so and falls back to the gross figure with a label, because a split that cannot be computed is better left uncomputed than approximated: the previous values are kept rather than reporting no pricing at all, since a stale hourly rate still separates the two far better than ignoring the hourly rate entirely
+- note: the split applies today's hourly rate to historical sessions, which is an approximation — prices track the exchange rate, and a session from June was paid at June's rate. It is a much smaller error than attributing the whole hourly component to bytes, and the card labels the figures as current pricing rather than as what was actually paid
+
 ## v1.4.12
 
 The lifetime figures on a fresh install described a fraction of the data, and said so nowhere.

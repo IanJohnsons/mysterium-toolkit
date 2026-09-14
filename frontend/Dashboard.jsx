@@ -4972,6 +4972,11 @@ const EarningsEfficiencyChart = ({ backendUrl, authHeaders }) => {
   const [open, setOpen]     = useState(false);
   const [loading, setLoading] = useState(false);
   const [nodePrices, setNodePrices] = useState({});
+  // Live rates from the node (/v2/prices/current), forwarded by the backend, so the
+  // card can show the data rate separately from the hourly rate instead of one
+  // figure that silently mixes them.
+  const [livePrices, setLivePrices] = useState({});
+  const [priceBasis, setPriceBasis] = useState('unavailable');
 
   const DAY_OPTIONS = [7, 30, 90, 365];
 
@@ -4991,6 +4996,8 @@ const EarningsEfficiencyChart = ({ backendUrl, authHeaders }) => {
       .then(d => {
         setData(d.data || []);
         setByType(d.by_type || {});
+        setLivePrices(d.prices || {});
+        setPriceBasis(d.price_basis || 'unavailable');
         setLoading(false);
       })
       .catch(() => setLoading(false));
@@ -5089,12 +5096,31 @@ const EarningsEfficiencyChart = ({ backendUrl, authHeaders }) => {
                 const svcVals = pts.map(p => p.myst_per_gb).filter(Boolean);
                 const svcAvg = svcVals.length ? (svcVals.reduce((a,b)=>a+b,0)/svcVals.length).toFixed(4) : null;
                 const cfgPrice = nodePrices[svc];
+                // Mysterium pays per GiB and per hour for the same session. The
+                // gross figure above divides everything by bytes, which hands the
+                // hourly component to the data and overstates a long-running
+                // low-traffic service by an order of magnitude. These two are the
+                // data share on its own and how much of the earnings came from
+                // time instead.
+                const dataVals = pts.map(p => p.data_myst_per_gib).filter(v => v != null);
+                const dataAvg = dataVals.length ? (dataVals.reduce((a,b)=>a+b,0)/dataVals.length).toFixed(4) : null;
+                const timeVals = pts.map(p => p.pct_from_time).filter(v => v != null);
+                const timePct = timeVals.length ? Math.round(timeVals.reduce((a,b)=>a+b,0)/timeVals.length) : null;
+                const listed = livePrices[svc] || livePrices[svc === 'scraping' ? 'quic_scraping' : ''];
                 return (
                   <span key={svc} className="text-[10px] flex items-center gap-1" style={{color: cfg.hex}}>
                     <span style={{background: cfg.hex}} className="inline-block w-2 h-2 rounded-sm flex-shrink-0" />
                     {cfg.label}
-                    {svcAvg && <span className="font-semibold">{svcAvg}/GB</span>}
-                    {cfgPrice && <span className="opacity-50 ml-0.5" title="Configured node price">(cfg: {cfgPrice.toFixed(3)})</span>}
+                    {dataAvg
+                      ? <span className="font-semibold" title="Data earnings per GiB, with the hourly component removed">{dataAvg}/GiB</span>
+                      : svcAvg && <span className="font-semibold" title="Gross earnings divided by data — includes the hourly component">{svcAvg}/GB gross</span>}
+                    {timePct != null && timePct > 0 && (
+                      <span className="opacity-60 ml-0.5" title="Share of earnings paid for uptime rather than data">
+                        +{timePct}% time
+                      </span>
+                    )}
+                    {listed && <span className="opacity-50 ml-0.5" title="Current node price per GiB">(list: {listed.per_gib.toFixed(3)})</span>}
+                    {!listed && cfgPrice && <span className="opacity-50 ml-0.5" title="Configured node price">(cfg: {cfgPrice.toFixed(3)})</span>}
                   </span>
                 );
               })}
@@ -5104,7 +5130,17 @@ const EarningsEfficiencyChart = ({ backendUrl, authHeaders }) => {
           {/* Combined summary */}
           {avg && (
             <div className="flex gap-4 text-xs mb-2">
-              <span className="text-slate-600">Combined avg: <span className="text-slate-400 font-semibold">{avg} MYST/GB</span></span>
+              <span className="text-slate-600">Combined avg: <span className="text-slate-400 font-semibold">{avg} MYST/GB</span> <span className="opacity-60">gross</span></span>
+              {priceBasis === 'current' && (
+                <span className="text-slate-700" title="Per-service data rates use today's node pricing applied to past sessions — an approximation, since prices track the exchange rate">
+                  per-service rates exclude the hourly component (current pricing)
+                </span>
+              )}
+              {priceBasis !== 'current' && (
+                <span className="text-amber-600/70" title="The node did not return /v2/prices/current, so the hourly component cannot be separated">
+                  node pricing unavailable — figures include uptime pay
+                </span>
+              )}
             </div>
           )}
 
