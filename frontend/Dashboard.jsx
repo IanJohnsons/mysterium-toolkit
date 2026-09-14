@@ -473,6 +473,18 @@ const formatDataSize = (mb) => {
   return '0 MB';
 };
 
+// Strip the fleet-proxy suffix from a node-aware backend URL.
+//
+// Cards that show node-bound numbers receive getNodeAwareUrl(), which becomes
+// `<base>/fleet/node/<id>/proxy` as soon as a fleet node is selected. That is
+// correct for anything the node itself owns. It is wrong for the MYST token
+// price: that number comes from a public exchange API via the local backend and
+// is identical on every machine. Asking a remote node for it routed the request
+// through the fleet proxy, whose allow-list does not contain `myst-price`, so
+// the proxy answered 403 — swallowed by an empty .catch(). The result was
+// "fiat value loading…" forever on every fleet node, with nothing logged.
+const localBase = (url) => (url || '').replace(/\/fleet\/node\/[^/]+\/proxy$/, '');
+
 const countryFlag = (code) => {
   if (!code || code.length !== 2) return '';
   const offset = 127397;
@@ -6868,10 +6880,10 @@ const EarningsCard = ({ earnings, backendUrl, authHeaders }) => {
   useEffect(() => {
     if (!backendUrl) return;
     const fetchPrice = () => {
-      fetch(`${backendUrl}/myst-price`, { headers: authHeaders || {} })
-        .then(r => r.json())
+      fetch(`${localBase(backendUrl)}/myst-price`, { headers: authHeaders || {} })
+        .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
         .then(d => { if (d.usd || d.eur) setMystPrice(d); })
-        .catch(() => {});
+        .catch(e => console.warn('myst-price fetch failed:', e.message));
     };
     fetchPrice();
     const id = setInterval(fetchPrice, 300_000);
@@ -7073,11 +7085,11 @@ const SettlementHistoryCard = ({ backendUrl, authHeaders }) => {
   useEffect(() => {
     if (backendUrl) {
       load();
-      // Fetch MYST price for wallet value display
-      fetch(`${backendUrl}/myst-price`, { headers: authHeaders || {} })
-        .then(r => r.json())
+      // Fetch MYST price for wallet value display — local backend, see localBase()
+      fetch(`${localBase(backendUrl)}/myst-price`, { headers: authHeaders || {} })
+        .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
         .then(d => { if (d.usd || d.eur) setMystPrice(d); })
-        .catch(() => {});
+        .catch(e => console.warn('myst-price fetch failed:', e.message));
     }
   }, [backendUrl]);
 

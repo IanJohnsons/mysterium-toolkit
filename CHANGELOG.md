@@ -2,6 +2,12 @@
 All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.4.9
+
+The fiat value under the earnings never arrived on any fleet node, and nothing said so.
+
+- fix (fiat value stuck on "loading" for every node but this one): `EarningsCard` and `SettlementHistoryCard` receive `getNodeAwareUrl()`, which becomes `<base>/fleet/node/<id>/proxy` the moment a fleet node is selected. That is right for anything the node owns and wrong for the MYST price, which comes from a public exchange API through the local backend and is the same number on every machine in the fleet. The request went to the remote node's proxy, whose allow-list has never contained `myst-price`, so the proxy answered 403 and an empty `.catch(() => {})` threw it away. The result was "fiat value loading…" forever under the unsettled earnings on every node except the one serving the page, with no log line on either side and nothing in the UI to suggest a request had been refused — visible only by opening the browser console on a page nobody had a reason to suspect. A new `localBase()` strips the proxy suffix so the price is always fetched locally, which is also what stops the endpoint from being added to the proxy allow-list to fix a symptom: a node should not be asked for a global value. Both call sites now check `r.ok` and report the status code through `console.warn` instead of discarding the failure, because the silence was the larger part of the bug
+
 ## v1.4.8
 
 An override for nodes the Mysterium PPA cannot reach, and a version block that describes the node you are actually looking at.
