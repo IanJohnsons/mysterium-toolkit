@@ -166,10 +166,32 @@ if [ "$_REAL_USER" != "root" ]; then
     # UI features silently never appear.
     for _d in "$TOOLKIT_DIR/config" "$TOOLKIT_DIR/backend" "$TOOLKIT_DIR/dist"; do
         if [ -d "$_d" ]; then
-            _bad=$(find "$_d" -user root -print -quit 2>/dev/null)
+            # Looking only for root-owned files missed the case that actually
+            # happened: a dist/ owned by neither root nor the service user, where
+            # the check stayed quiet and the Vite build then failed on EACCES
+            # while update.sh reported a successful run. Anything not owned by the
+            # user the service runs as is a problem, whoever owns it.
+            #
+            # find exits non-zero when it cannot resolve the user name, and an
+            # unresolvable name also makes it print nothing — which would read as
+            # "all good" and reintroduce the silence this check exists to break.
+            _bad=$(find "$_d" ! -user "$_REAL_USER" -print -quit 2>/dev/null)
+            _find_rc=$?
+            if [ "$_find_rc" -ne 0 ]; then
+                echo -e "  ${YELLOW}⚠ could not check ownership of $(basename "$_d")/ — is '$_REAL_USER' a valid user?${NC}"
+                _bad=""
+            fi
             if [ -n "$_bad" ]; then
-                $SUDO chown -R "$_REAL_USER:$_REAL_USER" "$_d" 2>/dev/null || true
-                echo -e "  ${GREEN}✓ $(basename "$_d")/ ownership corrected → $_REAL_USER${NC}"
+                # The success line used to print unconditionally after a chown that
+                # swallowed its own errors, so a failed repair announced itself as a
+                # completed one — and the build then failed further down for a reason
+                # the operator had just been told was fixed.
+                if $SUDO chown -R "$_REAL_USER:$_REAL_USER" "$_d" 2>/dev/null; then
+                    echo -e "  ${GREEN}✓ $(basename "$_d")/ ownership corrected → $_REAL_USER${NC}"
+                else
+                    echo -e "  ${YELLOW}⚠ $(basename "$_d")/ has root-owned files and could not be corrected${NC}"
+                    echo -e "  ${DIM}    sudo chown -R $_REAL_USER:$_REAL_USER $_d${NC}"
+                fi
             fi
         fi
     done

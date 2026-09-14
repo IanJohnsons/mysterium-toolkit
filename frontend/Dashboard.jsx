@@ -595,7 +595,7 @@ const SecurityPage = ({ backendUrl, localUrl, authHeaders, firewallData }) => {
   // firewallData refreshes every 5s and would reset the toggle state
   useEffect(()=>{
     fetch(`${localUrl}/settings`, { headers: authHeaders||{} })
-      .then(r=>r.json()).then(d=>{ if(typeof d.fail2ban_managed === 'boolean') setF2bManaged(d.fail2ban_managed); }).catch(()=>{});
+      .then(r=>r.json()).then(d=>{ if(typeof d.fail2ban_managed === 'boolean') setF2bManaged(d.fail2ban_managed); }).catch(e => console.warn('/settings failed:', e?.message || e));
   }, [backendUrl]);
   // Tailscale status — update from firewallData when available
   useEffect(()=>{
@@ -633,7 +633,7 @@ const SecurityPage = ({ backendUrl, localUrl, authHeaders, firewallData }) => {
     fetch(`${backendUrl}/firewall/fail2ban/unban`, {
       method:'POST', headers:{...(authHeaders||{}),'Content-Type':'application/json'},
       body: JSON.stringify({jail, ip})
-    }).then(()=>loadJails()).catch(()=>{});
+    }).then(()=>loadJails()).catch(e => console.warn('/firewall/fail2ban/unban failed:', e?.message || e));
   };
 
   const ufwAdd = () => {
@@ -1076,7 +1076,7 @@ const UpdateWaiter = ({ onBack }) => {
     const iv = setInterval(() => {
       setSecs(s => {
         if (s <= 1) {
-          fetch('/api/version').then(() => window.location.reload()).catch(() => {});
+          fetch('/api/version').then(() => window.location.reload()).catch(e => console.warn('/api/version failed:', e?.message || e));
           return 10;
         }
         return s - 1;
@@ -1337,15 +1337,15 @@ const MysteriumDashboard = () => {
     // Fetch toolkit version from backend (no auth required)
     fetch('/api/version').then(r => r.ok ? r.json() : null).then(d => {
       if (d?.version) setToolkitVersion(d.version);
-    }).catch(() => {});
+    }).catch(e => console.warn('/api/version failed:', e?.message || e));
     // Check for available update (cached 1h on backend)
     fetch('/api/update-check').then(r => r.ok ? r.json() : null).then(d => {
       if (d) setUpdateInfo(d);
-    }).catch(() => {});
+    }).catch(e => console.warn('/api/version failed:', e?.message || e));
     // Fetch MYST price for fleet bar fiat display
     fetch('/myst-price').then(r => r.ok ? r.json() : null).then(d => {
       if (d?.usd) setFleetMystPrice(d);
-    }).catch(() => {});
+    }).catch(e => console.warn('/api/update-check failed:', e?.message || e));
     // Check for available Mysterium node update — see the node-bound effect below.
   }, []);
 
@@ -1376,7 +1376,7 @@ const MysteriumDashboard = () => {
     fetch(`${getNodeAwareUrl()}/api/node-update-check`, { headers: authHeaderRef.current })
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d) setNodeUpdateInfo(d); })
-      .catch(() => {});
+      .catch(e => console.warn('/api/node-update-check failed:', e?.message || e));
   };
 
   useEffect(() => {
@@ -1386,7 +1386,7 @@ const MysteriumDashboard = () => {
     fetch(`${getNodeAwareUrl()}/api/node-update-check`, { headers: authHeaderRef.current })
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d && !cancelled) setNodeUpdateInfo(d); })
-      .catch(() => {});
+      .catch(e => console.warn('/api/node-update-check failed:', e?.message || e));
     return () => { cancelled = true; };
   }, [selectedNodeId, isConnected]);
 
@@ -1401,7 +1401,7 @@ const MysteriumDashboard = () => {
     fetch(`${backendUrlRef.current}/api/autoupdate`, { headers: authHeaderRef.current })
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d) setAutoUpdate(d); })
-      .catch(() => {});
+      .catch(e => console.warn('/api/autoupdate failed:', e?.message || e));
   }, [isConnected]);
 
   const loadConfig = async () => {
@@ -1739,7 +1739,7 @@ const MysteriumDashboard = () => {
           setIsPi(!!d.is_pi);
         }
       })
-      .catch(() => {});
+      .catch(e => console.warn('request failed:', e?.message || e));
   }, [isConnected]);
 
   // 1-second ticker for live "Xs ago" countdown
@@ -2009,7 +2009,7 @@ const MysteriumDashboard = () => {
         setFleetSaveError('');
         setFleetModalOpen(true);
         fetch(`${backendUrlRef.current}/fleet/config`, { headers: authHeaderRef.current })
-          .then(r => r.json()).then(d => setFleetConfigNodes(d.nodes || [])).catch(() => {});
+          .then(r => r.json()).then(d => setFleetConfigNodes(d.nodes || [])).catch(e => console.warn('/fleet/config failed:', e?.message || e));
       };
 
       // v1.4.5: the form used to be filled from the fleet status payload, which
@@ -3496,7 +3496,16 @@ const MysteriumDashboard = () => {
                             <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-400">
                               <span>{countryFlag(s.consumer_country) || '—'}</span>
                               <span className="text-slate-300">{fmtType(s.service_type)}</span>
-                              <span className="font-mono">{s.duration}</span>
+                              <span className="font-mono">
+                                {/* Desktop renders an em dash with an explanation for a
+                                    stale row; the mobile list printed s.duration straight
+                                    through, so a phone showed a duration for a session
+                                    whose real duration was never recorded. Same data,
+                                    two renderers, and only one of them was corrected. */}
+                                {s.is_stale
+                                  ? <span className="text-amber-400/80" title="Orphaned session row — it predates the current node process. Session objects live only in node memory and cannot survive a restart, so this row's final data was never written and never will be (node-side). Real duration and bytes are unknown.">—</span>
+                                  : s.duration}
+                              </span>
                               <span>{formatDataSize(s.data_total)}</span>
                               {s.started_fmt && <span className="text-slate-500">{s.started_fmt}</span>}
                               {s.is_active && <span className="text-emerald-400 text-[10px]">● live</span>}
@@ -4998,7 +5007,7 @@ const EarningsEfficiencyChart = ({ backendUrl, authHeaders }) => {
         });
         setNodePrices(prices);
       })
-      .catch(() => {});
+      .catch(e => console.warn('request failed:', e?.message || e));
   }, [open, days, backendUrl, authHeaders]);
 
   useEffect(() => { load(); }, [load]);
@@ -5626,7 +5635,7 @@ const AnalyticsCard = ({ sessions, backendUrl, authHeaders }) => {
   useEffect(() => {
     if (!backendUrl) return;
     fetch(`${backendUrl}/sessions/db/stats`, { headers: authHeaders || {} })
-      .then(r => r.json()).then(setDbStats).catch(() => {});
+      .then(r => r.json()).then(setDbStats).catch(e => console.warn('/sessions/db/stats failed:', e?.message || e));
   }, [backendUrl]);
 
   const BarRow = ({ label, pct, value, hex }) => (
@@ -7296,7 +7305,7 @@ const WireguardModeSelector = ({ backendUrl, authHeaders, isRunning, onChanged }
     fetch(`${backendUrl}/services/wireguard-mode`, { headers: authHeaders || {} })
       .then(r => r.json())
       .then(d => { if (d.success) setMode(d.mode); })
-      .catch(() => {});
+      .catch(e => console.warn('/services/wireguard-mode failed:', e?.message || e));
   }, [backendUrl]);
 
   const applyMode = async (newMode) => {

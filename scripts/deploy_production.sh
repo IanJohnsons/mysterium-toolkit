@@ -45,10 +45,17 @@ _box() {
 }
 
 # ── Parse args ────────────────────────────────────────────────────────────────
-SETUP_NGINX=true
+# nginx used to be the default because Flask's development server was doing the
+# serving. Since v1.4.4 the backend runs on cheroot with keep-alive and built-in
+# TLS, so putting nginx in front adds a second TLS termination, a second set of
+# timeouts and a second place to look when something breaks — for no gain on a
+# single-node install. It stays available for anyone who wants it in front of
+# several services, but it is no longer what you get by not asking.
+SETUP_NGINX=false
 CUSTOM_PORT=""
 for arg in "$@"; do
     case "$arg" in
+        --with-nginx)  SETUP_NGINX=true ;;
         --no-nginx)    SETUP_NGINX=false ;;
         --port=*)      CUSTOM_PORT="${arg#--port=}" ;;
         --port)        shift; CUSTOM_PORT="$1" ;;
@@ -268,7 +275,7 @@ EOF
         warn "Could not install nginx — toolkit accessible directly on port $DASH_PORT"
     fi
 else
-    echo "Step 3: nginx — skipped (--no-nginx)"
+    echo "Step 3: nginx — skipped (cheroot serves directly; pass --with-nginx to add it)"
 fi
 echo
 

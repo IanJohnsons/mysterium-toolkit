@@ -99,8 +99,12 @@ try:
     _existing = Path('logs/backend.log')
     if _existing.exists() and _existing.stat().st_size > _LOG_MAX_BYTES:
         _existing.replace(Path('logs/backend.log.oversized'))
-except Exception:
-    pass
+except Exception as _rot_e:
+    # Swallowing this let an oversized log keep growing with nobody told — the
+    # exact failure mode this rotation exists to prevent. logger is not
+    # configured yet at this point in startup, so this goes to stderr, which
+    # systemd captures into the journal.
+    print(f'WARNING: could not rotate oversized backend.log: {_rot_e}', file=sys.stderr)
 
 # v1.4.6: and then remove it once it has served its purpose. RotatingFileHandler
 # manages .1, .2 and .3 but knows nothing about .oversized, so the file it sets
@@ -1156,7 +1160,7 @@ def _prune_old_data():
             if deleted:
                 pruned[data_type] = deleted
         except Exception as _pe:
-            logger.debug(f"Retention prune {data_type}: {_pe}")
+            logger.warning(f"Retention prune {data_type}: {_pe}")
     if pruned:
         _last_prune_date = today
         logger.info(f"Daily retention prune (user-configured): {pruned}")
@@ -1407,7 +1411,7 @@ class SessionStore:
                     try:
                         SessionDB.upsert_sessions(items)
                     except Exception as _sdb_e:
-                        logger.debug(f"SessionDB upsert (fetch_all): {_sdb_e}")
+                        logger.warning(f"SessionDB upsert (fetch_all): {_sdb_e}")
                     fetched += len(items)
                     total_pages = data.get('total_pages', 1)
                     cls._total_items[node_url] = data.get('total_items', fetched)
@@ -1497,7 +1501,7 @@ class SessionStore:
                     if live_with_country:
                         SessionDB.backfill_countries(live_with_country)
                 except Exception as _sdb_e:
-                    logger.debug(f"SessionDB upsert (page1): {_sdb_e}")
+                    logger.warning(f"SessionDB upsert (page1): {_sdb_e}")
                 cls._total_items[node_url] = data.get('total_items', 0)
         except Exception as e:
             logger.debug(f"SessionStore: page1 refresh failed for {node_url}: {e}")
@@ -4303,7 +4307,7 @@ class MetricsCollector:
                     total_data_all_mb  = _rollup['data_mb']
                     service_breakdown  = _rollup['service_breakdown']
             except Exception as _rl_e:
-                logger.debug(f"RollupDB totals override skipped: {_rl_e}")
+                logger.warning(f"RollupDB totals override skipped: {_rl_e}")
 
             # ===== COUNTRY BREAKDOWN =====
             # IMPORTANT: scan ALL sessions for countries — not just analytics_sessions.
@@ -4613,7 +4617,7 @@ class MetricsCollector:
             UPTIME_FILE.parent.mkdir(parents=True, exist_ok=True)
             UPTIME_FILE.write_text(json.dumps(pruned))
         except Exception as e:
-            logger.debug(f"uptime log write failed: {e}")
+            logger.warning(f"uptime log write failed: {e}")
         return pruned
 
     @staticmethod
@@ -4643,7 +4647,7 @@ class MetricsCollector:
 
                 IDENTITY_FILE.write_text(identity)
             except Exception as e:
-                logger.debug(f"Identity file write failed: {e}")
+                logger.warning(f"Identity file write failed: {e}")
 
         ts = time.time()
         pings = MetricsCollector._load_uptime_log()
@@ -6151,7 +6155,7 @@ class MetricsCollector:
                         if _psutil_vpn_source:
                             logger.debug(f"TrafficDB: VPN bytes from psutil baseline (vnstat has no myst* data)")
                 except Exception as _tdb_e:
-                    logger.debug(f"TrafficDB snapshot error: {_tdb_e}")
+                    logger.warning(f"TrafficDB snapshot error: {_tdb_e}")
 
                 _tier_slow_cache = {
                     'nodeStatus':     node_status_data,
@@ -6168,21 +6172,21 @@ class MetricsCollector:
                 try:
                     RollupDB.refresh_recent(days=3)
                 except Exception as _roll_e:
-                    logger.debug(f"RollupDB refresh skipped: {_roll_e}")
+                    logger.warning(f"RollupDB refresh skipped: {_roll_e}")
 
                 # Daily retention prune — runs once per calendar day
                 # Keeps databases within configured retention windows silently
                 try:
                     _prune_old_data()
                 except Exception as _prune_e:
-                    logger.debug(f"Retention prune skipped: {_prune_e}")
+                    logger.warning(f"Retention prune skipped: {_prune_e}")
 
                 # Daily data-integrity log — runs once per calendar day, independent
                 # of prune/retention. Append-only evidence of session/consumer counts.
                 try:
                     _write_daily_integrity_log()
                 except Exception as _log_e:
-                    logger.debug(f"Integrity log skipped: {_log_e}")
+                    logger.warning(f"Integrity log skipped: {_log_e}")
 
                 # Dynamic CPU governor + conntrack — adjust based on active sessions
                 # Runs after cache is built so we have the latest session count
@@ -6906,7 +6910,7 @@ def _setup_mysterium_forward_chain():
             logger.info(f"Firewall: removed {removed} duplicate Mysterium FORWARD rules (in-place dedup)")
 
     except Exception as e:
-        logger.debug(f"_setup_mysterium_forward_chain failed (non-fatal): {e}")
+        logger.warning(f"_setup_mysterium_forward_chain failed (non-fatal): {e}")
 
 
 def start_collector():
@@ -6918,7 +6922,7 @@ def start_collector():
     try:
         _setup_mysterium_forward_chain()
     except Exception as e:
-        logger.debug(f"Firewall chain setup skipped: {e}")
+        logger.warning(f"Firewall chain setup skipped: {e}")
 
     # Pre-load earnings snapshot history immediately at startup (main thread).
     # Without this, the first get_deltas() call from the background loop returns
@@ -7961,7 +7965,7 @@ def _f2b_cleanup_legacy_jail_local():
             except Exception:
                 continue
     except Exception as e:
-        logger.debug(f'jail.local migration skipped: {e}')
+        logger.warning(f'jail.local migration skipped: {e}')
 
 
 def _f2b_read_conf(path):
@@ -9345,6 +9349,13 @@ def fleet_node_proxy(node_id, endpoint):
         # does; nothing has to cross the fleet except the request.
         'api/node-update-check', 'api/node-update',
         'services/wireguard-mode',
+        # Both of these are node-bound and both were reached through
+        # getNodeAwareUrl() by cards that were never added here, so the proxy
+        # answered 403 on every fleet node while the card sat empty behind a
+        # silent catch. Found by comparing every node-aware fetch in
+        # Dashboard.jsx against this set rather than one card at a time.
+        'services',
+        'sessions/db/stats',
         'sessions/live',
         'sessions/by-wallet',
         'consumers/top',
@@ -10244,7 +10255,7 @@ def _update_node_active_services(node_url, headers, service_type, enable):
                     logger.debug(f"active-services verified: {new_active}")
         logger.debug(f"active-services updated: {new_active} ({'enabled' if enable else 'disabled'} {service_type})")
     except Exception as e:
-        logger.debug(f"active-services config update skipped: {e}")
+        logger.warning(f"active-services config update skipped: {e}")
 
 
 @app.route('/services/<service_id>/stop', methods=['POST'])
@@ -10540,12 +10551,20 @@ def set_wireguard_mode():
                             dr = requests.delete(f'{node_url}/services/{wg_id}', headers=headers, timeout=10)
                             if dr.status_code not in (200, 202, 204):
                                 return jsonify({'success': False, 'error': f'Stop failed: HTTP {dr.status_code}'}), 200
+                    # Initialised before the try: a failure inside it must not turn
+                    # into a NameError on the very path that reports the failure.
+                    _cfg_written = False
+                    _cfg_error = ''
                     # Clear access-policies via myst CLI (POST /config returns 404 for nested keys)
                     try:
                         import subprocess as _sp
                         _r = _sp.run(['myst', 'config', 'set', 'wireguard.access-policies', ''],
                                 timeout=10, capture_output=True, text=True)
-                        if _r.returncode != 0:
+                        if _r.returncode == 0:
+                            # The CLI is the primary route; the file edit below is
+                            # only a fallback for when it fails.
+                            _cfg_written = True
+                        else:
                             for _cfg_path in ['/etc/mysterium-node/config.toml', '/etc/mysterium-node/config-mainnet.toml']:
                                 try:
                                     import os as _os, re as _re
@@ -10555,10 +10574,27 @@ def set_wireguard_mode():
                                     _c = _re.sub(r'^\s*access-policies\s*=.*$', '', _c, flags=_re.MULTILINE)
                                     _wr = _sp.run(['sudo', '-n', 'tee', _cfg_path],
                                                   input=_c, capture_output=True, text=True, timeout=5)
-                                    if _wr.returncode == 0: break
-                                except Exception: pass
-                    except Exception:
-                        pass
+                                    if _wr.returncode == 0:
+                                        _cfg_written = True
+                                        break
+                                    _cfg_error = (_wr.stderr or '').strip()[:200]
+                                except Exception as _e:
+                                    _cfg_error = str(_e)[:200]
+                    except Exception as _e:
+                        _cfg_error = str(_e)[:200]
+
+                    # Reporting success here regardless of the write was the bug:
+                    # the UI said Public was disabled while the node config still
+                    # carried access-policies, and nothing was logged either.
+                    if not _cfg_written:
+                        logger.error(f'wireguard-mode off: failed to update node config — {_cfg_error}')
+                        return jsonify({
+                            'success': False,
+                            'error': 'Could not write the node config'
+                                     + (f' — {_cfg_error}' if _cfg_error else '')
+                                     + '. The service may still advertise its access policy.',
+                        }), 200
+
                     _off_msg = ('Public disabled via active-services — monitoring and other services keep running.'
                                 if wg_in_active else
                                 'Public service stopped. Existing tunnels persist until natural disconnect.')
@@ -10614,7 +10650,7 @@ def set_wireguard_mode():
                                     logger.info(f"Wrote wireguard.access-policies to {_cfg_path} via sudo tee")
                                     break
                             except Exception as _e:
-                                logger.debug(f"Config write fallback error for {_cfg_path}: {_e}")
+                                logger.warning(f"Config write fallback error for {_cfg_path}: {_e}")
                 except Exception as e:
                     logger.warning(f"myst config set failed: {e}")
 
@@ -10657,7 +10693,7 @@ def set_wireguard_mode():
                             timeout=10,
                         )
                     except Exception as _e:
-                        logger.debug(f"wireguard active-services cycle skipped: {_e}")
+                        logger.warning(f"wireguard active-services cycle skipped: {_e}")
                     label = 'verified consumers only (Mysterium network)' if mode == 'verified' else 'open to everyone'
                     return jsonify({'success': True, 'mode': mode,
                                     'message': f'Public service set to {mode} — {label}. Applied via active-services so the shared subnet (and B2B services) stay up.'}), 200
@@ -12538,8 +12574,11 @@ if __name__ == '__main__':
         _pid_file = Path('logs/.backend.pid')
         _pid_file.parent.mkdir(parents=True, exist_ok=True)
         _pid_file.write_text(str(os.getpid()))
-    except Exception:
-        pass
+    except Exception as _pid_e:
+        # Anything reading this file to find the running backend gets a stale pid
+        # or none at all, and silently failing to write it is how that becomes a
+        # puzzle later instead of a line in the log now.
+        logger.warning(f'Could not write logs/.backend.pid: {_pid_e}')
 
     # Ensure logs/ directory exists
     try:
