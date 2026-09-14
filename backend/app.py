@@ -7978,6 +7978,39 @@ def _f2b_read_conf(path):
     return result
 
 
+def _f2b_effective_defaults():
+    """Merge every [DEFAULT] section fail2ban reads, in its own order.
+
+    fail2ban does not treat [DEFAULT] as file-local: it merges the sections from
+    jail.conf, jail.d/*.conf (alphabetically) and jail.local, and a jail inherits
+    the result unless it sets the key itself. That is how one tool's [DEFAULT]
+    reaches into another tool's jail, so any judgement about a jail has to be
+    made against the merged values rather than the file the jail lives in.
+    """
+    import configparser
+    import glob as _glob
+    merged = {}
+    for fpath in (['/etc/fail2ban/jail.conf']
+                  + sorted(_glob.glob('/etc/fail2ban/jail.d/*.conf'))
+                  + ['/etc/fail2ban/jail.local']):
+        if not os.path.exists(fpath):
+            continue
+        # configparser keeps [DEFAULT] out of sections() and in defaults(), so
+        # reading it through _f2b_read_conf() would always come back empty — and
+        # would look like it worked, because configparser silently copies the
+        # defaults of a file into that same file's sections. That hides the case
+        # this function exists for: one file's [DEFAULT] reaching another file's
+        # jail, which is exactly what fail2ban does.
+        cp = configparser.ConfigParser(strict=False)
+        try:
+            cp.read(fpath)
+        except Exception:
+            continue
+        if cp.defaults():
+            merged.update(dict(cp.defaults()))
+    return merged
+
+
 def _f2b_find_foreign_jail(jail_name):
     """Locate a jail definition that is NOT in the toolkit's own file.
 
@@ -7986,8 +8019,14 @@ def _f2b_find_foreign_jail(jail_name):
     advice: recreating our file in the second case produces two definitions of
     one jail, and fail2ban reads jail.d alphabetically, so the other tool's file
     keeps winning while the toolkit reports success.
+
+    When several files define the same jail, the last one wins — that is the one
+    whose values fail2ban actually applies, so that is the one reported. The full
+    list is returned separately because two files defining one jail is itself
+    worth saying out loud.
     """
     import glob as _glob
+    winner, vals, all_files = None, {}, []
     for fpath in sorted(_glob.glob('/etc/fail2ban/jail.d/*.conf')) + ['/etc/fail2ban/jail.local']:
         if fpath == TOOLKIT_JAIL_FILE or not os.path.exists(fpath):
             continue
@@ -7996,8 +8035,10 @@ def _f2b_find_foreign_jail(jail_name):
         except Exception:
             continue
         if jail_name in data:
-            return fpath, data[jail_name]
-    return None, {}
+            all_files.append(fpath)
+            winner = fpath
+            vals.update(data[jail_name])
+    return winner, vals, all_files
 
 
 def _f2b_health():
@@ -8081,9 +8122,11 @@ def _f2b_health():
         # our file back would create two sections with the same name; fail2ban
         # reads jail.d alphabetically and the other file keeps winning, so the
         # toolkit would report a successful fix that changes nothing.
-        fpath, vals = _f2b_find_foreign_jail('mysterium-dashboard')
+        fpath, vals, all_files = _f2b_find_foreign_jail('mysterium-dashboard')
+        defaults = _f2b_effective_defaults()
         owner = os.path.basename(fpath) if fpath else 'an unknown file'
         result['foreign_jail_file'] = fpath or ''
+        result['foreign_jail_files'] = all_files
         problems = []
 
         # The node's own ports must never end up in a dashboard brute-force jail.
@@ -8097,10 +8140,27 @@ def _f2b_health():
                 'it covers Mysterium port(s) ' + ', '.join(node_ports) +
                 ' — a ban there blocks TequilAPI and the node UI, not just the dashboard')
 
-        # No logpath means the jail inherits DEFAULT, which does not point at the
-        # toolkit log. The jail then loads, reports zero bans, and protects nothing.
-        if not (vals.get('logpath') or '').strip():
-            problems.append('it sets no logpath, so it reads the default log and can never match')
+        # Where the jail reads from is decided by the merged [DEFAULT] unless the
+        # jail sets `backend` itself, so checking the jail's own lines is not
+        # enough. A systemd backend needs a journalmatch; a file backend needs a
+        # logpath. Either one missing leaves a jail that loads, reports zero bans
+        # and protects nothing.
+        backend = (vals.get('backend') or defaults.get('backend') or 'auto').strip().lower()
+        result['effective_backend'] = backend
+        if backend == 'systemd':
+            if not (vals.get('journalmatch') or defaults.get('journalmatch') or '').strip():
+                problems.append(
+                    'it runs on the systemd backend with no journalmatch, so it monitors '
+                    'nothing at all — and the toolkit writes its auth failures to '
+                    'logs/backend.log, not to the journal')
+        elif not (vals.get('logpath') or defaults.get('logpath') or '').strip():
+            problems.append('it sets no logpath on a file backend, so it has nothing to read')
+
+        if len(all_files) > 1:
+            problems.append(
+                'it is defined in ' + str(len(all_files)) + ' files (' +
+                ', '.join(os.path.basename(f) for f in all_files) +
+                ') — the alphabetically last one wins')
 
         result.update(
             status='jail_foreign', healthy=False,
@@ -8109,8 +8169,9 @@ def _f2b_health():
                     + (' Problems: ' + '; '.join(problems) + '.' if problems else ''))
         result['recommendation'] = (
             f'Inspect {fpath or "the file"} and decide who owns this jail. '
-            'Do not re-run setup to recreate the toolkit file — two sections with the same '
-            'name conflict and the alphabetically later file wins.')
+            'Do not re-run setup to recreate the toolkit file while the other definition '
+            'exists — two sections with the same name conflict and the alphabetically '
+            'later file wins.')
     elif not result['jail_file_exists']:
         result.update(status='jail_missing',
                       message='The toolkit jail file is missing. Re-run setup to recreate it.')
@@ -8310,8 +8371,19 @@ def _f2b_write_toolkit_conf(jails_data):
             lines.append(f'port     = {jail["port"]}\n')
         filter_val = jail.get('filter') or jail['name']
         lines.append(f'filter   = {filter_val}\n')
-        if jail.get('logpath') and jail.get('backend_type') != 'systemd':
-            lines.append(f'logpath  = {jail["logpath"]}\n')
+        # Write the backend explicitly, always. fail2ban merges every [DEFAULT]
+        # section it finds across jail.conf, jail.d/*.conf and jail.local, so any
+        # other tool writing `backend = systemd` there silently changes where our
+        # jail reads from. On one VPS ServerGuardian did exactly that: the jail
+        # loaded, monitored no file, had no journalmatch to fall back on, and sat
+        # at zero bans while 22 failed logins were sitting in backend.log. An
+        # omitted setting is an invitation for someone else to decide it.
+        if jail.get('backend_type') == 'systemd':
+            lines.append('backend  = systemd\n')
+        else:
+            lines.append('backend  = auto\n')
+            if jail.get('logpath'):
+                lines.append(f'logpath  = {jail["logpath"]}\n')
         lines.append(f'maxretry = {jail.get("maxretry", 5)}\n')
         lines.append(f'bantime  = {jail.get("bantime", 3600)}\n')
         lines.append(f'findtime = {jail.get("findtime", 600)}\n')
