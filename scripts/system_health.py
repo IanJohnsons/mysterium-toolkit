@@ -1598,6 +1598,29 @@ class PortReachability:
         return False
 
     @staticmethod
+    def _firewall_blocks(ports):
+        """Ports a live firewall has no rule for.
+
+        Listening and reachable are different questions, and only the first was
+        ever asked here. Setup skips the firewall step entirely when none is
+        active — deliberately, since auto-enabling a default-deny firewall can
+        lock someone out of their own machine. But turn ufw on a week later and
+        the dashboard port and the whole Mysterium UDP range go dark while the
+        node stays online and in discovery, carrying nothing. Nothing re-runs
+        setup, so nothing notices.
+
+        Read-only: reads the rule list, never changes it. A firewall we cannot
+        read returns nothing rather than guessing — reporting a port as blocked
+        when it is not would send someone opening holes they do not need.
+        """
+        rc, out, _ = _run(['sudo', '-n', 'ufw', 'status'], timeout=6)
+        if rc != 0:
+            rc, out, _ = _run(['ufw', 'status'], timeout=6)
+        if rc != 0 or 'Status: active' not in out:
+            return []
+        return [p for p in ports if str(p) not in out]
+
+    @staticmethod
     def _get_service_ports():
         """Get active service ports from TequilAPI."""
         ports = []
@@ -1708,6 +1731,23 @@ class PortReachability:
                 })
                 if not listening and result['status'] == 'ok':
                     result['status'] = 'warning'
+
+        # Firewall rules for the ports we just found listening.
+        # A port can listen perfectly and still be unreachable — see
+        # _firewall_blocks for why setup cannot prevent this on its own.
+        _fw_ports = [PortReachability.TEQUILAPI_PORT] + list(svc_ports or [])
+        blocked = PortReachability._firewall_blocks(_fw_ports)
+        if blocked:
+            result['checks'].append({
+                'name': 'Firewall rules',
+                'status': 'warning',
+                'detail': 'active firewall has no rule for port(s) '
+                          + ', '.join(str(p) for p in blocked),
+            })
+            if result['status'] == 'ok':
+                result['status'] = 'warning'
+            result['recommendations'].append(
+                'Run ./start.sh → Security & Upgrades to add the missing rules')
 
         # NAT type
         nat_type = PortReachability._check_nat_type()
@@ -3307,6 +3347,30 @@ class NatChainHealth:
         return 'unknown', last_err
 
     @staticmethod
+    def fix():
+        """Deliberately does nothing.
+
+        Recovery means restarting the node, which drops every live session, and
+        that is the operator's call — not something a health sweep should do on
+        its own. Without this method fix_all() raised AttributeError on every
+        run since v1.4.10, was caught by the handler around it, and pulled
+        overall_success to False no matter how healthy the machine was.
+        """
+        state, _detail = NatChainHealth._chain_state()
+        missing = state == 'absent' and bool(NatChainHealth._tunnel_interfaces())
+        return {
+            'name': 'nat_chain',
+            'actions': [{
+                'action': 'fix',
+                'success': True,
+                'skipped': True,
+                'detail': ('MYST chain missing — restart mysterium-node to rebuild it '
+                           '(drops live sessions)') if missing else 'nothing to do',
+            }],
+            'success': True,
+        }
+
+    @staticmethod
     def scan():
         result = {
             'name': 'nat_chain',
@@ -3437,16 +3501,48 @@ def scan_all():
     }
 
 
+# Subsystems whose fix() writes to the kernel — sysctl, module loading, NIC
+# queues, CPU governor. In a container none of that belongs to this machine:
+# the write either fails or reaches the host, and reporting either as a
+# successful fix is worse than not running it. Two subsystems already checked
+# is_container themselves; this puts the same rule in one place for all of them.
+#
+# Left out on purpose: ServiceWatchdog, PortReachability, PortMapping,
+# ProcessCleanup and NatChainHealth act on this machine's own services and
+# firewall, which are real inside a container.
+KERNEL_LEVEL_SUBSYSTEMS = {
+    'ConntrackHealth', 'CpuLoadBalance', 'KernelTuning', 'NicCoalescing',
+    'NicChecksumOffload', 'RpsWatcher', 'SwapHealth', 'CpuGovernorHealth',
+    'BbrCongestion',
+}
+
+
 def fix_all():
     """Fix all subsystems."""
     results = []
+    profile = get_profile()
+    in_container = profile.get('is_container', False)
     for sub in SUBSYSTEMS:
+        name = getattr(sub, '__name__', 'unknown')
+        if in_container and name in KERNEL_LEVEL_SUBSYSTEMS:
+            results.append({
+                'name': name,
+                'actions': [{
+                    'action': 'fix',
+                    'success': True,
+                    'skipped': True,
+                    'detail': f'skipped — {profile.get("virt_type", "container")} '
+                              f'shares the host kernel',
+                }],
+                'success': True,
+            })
+            continue
         try:
             results.append(sub.fix())
         except Exception as e:
-            logger.error(f"Health fix error in {sub.__name__}: {e}")
+            logger.error(f"Health fix error in {name}: {e}")
             results.append({
-                'name': getattr(sub, '__name__', 'unknown'),
+                'name': name,
                 'actions': [{'action': 'fix', 'success': False, 'error': str(e)[:80]}],
                 'success': False,
             })
@@ -3455,6 +3551,7 @@ def fix_all():
         'subsystems': results,
         'overall_success': all(r.get('success', False) for r in results),
         'fixed_at': datetime.now().isoformat(),
+        'container_skips': in_container,
     }
 
 
@@ -3523,12 +3620,19 @@ def persist_all():
     ct_max = _sysctl_get('net.netfilter.nf_conntrack_max')
     if ct_max:
         sysctl_lines.append(f'net.netfilter.nf_conntrack_max = {ct_max}')
-        # Write modules-load.d so nf_conntrack loads BEFORE sysctl at boot
+        # Write modules-load.d so nf_conntrack loads BEFORE sysctl at boot.
+        # Without it the sysctl below is applied to a module that is not loaded
+        # yet and quietly does nothing after a reboot — the persisted value looks
+        # right in the file and is not in effect.
         try:
-            _run(['sudo', '-n', 'tee', '/etc/modules-load.d/nf_conntrack.conf'],
-                 input_data='nf_conntrack\n')
-        except Exception:
-            pass
+            rc, _out, _err = _run(['sudo', '-n', 'tee', '/etc/modules-load.d/nf_conntrack.conf'],
+                                  input_data='nf_conntrack\n')
+            if rc != 0:
+                logger.warning('Could not write /etc/modules-load.d/nf_conntrack.conf — '
+                               'nf_conntrack may not load at boot, leaving the '
+                               'conntrack_max setting inert')
+        except Exception as e:
+            logger.warning(f'Could not write /etc/modules-load.d/nf_conntrack.conf: {e}')
 
     sysctl_content = '\n'.join(sysctl_lines) + '\n'
 

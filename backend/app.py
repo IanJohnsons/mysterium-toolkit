@@ -1006,6 +1006,56 @@ _last_prune_date = ''         # 'YYYY-MM-DD' — date data was ACTUALLY last del
 _last_prune_check_date = ''  # 'YYYY-MM-DD' — date the daily gate last ran (once-per-day guard only)
 
 
+# The exact dict update.sh wrote into setup.json on every install that lacked
+# one, from an unknown version until v1.4.16. Kept verbatim: the migration below
+# removes a retention block only when it matches this byte for byte, because that
+# is the only way to tell "the toolkit put this here" from "the operator chose
+# these numbers and they happen to look ordinary".
+_UPDATE_SH_WRITTEN_DEFAULTS = {
+    'earnings': 365, 'sessions': 90, 'traffic': 730,
+    'quality': 90, 'system': 30, 'services': 30, 'uptime': 90,
+}
+
+
+def _migrate_unowned_retention():
+    """Remove a retention block the operator never chose.
+
+    setup_wizard.py stopped pre-writing retention defaults in v1.3.3, so that a
+    fresh install keeps everything until someone decides otherwise. update.sh
+    then added them back on every install that had none, which undid that intent
+    without anyone noticing: a Pi that had never had its Data Manager opened
+    carried 30/90/365/730, and the card displayed them as if they were a running
+    schedule.
+
+    Nothing was ever deleted by this — pruning also requires
+    data_retention_enabled, which only a real save sets. But the numbers were
+    shown as fact, so they go.
+
+    Three conditions, all required. No enabled flag, so a configured install is
+    never touched. An exact match with the dict above, so anything the operator
+    edited stays. And the file must be writable, because failing to rewrite it is
+    not worth an exception at startup.
+    """
+    try:
+        cfg_path = Path('config/setup.json')
+        if not cfg_path.exists():
+            return
+        d = json.loads(cfg_path.read_text())
+        if d.get('data_retention_enabled'):
+            return
+        ret = d.get('data_retention')
+        if ret != _UPDATE_SH_WRITTEN_DEFAULTS:
+            return
+        del d['data_retention']
+        cfg_path.write_text(json.dumps(d, indent=2))
+        logger.info('Removed the retention defaults update.sh had written into '
+                    'setup.json — no retention was configured, and nothing was '
+                    'being pruned. All data is kept until you save retention '
+                    'in the Data Manager.')
+    except Exception as e:
+        logger.warning(f'Retention migration skipped: {e}')
+
+
 def _get_retention_config() -> dict:
     """Read data retention config from setup.json. Falls back to defaults."""
     try:
@@ -8050,7 +8100,23 @@ def fail2ban_unban():
         return jsonify({'ok': False, 'error': str(e)}), 200
 
 
-TOOLKIT_JAIL_FILE   = '/etc/fail2ban/jail.d/mysterium-toolkit.conf'  # standalone toolkit jail file (isolated, no user-config conflict)
+# fail2ban reads jail.d/*.conf alphabetically and merges them per key, not per
+# section: a later file overrides only the keys it sets and leaves the rest. That
+# is why the toolkit's own `backend` and `logpath` survive another product's
+# `[DEFAULT] backend = systemd` — an explicit key in the jail always beats a
+# default. But `port` does not survive a later file that sets it, and one node
+# ended up with 4050 and 4449 in its dashboard jail because of exactly that. A
+# ban there blocks TequilAPI and the node UI, and 4050 is where a fleet master
+# queries the node.
+#
+# Hence the zz- prefix: it sorts after sg-, serverguardian.conf and anything
+# else likely to share this directory. It is a race that a file named zzz- would
+# win, but the alternative is editing another product's files, which is exactly
+# what we object to when it is done to us.
+TOOLKIT_JAIL_FILE   = '/etc/fail2ban/jail.d/zz-mysterium-toolkit.conf'
+# Written by versions up to v1.4.17. Removed when the new file is written, but
+# only when it still carries the toolkit's own header — see _f2b_cleanup_legacy_file.
+TOOLKIT_JAIL_FILE_LEGACY = '/etc/fail2ban/jail.d/mysterium-toolkit.conf'
 TOOLKIT_JAIL_LOCAL  = '/etc/fail2ban/jail.local'                     # legacy — only read to clean up the old managed block on migration
 TOOLKIT_FILTER_FILE = '/etc/fail2ban/filter.d/mysterium-dashboard.conf'
 TOOLKIT_BLOCK_START = '# --- Mysterium Toolkit managed jails ---'
@@ -8261,10 +8327,19 @@ def _f2b_health():
                       message='The mysterium-dashboard filter is missing, so fail2ban skips the jail. '
                               'Re-run setup with sudo to recreate it.')
     elif not result['jail_file_exists'] and result['jail_loaded']:
-        # Our file is gone but the jail runs, so another tool defines it. Writing
-        # our file back would create two sections with the same name; fail2ban
-        # reads jail.d alphabetically and the other file keeps winning, so the
-        # toolkit would report a successful fix that changes nothing.
+        # Our file is gone but the jail runs, so another tool defines it.
+        #
+        # Until v1.4.18 this only reported the situation, on the reasoning that
+        # writing our file back would create two definitions of one jail and the
+        # other file would keep winning. That reasoning was half right. fail2ban
+        # merges jail.d per key, not per section: an explicit `backend` and
+        # `logpath` in our file beat another product's `[DEFAULT]`, and only the
+        # keys the later file also sets — `port`, in practice — are lost. With
+        # the zz- prefix even that one is ours again.
+        #
+        # So the file is written back rather than described. A node operator who
+        # has never heard of the other product still gets a working jail, which
+        # is the whole point of the button being in this dashboard.
         fpath, vals, all_files = _f2b_find_foreign_jail('mysterium-dashboard')
         defaults = _f2b_effective_defaults()
         owner = os.path.basename(fpath) if fpath else 'an unknown file'
@@ -8311,13 +8386,15 @@ def _f2b_health():
                     'Settings changed here have no effect on it.'
                     + (' Problems: ' + '; '.join(problems) + '.' if problems else ''))
         result['recommendation'] = (
-            f'Inspect {fpath or "the file"} and decide who owns this jail. '
-            'Do not re-run setup to recreate the toolkit file while the other definition '
-            'exists — two sections with the same name conflict and the alphabetically '
-            'later file wins.')
+            f'Use Repair in the Security tab to write the toolkit jail file. It takes '
+            f'back backend, logpath and port; {owner} keeps whatever other keys it sets.')
+        result['repairable'] = True
     elif not result['jail_file_exists']:
         result.update(status='jail_missing',
-                      message='The toolkit jail file is missing. Re-run setup to recreate it.')
+                      message='The toolkit jail file is missing, so nothing enforces the '
+                              'dashboard rules.')
+        result['recommendation'] = 'Use Repair in the Security tab to write it back.'
+        result['repairable'] = True
     elif not result['jail_loaded']:
         result.update(status='jail_not_loaded',
                       message='The jail files exist but fail2ban has not loaded the jail. '
@@ -8327,6 +8404,67 @@ def _f2b_health():
                       message='fail2ban is running and the mysterium-dashboard jail is active')
 
     return result
+
+
+def _f2b_default_jail():
+    """The jail definition the toolkit owns.
+
+    One place, so the installer, the repair route and any future caller cannot
+    drift apart. `backend` is written explicitly on purpose — fail2ban hands a
+    jail the merged `[DEFAULT]` for every key the jail does not set itself, and
+    another product writing `backend = systemd` there silently moves this jail
+    from the log file to the journal, where the toolkit writes nothing.
+    """
+    return [{
+        'name':     'mysterium-dashboard',
+        'enabled':  True,
+        'port':     str(PORT),
+        'filter':   'mysterium-dashboard',
+        'logpath':  str(Path(__file__).parent.parent / 'logs' / 'backend.log'),
+        'maxretry': 5,
+        'bantime':  86400,
+        'findtime': 600,
+    }]
+
+
+@app.route('/firewall/fail2ban/repair', methods=['POST'])
+@require_auth
+def fail2ban_repair():
+    """Write the toolkit's jail file back and reload fail2ban.
+
+    This is the button behind a jail_missing or jail_foreign status. It writes
+    only the toolkit's own file: no other product's config is touched, and no
+    system jail is created. What it takes back is backend, logpath and port —
+    the three keys that decide whether the jail reads anything at all.
+    """
+    if not FAIL2BAN_MANAGED:
+        return jsonify({
+            'ok': False,
+            'error': 'fail2ban_managed is disabled — the toolkit is read-only for fail2ban',
+        }), 200
+    if not shutil.which('fail2ban-client'):
+        return jsonify({'ok': False, 'error': 'fail2ban is not installed'}), 200
+    try:
+        written = _f2b_write_toolkit_conf(_f2b_default_jail())
+        if not written:
+            return jsonify({'ok': False,
+                            'error': 'Could not write the jail file — check sudo access'}), 200
+        reloaded = _f2b_reload()
+        health = _f2b_health()
+        return jsonify({
+            'ok': True,
+            'reloaded': reloaded,
+            'jail_file': TOOLKIT_JAIL_FILE,
+            'status': health.get('status'),
+            'message': health.get('message'),
+            # A reload that fails leaves the file correct and the daemon stale,
+            # which is worth saying rather than reporting a clean success.
+            'note': None if reloaded else 'File written, but fail2ban did not reload — '
+                                          'restart it to apply.',
+        }), 200
+    except Exception as e:
+        logger.error(f'fail2ban repair failed: {e}')
+        return jsonify({'ok': False, 'error': str(e)}), 500
 
 
 @app.route('/api/fail2ban-health', methods=['GET'])
@@ -8484,6 +8622,38 @@ def _f2b_get_external_jail_names():
     return names
 
 
+def _f2b_cleanup_legacy_file():
+    """Remove the pre-v1.4.18 jail file once the new one is written.
+
+    The file moved from mysterium-toolkit.conf to zz-mysterium-toolkit.conf so it
+    sorts after other products' files and keeps its `port` key. Leaving the old
+    one behind is not harmful — the new file wins — but two files describing one
+    jail is the kind of thing nobody untangles a year later.
+
+    Only removed when it still carries the header the toolkit writes itself. A
+    file without that header was edited by hand, and deleting someone's hand-made
+    config because the filename matches is not ours to do.
+    """
+    old = Path(TOOLKIT_JAIL_FILE_LEGACY)
+    try:
+        if not old.exists():
+            return
+        head = old.read_text(errors='ignore')[:200]
+        if 'Mysterium Toolkit — managed jail file' not in head:
+            logger.info(f'{old} exists but has no toolkit header — left in place')
+            return
+        for prefix in ([], ['sudo', '-n']):
+            r = subprocess.run(prefix + ['rm', '-f', str(old)],
+                               capture_output=True, timeout=5, text=True)
+            if r.returncode == 0:
+                logger.info(f'Removed legacy jail file {old}')
+                return
+        logger.warning(f'Could not remove legacy jail file {old} — '
+                       f'both files now define the same jail; the new one wins')
+    except Exception as e:
+        logger.warning(f'Legacy jail file cleanup failed: {e}')
+
+
 def _f2b_write_toolkit_conf(jails_data):
     """Write toolkit jails to the standalone jail.d file.
 
@@ -8498,6 +8668,8 @@ def _f2b_write_toolkit_conf(jails_data):
 
     # Clean up any legacy block left in jail.local by older versions.
     _f2b_cleanup_legacy_jail_local()
+    # …and the pre-v1.4.18 file this one replaced.
+    _f2b_cleanup_legacy_file()
 
     # Only toolkit-owned jails may be written — never system jails (sshd, recidive…).
     safe_jails = [j for j in jails_data if j.get('name') in TOOLKIT_JAIL_NAMES]
@@ -8546,9 +8718,23 @@ def _f2b_write_toolkit_conf(jails_data):
     return False
 
 def _f2b_apply_live(jails_data):
-    """Apply jail settings immediately to the running fail2ban daemon.
-    Uses fail2ban-client set — no reload needed, takes effect instantly.
+    """Apply jail settings to the running fail2ban daemon.
+
+    `fail2ban-client set` takes effect instantly, without a reload. What it will
+    accept is limited, and that limit matters: bantime, maxretry and findtime go
+    through, `addlogpath` is accepted but does nothing while the jail runs on the
+    systemd backend, and `backend` cannot be read or set at all — fail2ban answers
+    "no get action or not yet implemented". Tested against Fail2Ban v1.1.0.
+
+    So this is a fast path for the tunables, not a repair mechanism. Anything
+    structural — backend, logpath, port — only changes by writing the file and
+    reloading.
+
+    Failures used to be discarded silently, which meant a jail could ignore every
+    setting the dashboard showed with nothing to indicate it. They are collected
+    and returned now.
     """
+    failures = []
     for jail in jails_data:
         name = jail.get('name', '')
         if not name:
@@ -8559,6 +8745,8 @@ def _f2b_apply_live(jails_data):
             ('findtime', str(jail.get('findtime', 600))),
         ]
         for param, val in params:
+            applied = False
+            last = ''
             for prefix in [[], ['sudo', '-n']]:
                 try:
                     r = subprocess.run(
@@ -8566,9 +8754,17 @@ def _f2b_apply_live(jails_data):
                         capture_output=True, timeout=5, text=True
                     )
                     if r.returncode == 0:
+                        applied = True
                         break
-                except Exception:
-                    continue
+                    last = (r.stderr or r.stdout or '').strip()[:80]
+                except Exception as e:
+                    last = str(e)[:80]
+            if not applied:
+                failures.append(f'{name}.{param}: {last or "failed"}')
+    if failures:
+        logger.warning('fail2ban live apply did not take effect for: '
+                       + '; '.join(failures))
+    return failures
 
 
 def _f2b_reload():
@@ -12790,6 +12986,9 @@ if __name__ == '__main__':
         logger.info('Received SIGTERM — shutting down cleanly')
         raise SystemExit(0)
     _signal.signal(_signal.SIGTERM, _handle_sigterm)
+
+    # One-off: drop retention defaults the operator never chose (see the function).
+    _migrate_unowned_retention()
 
     # Write PID file so start.sh menu can detect running backend
     # regardless of whether it was started manually or via systemd

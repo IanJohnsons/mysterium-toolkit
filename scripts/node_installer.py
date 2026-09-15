@@ -492,12 +492,19 @@ def install_script():
     if val.lower() == 'n':
         return False
 
+    ctype = detect_container()
+    if ctype:
+        c(YELLOW, '⚠', f"Running inside a {ctype} container.")
+        c(CYAN, '·', "Kernel headers will be skipped — see the apt install path for why.")
+        print()
+
     print()
     c(CYAN, '→', "Running official install script...")
     print()
     rc, _ = run(
         "curl -sSf https://raw.githubusercontent.com/mysteriumnetwork/node/master/install.sh | sudo bash",
-        timeout=300
+        timeout=300,
+        env=_container_env() if ctype else None
     )
     if rc == 0:
         c(GREEN, '✓', "Install complete.")

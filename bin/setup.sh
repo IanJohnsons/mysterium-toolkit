@@ -1117,18 +1117,46 @@ else
 echo "Step 11: Applying system optimisations for Mysterium node..."
 echo ""
 
-# Detect if we are on a VPS/VM — skip bare-metal-only tweaks
+# Detect the environment — a VM and a container need opposite treatment here.
+#
+# `systemd-detect-virt --quiet` returns 0 for both, and until v1.4.18 that was
+# the whole check: a container was called a "virtual machine" and then told that
+# network tuning "will still be applied". It cannot be. A container shares the
+# host kernel, so sysctl writes either fail or reach out of the container, and
+# /etc/sysctl.d is frequently read-only. A VM has its own kernel and the tuning
+# is exactly right there.
+#
+# This is the same distinction scripts/system_health.py already makes; it simply
+# never reached this file.
 IS_VIRTUAL=false
-if systemd-detect-virt --quiet 2>/dev/null; then
+IS_CONTAINER=false
+VIRT_TYPE=""
+
+if systemd-detect-virt --container --quiet 2>/dev/null; then
+    IS_CONTAINER=true
+    IS_VIRTUAL=true
+    VIRT_TYPE=$(systemd-detect-virt --container 2>/dev/null || echo "container")
+elif grep -qE "docker|lxc|kubepods|containerd" /proc/1/cgroup 2>/dev/null; then
+    IS_CONTAINER=true
+    IS_VIRTUAL=true
+    VIRT_TYPE="container"
+elif systemd-detect-virt --quiet 2>/dev/null; then
     IS_VIRTUAL=true
     VIRT_TYPE=$(systemd-detect-virt 2>/dev/null || echo "vm")
+elif grep -qE "^flags.*hypervisor" /proc/cpuinfo 2>/dev/null; then
+    IS_VIRTUAL=true
+    VIRT_TYPE="vm"
+fi
+
+if [ "$IS_CONTAINER" = "true" ]; then
+    echo -e "  ${CYAN}ℹ Container detected ($VIRT_TYPE)${NC}"
+    echo -e "  ${DIM}  Kernel tuning will be SKIPPED — the kernel belongs to the host.${NC}"
+    echo -e "  ${DIM}  Writing sysctl here either fails or affects the host, and modules${NC}"
+    echo -e "  ${DIM}  cannot be loaded from inside a container.${NC}"
+elif [ "$IS_VIRTUAL" = "true" ]; then
     echo -e "  ${CYAN}ℹ Virtual machine detected ($VIRT_TYPE)${NC}"
     echo -e "  ${DIM}  CPU governor and IRQ tuning will be skipped (not applicable on VPS).${NC}"
     echo -e "  ${DIM}  Network tuning (BBR, buffers, ip_forward) will still be applied.${NC}"
-elif grep -qE "^flags.*hypervisor" /proc/cpuinfo 2>/dev/null; then
-    IS_VIRTUAL=true
-    echo -e "  ${CYAN}ℹ Virtual machine detected (hypervisor flag)${NC}"
-    echo -e "  ${DIM}  Applying VPS-compatible optimisations only.${NC}"
 fi
 echo ""
 echo "  This applies and persists kernel network tuning, BBR congestion"
@@ -1147,14 +1175,33 @@ if [[ "$OPT_REPLY" =~ ^[Yy]$ ]]; then
         echo -e "  ${YELLOW}⚠ Auto-optimisation had issues — applying network fixes manually...${NC}"
 
         # 1. Kernel network tuning (sysctl)
-        sudo sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
-        sudo sysctl -w net.core.rmem_max=134217728 >/dev/null 2>&1 || true
-        sudo sysctl -w net.core.wmem_max=134217728 >/dev/null 2>&1 || true
-        sudo sysctl -w net.ipv4.tcp_congestion_control=bbr >/dev/null 2>&1 || true
-        sudo sysctl -w net.core.default_qdisc=fq >/dev/null 2>&1 || true
+        #
+        # Skipped entirely in a container: the kernel is the host's, so these
+        # either fail or change settings outside this machine's scope.
+        if [ "$IS_CONTAINER" = "true" ]; then
+            echo -e "  ${DIM}  Skipping sysctl — container shares the host kernel${NC}"
+        else
+        # ip_forward is the one that decides whether the node routes a single
+        # byte. Losing it silently produced a node that looked healthy, stayed in
+        # discovery and carried nothing, so it reports rather than shrugs.
+        _sysctl_set() {
+            local key="$1" val="$2"
+            if sudo sysctl -w "${key}=${val}" >/dev/null 2>&1; then
+                return 0
+            fi
+            echo -e "  ${YELLOW}⚠ could not set ${key}=${val}${NC}"
+            return 1
+        }
+        _sysctl_set net.ipv4.ip_forward 1 \
+            || echo -e "  ${RED}    the node will not route traffic without this${NC}"
+        _sysctl_set net.core.rmem_max 134217728
+        _sysctl_set net.core.wmem_max 134217728
+        _sysctl_set net.ipv4.tcp_congestion_control bbr
+        _sysctl_set net.core.default_qdisc fq
+        fi
 
         # Persist sysctl settings
-        sudo mkdir -p /etc/sysctl.d
+        sudo mkdir -p /etc/sysctl.d 2>/dev/null
         cat << 'SYSCTL_EOF' | sudo tee /etc/sysctl.d/99-mysterium-node.conf >/dev/null
 # Mysterium Node Toolkit — network tuning (persisted at setup)
 net.ipv4.ip_forward = 1
@@ -1172,7 +1219,16 @@ vm.swappiness = 60
 # would both contradict that and reserve roughly 150 MB of kernel memory on a node
 # that may never need it. Use the health check to set and persist it.
 SYSCTL_EOF
-        echo -e "  ${GREEN}✓ sysctl settings persisted to /etc/sysctl.d/99-mysterium-node.conf${NC}"
+        # The success line used to print no matter what tee returned. On a
+        # read-only /etc/sysctl.d — common in containers — setup announced that
+        # the tuning was persisted while nothing had been written, and the
+        # settings vanished at the next reboot with no record of why.
+        if [ -s /etc/sysctl.d/99-mysterium-node.conf ]; then
+            echo -e "  ${GREEN}✓ sysctl settings persisted to /etc/sysctl.d/99-mysterium-node.conf${NC}"
+        else
+            echo -e "  ${YELLOW}⚠ could not persist sysctl settings — /etc/sysctl.d not writable${NC}"
+            echo -e "  ${DIM}    the live values above still apply until reboot${NC}"
+        fi
 
         # 2. BBR module
         echo tcp_bbr | sudo tee /etc/modules-load.d/tcp_bbr.conf >/dev/null 2>&1 || true
@@ -1284,8 +1340,16 @@ case "$_FW_TYPE" in
     none|"")
         echo -e "  ${YELLOW}No active firewall detected — required ports are already open.${NC}"
         echo -e "  ${DIM}  Not enabling one automatically (avoids locking out SSH).${NC}"
-        echo -e "  ${DIM}  To secure later: enable ufw/firewalld yourself, then re-run setup${NC}"
-        echo -e "  ${DIM}  to add the node + dashboard rules, or use Tailscale (asked below).${NC}"
+        echo
+        echo -e "  ${YELLOW}Read this before you enable a firewall later:${NC}"
+        echo -e "  ${DIM}  Nothing re-runs this step on its own. Turn on ufw or firewalld${NC}"
+        echo -e "  ${DIM}  after today and the dashboard port and the whole Mysterium UDP${NC}"
+        echo -e "  ${DIM}  range go dark, with no warning anywhere — the node stays online${NC}"
+        echo -e "  ${DIM}  and in discovery while carrying nothing.${NC}"
+        echo
+        echo -e "  ${DIM}  When you do, run either of these to put the rules back:${NC}"
+        echo -e "  ${CYAN}    ./start.sh${NC}${DIM}  →  Security & Upgrades${NC}"
+        echo -e "  ${CYAN}    ./setup.sh${NC}${DIM}  →  re-runs this step${NC}"
         ;;
     *)
         # A firewall is active. Whitelist the real SSH port(s) FIRST — never lock out.
@@ -1762,8 +1826,20 @@ ExecStart=$_VENV_PYTHON backend/app.py
 Restart=on-failure
 RestartSec=10
 StandardInput=null
-StandardOutput=append:$TOOLKIT_DIR/logs/backend.log
-StandardError=append:$TOOLKIT_DIR/logs/backend.log
+# v1.4.18: output goes to the journal as well as the log file.
+#
+# These two lines used to send stdout and stderr only to backend.log. The app
+# also writes that file itself through a RotatingFileHandler, so the file was
+# never the problem — the journal was empty. That matters because fail2ban can
+# be pushed onto its systemd backend by any other product writing
+# `backend = systemd` into a [DEFAULT] section, and a jail reading the journal
+# then finds nothing: 22 failed logins sat in backend.log while the jail
+# reported zero. journald also gives the operator `journalctl -u` for free.
+#
+# The file keeps being written by the logging handler; only the duplicate
+# systemd redirect is dropped.
+StandardOutput=journal
+StandardError=journal
 Environment=HOME=$_REAL_HOME
 
 [Install]

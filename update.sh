@@ -367,8 +367,20 @@ ExecStart=$_VENV_PYTHON backend/app.py
 Restart=on-failure
 RestartSec=10
 StandardInput=null
-StandardOutput=append:$TOOLKIT_DIR/logs/backend.log
-StandardError=append:$TOOLKIT_DIR/logs/backend.log
+# v1.4.18: output goes to the journal as well as the log file.
+#
+# These two lines used to send stdout and stderr only to backend.log. The app
+# also writes that file itself through a RotatingFileHandler, so the file was
+# never the problem — the journal was empty. That matters because fail2ban can
+# be pushed onto its systemd backend by any other product writing
+# `backend = systemd` into a [DEFAULT] section, and a jail reading the journal
+# then finds nothing: 22 failed logins sat in backend.log while the jail
+# reported zero. journald also gives the operator `journalctl -u` for free.
+#
+# The file keeps being written by the logging handler; only the duplicate
+# systemd redirect is dropped.
+StandardOutput=journal
+StandardError=journal
 Environment=HOME=$_REAL_HOME
 
 [Install]
