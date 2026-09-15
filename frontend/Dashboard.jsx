@@ -6833,9 +6833,16 @@ const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, 
       )}
       <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-slate-400">
         <div>Uptime: <span className="text-slate-300 font-semibold">{formatUptime(uptime)}</span></div>
-        {(activeSessions > 0 || clients?.connected > 0) && (
-          <div>Clients: <span className="text-emerald-300 font-semibold">{activeSessions || clients?.connected || 0}</span></div>
-        )}
+        {/* Always rendered, including at zero. This is a two-column grid that
+            fills left to right, so a conditional cell shifts every field after
+            it between the columns — with clients the version block sits left,
+            without them it sits right, and the self-updater badge nested inside
+            it travels along and lands beside a blank half-row. Keeping the cell
+            costs one line and is the more honest reading anyway: a missing row
+            and a row saying zero looked identical. */}
+        <div>Clients: <span className={(activeSessions || clients?.connected)
+          ? "text-emerald-300 font-semibold" : "text-slate-500 font-semibold"}>
+          {activeSessions || clients?.connected || 0}</span></div>
         {nodeVersion && nodeVersion !== 'unknown' && (
           <div>
             <div>Version: <span className="text-slate-300">{nodeVersion}</span></div>

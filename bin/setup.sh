@@ -1798,12 +1798,19 @@ if [ -f "$_SERVICE_FILE" ]; then
     _REAL_HOME=$(getent passwd "$_REAL_USER" | cut -d: -f6)
     mkdir -p "$TOOLKIT_DIR/logs"
     chown -R "$_REAL_USER:$_REAL_USER" "$TOOLKIT_DIR/logs" 2>/dev/null || true
-    # Detect Mysterium node service name — modern installs use 'myst'
+    # Detect Mysterium node service name.
+    #
+    # Two things were wrong here. The list did not contain mysterium-node, which
+    # is what the official installer creates, so on a normal install no node
+    # service was found at all and the toolkit had no ordering dependency. And
+    # the name went into After= without its unit suffix, which systemd refuses
+    # outright: "Failed to add dependency on ..., ignoring: Invalid argument".
+    # Either way the toolkit could start before the node it monitors, silently.
     _MYST_SVC=""
-    for _svc in myst mysterium myst.service; do
+    for _svc in mysterium-node myst mysterium; do
         if systemctl is-enabled "$_svc" 2>/dev/null | grep -qE "enabled|static|disabled" || \
            systemctl is-active "$_svc" 2>/dev/null | grep -qE "active|inactive"; then
-            _MYST_SVC="$_svc"
+            _MYST_SVC="${_svc}.service"
             break
         fi
     done
@@ -1826,18 +1833,6 @@ ExecStart=$_VENV_PYTHON backend/app.py
 Restart=on-failure
 RestartSec=10
 StandardInput=null
-# v1.4.18: output goes to the journal as well as the log file.
-#
-# These two lines used to send stdout and stderr only to backend.log. The app
-# also writes that file itself through a RotatingFileHandler, so the file was
-# never the problem — the journal was empty. That matters because fail2ban can
-# be pushed onto its systemd backend by any other product writing
-# `backend = systemd` into a [DEFAULT] section, and a jail reading the journal
-# then finds nothing: 22 failed logins sat in backend.log while the jail
-# reported zero. journald also gives the operator `journalctl -u` for free.
-#
-# The file keeps being written by the logging handler; only the duplicate
-# systemd redirect is dropped.
 StandardOutput=journal
 StandardError=journal
 Environment=HOME=$_REAL_HOME

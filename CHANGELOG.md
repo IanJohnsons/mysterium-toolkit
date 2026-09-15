@@ -2,6 +2,13 @@
 All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.4.19
+
+Two faults in the systemd unit, one of them introduced the release before.
+
+- fix (comments landed inside the generated unit, and were executed on the way there): v1.4.18 added an explanatory note above the StandardOutput lines, but those lines sit inside a `<< UNIT_EOF` heredoc whose delimiter is unquoted. Bash therefore expands everything in it, so the two backtick pairs in that comment ran as commands during every update — producing "backend: command not found" and "journalctl: option requires an argument" — and the comment text itself was written into the service file. systemd tolerates the stray `#` lines and the redirect worked, so nothing failed outright; it was noise in a file nobody reads until something breaks. The note moved out of the heredoc. A sweep of every heredoc in the shell scripts found no other unquoted comment of this kind — the remaining substitutions are escaped on purpose
+- fix (the toolkit could start before the node it monitors): `After=` was written without the unit suffix, which systemd refuses outright — `systemd-analyze verify` reports "Failed to add dependency on mysterium-node, ignoring: Invalid argument". The ordering was silently absent on every install. Worse in `bin/setup.sh`, where the detection list contained `myst` and `mysterium` but not `mysterium-node`, which is the name the official installer creates: on a normal install no node service was matched at all. Both scripts now search the same three names and append `.service`
+
 ## v1.4.18
 
 The fail2ban button now works without the other product installed, and a container is no longer told its kernel tuning was applied.

@@ -342,9 +342,17 @@ if [ -f "$_SERVICE_FILE" ]; then
 [ "$(stat -c '%U' "$TOOLKIT_DIR/logs" 2>/dev/null)" = "root" ] && $SUDO chown -R "$_REAL_USER:$_REAL_USER" "$TOOLKIT_DIR/logs" 2>/dev/null || true
 
     _MYST_SVC=""
+    # systemd needs the unit suffix here. Written without it, the dependency is
+    # refused outright — `systemd-analyze verify` reports "Failed to add
+    # dependency on mysterium-node, ignoring: Invalid argument" — and the toolkit
+    # is then free to start before the node it monitors, with nothing in the
+    # startup output to say so.
+    #
+    # The loop below matches on a substring of `systemctl list-units`, so it also
+    # matched the bare name; appending .service makes the result usable.
     for _svc in mysterium-node myst mysterium; do
-        if systemctl list-units --all --no-legend 2>/dev/null | grep -q "^.*${_svc}"; then
-            _MYST_SVC="$_svc"
+        if systemctl list-units --all --no-legend 2>/dev/null | grep -q "^.*${_svc}.service"; then
+            _MYST_SVC="${_svc}.service"
             break
         fi
     done
@@ -367,18 +375,6 @@ ExecStart=$_VENV_PYTHON backend/app.py
 Restart=on-failure
 RestartSec=10
 StandardInput=null
-# v1.4.18: output goes to the journal as well as the log file.
-#
-# These two lines used to send stdout and stderr only to backend.log. The app
-# also writes that file itself through a RotatingFileHandler, so the file was
-# never the problem — the journal was empty. That matters because fail2ban can
-# be pushed onto its systemd backend by any other product writing
-# `backend = systemd` into a [DEFAULT] section, and a jail reading the journal
-# then finds nothing: 22 failed logins sat in backend.log while the jail
-# reported zero. journald also gives the operator `journalctl -u` for free.
-#
-# The file keeps being written by the logging handler; only the duplicate
-# systemd redirect is dropped.
 StandardOutput=journal
 StandardError=journal
 Environment=HOME=$_REAL_HOME
