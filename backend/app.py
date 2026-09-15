@@ -12559,11 +12559,20 @@ def save_data_retention():
         cfg_path.write_text(json.dumps(current, indent=2))
 
         logger.info(f"data/retention updated: {accepted}")
+        _active = _get_user_retention_config()
         return jsonify({
             'success':  True,
             'saved':    accepted,
             'rejected': rejected,
             'retention': _get_retention_config(),
+            # Saving is what sets data_retention_enabled, so this response is the
+            # moment the answer changes from "nothing is pruned" to "these windows
+            # apply". Leaving it out of the reply meant the card kept showing
+            # "Not pruning" next to its own "Saved" confirmation until the page
+            # was reloaded — two contradictory messages side by side, which reads
+            # as a save that did not take.
+            'enabled':  bool(_active),
+            'active':   _active,
         }), 200
     except Exception as e:
         logger.error(f'data/retention POST error: {e}')

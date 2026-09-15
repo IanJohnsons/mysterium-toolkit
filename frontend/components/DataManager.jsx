@@ -60,7 +60,11 @@ const RetentionEditor = ({ base, authHeaders, retention, onSaved }) => {
       const d = await res.json();
       if (d.success) {
         setSaveStatus('ok');
-        if (d.retention) onSaved(d.retention);
+        // Pass the whole reply through: saving is what flips
+        // data_retention_enabled, so the parent needs the new enabled flag as
+        // well as the values. Forwarding only `retention` left the card showing
+        // "Not pruning" beside its own "Saved" confirmation.
+        if (d.retention) onSaved(d);
         setTimeout(() => setSaveStatus(null), 4000);
       } else {
         setSaveStatus('error');
@@ -442,7 +446,12 @@ const DataManagerInner = ({ nodeId, isFleetMode = false, authHeaders = {} }) => 
           base={isFleetMode ? `/fleet/node/${nodeId}/proxy` : ''}
           authHeaders={authHeaders}
           retention={retention}
-          onSaved={(updated) => setRetention(r => ({ ...r, retention: updated }))}
+          onSaved={(reply) => setRetention(r => ({
+            ...r,
+            retention: reply.retention,
+            enabled:   reply.enabled,
+            active:    reply.active,
+          }))}
         />
       )}
     </div>

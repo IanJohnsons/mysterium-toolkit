@@ -2,6 +2,12 @@
 All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.4.17
+
+A save that worked, reported by a card that said it had not.
+
+- fix (the retention card showed "Not pruning" beside its own "Saved" confirmation): v1.4.16 added an `enabled` flag to `GET /data/retention` so the card could stop claiming a daily prune on machines that prune nothing. The POST reply was left as it was — and saving is the exact moment that flag changes, since writing retention is what sets `data_retention_enabled`. The values were stored correctly every time; the card simply kept the stale flag until the page was reloaded, so it displayed a success message and a contradicting status line at once. That reads as a save that did not take, which is how it was reported. The POST now returns `enabled` and `active` alongside the saved values, and the editor forwards the whole reply to the parent instead of the values alone
+
 ## v1.4.16
 
 Retention that was never running, overhead that was never overhead, and an installer that could take a machine's package manager with it.
