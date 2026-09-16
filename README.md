@@ -1,6 +1,6 @@
 # Mysterium Node Toolkit
 
-![Version](https://img.shields.io/badge/version-1.4.24-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Version](https://img.shields.io/badge/version-1.4.25-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 
 A monitoring and management dashboard for [Mysterium Network](https://mysterium.network) VPN node operators. It runs on your own machine: no account, no cloud backend, no telemetry. Your session history, earnings and consumer data live in local SQLite files. A handful of public APIs are contacted for prices, node quality and update checks — every one of them is listed under [Privacy](#privacy).
 
@@ -91,6 +91,19 @@ Fleet traffic carries API keys, so send it over a private network. [Tailscale](d
 ```
 
 Never run `update.sh` with sudo. It repairs file ownership itself, and running it as root is what breaks that.
+
+**The toolkit updates itself.** A systemd timer checks hourly whether the VERSION
+on your branch differs from the installed one, and if it does it pulls and
+restarts the service. It follows the branch the install is checked out on, so an
+install on `main` only moves when a release lands there. What it decided is in
+the journal:
+
+```bash
+journalctl -u mysterium-toolkit-update -n 20
+```
+
+Turn it off with the auto-update toggle in the dashboard header, or disable the
+timer with `sudo systemctl disable --now mysterium-toolkit-update.timer`.
 
 **Autostart:** `./start.sh` → option 8 (Type 1 and 2) or option 6 (Type 3). This installs a systemd service that starts after the node service and restarts on crash. On a lightweight install, start the backend manually once and check that it runs before enabling autostart.
 

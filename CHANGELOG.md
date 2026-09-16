@@ -4,6 +4,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.25
+
+- docs: reviewed all 29 in-app Help sections against how the toolkit actually behaves, rather than correcting them one at a time when a change happened to touch them. Four were wrong: Data Management still said databases are pruned automatically every day, which has not been true since v1.4.16 — nothing is deleted until you save retention once; the Security tab pointed at CLI menu "option 9", a number that shifts with install type; Setup did not mention that kernel tuning is skipped in a container; and Updating the Toolkit described the fleet button and manual runs but never the hourly timer that updates the machine on its own.
+- docs: README now documents automatic updates — that a timer runs hourly, that it follows the branch the install is on, where to read what it decided, and how to switch it off.
+
 ## v1.4.24
 
 - fix: the TLS panel in Add/Edit Node explains what applies to the address you typed. It told everyone the certificate "has to be pinned" and warned about man-in-the-middle attacks regardless — including on `localhost`, where there is no network to attack. It now distinguishes loopback, Tailscale, private network and public addresses, and reserves the warning for the case where it is true. Behaviour is unchanged; only the text and its emphasis.
