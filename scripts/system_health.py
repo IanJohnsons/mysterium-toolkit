@@ -1618,7 +1618,49 @@ class PortReachability:
             rc, out, _ = _run(['ufw', 'status'], timeout=6)
         if rc != 0 or 'Status: active' not in out:
             return []
-        return [p for p in ports if str(p) not in out]
+        # Only ports that listen on a reachable address. A port bound to
+        # 127.0.0.1 — TequilAPI is — takes no traffic from outside whether ufw
+        # has a rule for it or not, so reporting it as blocked sends the operator
+        # opening a hole that changes nothing today and stands ready for the day
+        # the service binds to 0.0.0.0. The first version of this check did
+        # exactly that, and contradicted advice given the day before to remove
+        # that very rule.
+        external = PortReachability._externally_bound(ports)
+        return [p for p in external if str(p) not in out]
+
+    @staticmethod
+    def _externally_bound(ports):
+        """Of the given ports, those listening on something other than loopback.
+
+        Returns every port unchanged when `ss` cannot be read: guessing that a
+        port is loopback-only would hide a genuinely exposed one, and that is the
+        more expensive mistake of the two.
+        """
+        rc, out, _ = _run(['ss', '-tlnH'], timeout=6)
+        if rc != 0 or not out:
+            return list(ports)
+        # A service commonly listens twice — the node UI binds both 127.0.0.1 and
+        # the LAN address. Tracking "is it external" per line lets the last line
+        # decide, which is whichever order ss happened to print. Collect the
+        # externally bound ports instead, and treat anything never seen there as
+        # loopback-only.
+        external_ports = set()
+        known_ports = set()
+        for line in out.splitlines():
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+            addr, _, port = parts[3].rpartition(':')
+            if not port.isdigit():
+                continue
+            port = int(port)
+            known_ports.add(port)
+            if addr.strip('[]') not in ('127.0.0.1', '::1'):
+                external_ports.add(port)
+        # A port we never saw listening at all is left in: the caller found it
+        # some other way, and silently dropping it would hide a real gap.
+        return [p for p in ports
+                if int(p) in external_ports or int(p) not in known_ports]
 
     @staticmethod
     def _get_service_ports():
@@ -1746,8 +1788,14 @@ class PortReachability:
             })
             if result['status'] == 'ok':
                 result['status'] = 'warning'
-            result['recommendations'].append(
-                'Run ./start.sh → Security & Upgrades to add the missing rules')
+            # The recommendation used to point at ./start.sh → Security &
+            # Upgrades. That screen cannot do it: the dashboard reports
+            # "ufw command failed — check sudo permissions" because the backend
+            # runs without the privileges ufw needs. Sending someone to a place
+            # that refuses the job is worse than saying nothing, so the exact
+            # command goes here instead.
+            result['recommendations'].extend(
+                f'sudo ufw allow {p}/tcp' for p in blocked)
 
         # NAT type
         nat_type = PortReachability._check_nat_type()

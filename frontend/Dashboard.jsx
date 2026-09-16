@@ -594,7 +594,10 @@ const SecurityPage = ({ backendUrl, localUrl, authHeaders, firewallData }) => {
         if (d.ok) setF2bInfo({ external: d.external_jails || [], jailFile: d.jail_file,
                                status: d.status, repairable: d.repairable });
         setF2bLoading(false);
-      }).catch(()=>{ setF2bJails([]); setF2bLoading(false); });
+      }).catch(e=>{
+        setF2bJails([]); setF2bLoading(false);
+        console.warn('fail2ban/jails load failed:', e?.message || e);
+      });
   };
 
   const loadUfw = () => {
@@ -642,7 +645,10 @@ const SecurityPage = ({ backendUrl, localUrl, authHeaders, firewallData }) => {
     const ep = f2bRunning ? 'stop' : 'start';
     fetch(`${backendUrl}/firewall/fail2ban/${ep}`, { method:'POST', headers: authHeaders||{} })
       .then(r=>r.json()).then(d=>{ setF2bStarting(false); if(d.ok){ setTimeout(loadJails, 1500); } else setF2bMsg({ok:false,text:d.error}); })
-      .catch(()=>{ setF2bStarting(false); });
+      .catch(e=>{
+        setF2bStarting(false);
+        setF2bMsg({ok:false, text:`Could not reach fail2ban: ${e?.message || e}`});
+      });
   };
 
   const saveJails = (jails) => {
@@ -654,7 +660,17 @@ const SecurityPage = ({ backendUrl, localUrl, authHeaders, firewallData }) => {
       setF2bSaving(false);
       setF2bMsg(d.ok?{ok:true,text:d.message}:{ok:false,text:d.error});
       if(d.ok){ setEditJail(null); setShowAddJail(false); loadJails(); }
-    }).catch(()=>{ setF2bSaving(false); setF2bMsg({ok:false,text:'Request failed'}); });
+    }).catch(e=>{
+      setF2bSaving(false);
+      // "Request failed" said nothing about which failure it was. A save that
+      // reached the backend and was written can still land here — a broken
+      // connection, or a reply that was not JSON — and then the screen reports a
+      // failure over a change that succeeded. That happened on a VPS: the jail
+      // file held the new values while the card showed an error.
+      setF2bMsg({ok:false, text:`Save request failed: ${e?.message || e}. `
+                               + `The change may still have been written — reload to check.`});
+      console.warn('fail2ban/jails save failed:', e);
+    });
   };
 
   const unban = (jail, ip) => {
