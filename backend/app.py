@@ -9710,7 +9710,6 @@ def fleet_node_proxy(node_id, endpoint):
         # Dashboard.jsx against this set rather than one card at a time.
         'services',
         'sessions/db/stats',
-        'sessions/live',
         'sessions/by-wallet',
         'consumers/top',
         'export/sessions',

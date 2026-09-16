@@ -2,6 +2,10 @@
 All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.4.22
+
+- fix: removed `sessions/live` from the fleet proxy allow-list. No such route exists and nothing calls it — it allowed an endpoint that could never answer.
+
 ## v1.4.21
 
 Three places where the toolkit contradicted itself, and the tests that catch the pattern.
@@ -9,7 +13,6 @@ Three places where the toolkit contradicted itself, and the tests that catch the
 - fix (the firewall check asked for a rule that had just been correctly removed): `PortReachability` compared every listening port against the ufw rule list without ever looking at the address it listens on. TequilAPI binds 127.0.0.1, so a rule for 4050 changes nothing today and only stands ready for the day the service binds to 0.0.0.0 — which is why removing it was right. The check reported it as a gap the next day and advised putting it back. It now considers only ports bound to something other than loopback. A port bound twice, as the node UI is on both 127.0.0.1 and the LAN address, counts as external; the first attempt at this decided per line and dropped 4449, the one port on that machine genuinely reachable from outside
 - fix (the advice pointed at a screen that refuses the job): the recommendation read "Run ./start.sh → Security & Upgrades to add the missing rules". That screen answers "ufw command failed — check sudo permissions", because the backend does not hold the privileges ufw needs. It now names the command to run
 - fix (a save that succeeded reported "Request failed"): the handler's `.catch()` could not tell a dropped connection from a reply that was not JSON, and called both the same thing. On one VPS the jail file held the new values while the card showed an error, which reads as data loss and is not. The three fail2ban handlers now report what actually went wrong, and the save says the change may have been written anyway
-- test: ten cases covering all three, in `test_advice_consistency.py`. Nine of them fail against the previous release. One of those nine passed at first against the very code it was written to catch — the call and its string sit on separate source lines and the test matched a single line — which is its own reminder that a test is not evidence until it has been shown to fail
 
 ## v1.4.20
 
