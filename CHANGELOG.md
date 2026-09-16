@@ -2,6 +2,14 @@
 All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## v1.4.20
+
+The Security screen said no jails were configured on a machine running eleven.
+
+- fix (the jail list called an empty list "no jails configured"): the screen deliberately shows only jails the toolkit owns — offering to edit another product's config would invite people to try, and the toolkit does not write files it did not create. But on a VPS where its own file was missing, that filter left nothing and the box announced that no jails existed, while fail2ban was running eleven of them including one named `mysterium-dashboard`. The list is unchanged; it now states that the toolkit has no jail of its own here, and names how many are managed elsewhere without offering to touch them
+- feat (a button for the repair route): `POST /firewall/fail2ban/repair` was added in v1.4.18 and never wired to anything. The health check reported `repairable: true` and the screen gave no way to act on it. There is a button now, shown only when the health check says repair would help, and it writes the toolkit's own file and reloads fail2ban — nothing else is touched
+- docs (the Security texts described a layout from v1.3.x): five places still told the operator that the toolkit writes to `jail.local` and that custom jails belong outside "the toolkit block". Neither has been true since the jail moved to its own file in `jail.d/`. They now name the real file, explain that anything outside it is never read or written, and say why the name starts with `zz-` — fail2ban merges `jail.d/` alphabetically per key, so a file sorting later would override the port this jail bans on
+
 ## v1.4.19
 
 Two faults in the systemd unit, one of them introduced the release before.

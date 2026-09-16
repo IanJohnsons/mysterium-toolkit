@@ -559,6 +559,11 @@ const ConsumerRow = ({ c, onHistory }) => (
 
 const SecurityPage = ({ backendUrl, localUrl, authHeaders, firewallData }) => {
   const [f2bJails, setF2bJails] = useState(null);
+  // What the jail list deliberately leaves out, so an empty list can explain
+  // itself instead of claiming nothing is configured.
+  const [f2bInfo, setF2bInfo] = useState({});
+  const [f2bRepairing, setF2bRepairing] = useState(false);
+  const [f2bRepairMsg, setF2bRepairMsg] = useState('');
   const [f2bLoading, setF2bLoading] = useState(false);
   const [f2bSaving, setF2bSaving] = useState(false);
   const [f2bMsg, setF2bMsg] = useState(null);
@@ -586,6 +591,8 @@ const SecurityPage = ({ backendUrl, localUrl, authHeaders, firewallData }) => {
         setF2bInstalled(true);
         setF2bRunning(d.running !== false);
         setF2bJails(d.ok ? d.jails : []);
+        if (d.ok) setF2bInfo({ external: d.external_jails || [], jailFile: d.jail_file,
+                               status: d.status, repairable: d.repairable });
         setF2bLoading(false);
       }).catch(()=>{ setF2bJails([]); setF2bLoading(false); });
   };
@@ -613,6 +620,21 @@ const SecurityPage = ({ backendUrl, localUrl, authHeaders, firewallData }) => {
     fetch(`${localUrl}/system/fail2ban/install`, { method:'POST', headers: authHeaders||{} })
       .then(r=>r.json()).then(d=>{ setInstalling(false); if(d.ok){ loadJails(); } else setF2bMsg({ok:false,text:d.error}); })
       .catch(()=>{ setInstalling(false); setF2bMsg({ok:false,text:'Install failed'}); });
+  };
+
+  const repairF2b = () => {
+    // The route existed since v1.4.18 with nothing to trigger it: the health
+    // check reported repairable and the screen offered no way to act on it.
+    setF2bRepairing(true);
+    setF2bRepairMsg('');
+    fetch(`${backendUrl}/firewall/fail2ban/repair`, { method:'POST', headers: authHeaders||{} })
+      .then(r=>r.json()).then(d=>{
+        setF2bRepairing(false);
+        setF2bRepairMsg(d.ok ? (d.note || 'Jail written and fail2ban reloaded.')
+                             : (d.error || 'Repair failed'));
+        if (d.ok) setTimeout(loadJails, 1500);
+      })
+      .catch(e => { setF2bRepairing(false); setF2bRepairMsg(e?.message || 'Repair failed'); });
   };
 
   const toggleF2b = () => {
@@ -714,8 +736,46 @@ const SecurityPage = ({ backendUrl, localUrl, authHeaders, firewallData }) => {
           ) : (
             <div className="space-y-2">
               {(f2bJails||[]).length === 0 && (
-                <div className="p-3 border border-dashed border-slate-700 rounded text-[10px] text-slate-500 text-center">
-                  No jails configured yet. Add a custom jail below or reload after configuring fail2ban.
+                <div className="p-3 border border-dashed border-slate-700 rounded text-[10px] text-slate-500 space-y-2">
+                  {/* "No jails configured" was true of the toolkit's own file and
+                      false of the machine: one VPS ran eleven jails, one of them
+                      named mysterium-dashboard, while this box claimed none
+                      existed. The list still shows only what the toolkit owns —
+                      offering to edit another product's config would be worse —
+                      but it now says what it is leaving out. */}
+                  <div className="text-center">
+                    The toolkit has no jail of its own on this machine.
+                  </div>
+                  {(f2bInfo.external || []).length > 0 && (
+                    <div className="text-center text-slate-600">
+                      fail2ban is running {f2bInfo.external.length} jail
+                      {f2bInfo.external.length === 1 ? '' : 's'} managed elsewhere
+                      ({f2bInfo.external.slice(0, 6).join(', ')}
+                      {f2bInfo.external.length > 6 ? '…' : ''}) — those are not shown
+                      here and are never modified.
+                    </div>
+                  )}
+                  {f2bInfo.repairable && (
+                    <div className="text-center pt-1">
+                      <button
+                        onClick={repairF2b}
+                        disabled={f2bRepairing}
+                        className={`px-3 py-1 rounded text-[10px] font-semibold border ${
+                          f2bRepairing
+                            ? 'border-slate-700 text-slate-600'
+                            : 'border-emerald-600/50 text-emerald-300 hover:bg-emerald-600/10'
+                        }`}>
+                        {f2bRepairing ? 'Writing…' : 'Create the toolkit jail'}
+                      </button>
+                      <div className="text-slate-600 mt-1">
+                        Writes {f2bInfo.jailFile || 'the toolkit jail file'} and reloads fail2ban.
+                        Only the toolkit's own file is touched.
+                      </div>
+                    </div>
+                  )}
+                  {f2bRepairMsg && (
+                    <div className="text-center text-slate-400">{f2bRepairMsg}</div>
+                  )}
                 </div>
               )}
               {(f2bJails||[]).map(jail => (
@@ -818,7 +878,7 @@ const SecurityPage = ({ backendUrl, localUrl, authHeaders, firewallData }) => {
               ))}
 
               <div className="mt-2 p-3 border border-dashed border-slate-700/50 rounded text-[10px] text-slate-600">
-                💡 The toolkit only manages the <code className="text-slate-500">mysterium-dashboard</code> jail. To add custom jails, edit <code className="text-slate-500">/etc/fail2ban/jail.local</code> manually — outside the toolkit block. The toolkit will never touch them.
+                💡 The toolkit only manages the <code className="text-slate-500">mysterium-dashboard</code> jail, in its own file <code className="text-slate-500">/etc/fail2ban/jail.d/zz-mysterium-toolkit.conf</code>. Add other jails wherever you like — <code className="text-slate-500">jail.local</code> or another file in <code className="text-slate-500">jail.d/</code> — the toolkit never reads or writes them.
               </div>
             </div>
           )}
@@ -831,8 +891,8 @@ const SecurityPage = ({ backendUrl, localUrl, authHeaders, firewallData }) => {
               <div className="text-xs font-semibold text-slate-300 mb-0.5">Toolkit manages fail2ban</div>
               <p className="text-[10px] text-slate-500">
                 {f2bManaged
-                  ? 'Toolkit can write to jail.local — disable if fail2ban is already managed by another tool on this system.'
-                  : 'Read-only mode — toolkit displays jails but never writes to jail.local.'}
+                  ? 'Toolkit writes its own file in jail.d/ — disable if you want it read-only.'
+                  : 'Read-only mode — toolkit displays jails but writes nothing.'}
               </p>
             </div>
             <button
@@ -4728,9 +4788,9 @@ const MysteriumDashboard = () => {
 
                     <strong className="text-slate-300">fail2ban</strong> — protects port 5000 against brute force login attempts. The toolkit manages one jail: <code className="bg-slate-800 px-1 rounded">mysterium-dashboard</code>. No other jails are created or touched — existing jails from other tools (sshd, nginx, etc.) are shown read-only and never modified.<br/><br/>
 
-                    <strong className="text-slate-300">Toolkit managed toggle</strong> — if another tool manages fail2ban on this system, turn this OFF. The toolkit then becomes read-only: shows jail status but never writes to <code className="bg-slate-800 px-1 rounded">jail.local</code>.<br/><br/>
+                    <strong className="text-slate-300">Toolkit managed toggle</strong> — turn this OFF to make the toolkit read-only: it shows jail status but writes nothing. Leaving it on is safe even when another tool manages fail2ban, because the toolkit only ever writes its own file.<br/><br/>
 
-                    <strong className="text-slate-300">Custom jails</strong> — the toolkit only manages <code className="bg-slate-800 px-1 rounded">mysterium-dashboard</code>. To add other jails (sshd, nginx, etc.), edit <code className="bg-slate-800 px-1 rounded">/etc/fail2ban/jail.local</code> manually and place your jails <em>outside</em> the toolkit block. The toolkit block is clearly marked — everything outside it is never touched.<br/><br/>
+                    <strong className="text-slate-300">Custom jails</strong> — the toolkit manages only <code className="bg-slate-800 px-1 rounded">mysterium-dashboard</code>, and keeps it in its own file <code className="bg-slate-800 px-1 rounded">/etc/fail2ban/jail.d/zz-mysterium-toolkit.conf</code>. Add other jails anywhere else; nothing outside that one file is read or written. The name starts with zz- deliberately: fail2ban merges <code className="bg-slate-800 px-1 rounded">jail.d/</code> alphabetically per key, so a file sorting later would otherwise override the port this jail bans on.<br/><br/>
 
                     <strong className="text-slate-300">Tailscale</strong> — creates a private network between your devices. Once connected, the dashboard is reachable via your Tailscale IP (<code className="bg-slate-800 px-1 rounded">100.x.x.x:5000</code>) without exposing it to the internet. Install via CLI menu → option 9 → Tailscale, or run <code className="bg-slate-800 px-1 rounded">curl -fsSL https://tailscale.com/install.sh | sh</code>. After connecting, the Security tab shows your Tailscale IP and optional UFW commands to block port 5000 from the public internet — only do this after confirming Tailscale works. Note that the CLI menu numbering shifts with your install type — look for <em>Security &amp; Upgrades</em>.<br/><br/>
 

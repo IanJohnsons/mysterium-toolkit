@@ -8789,8 +8789,15 @@ def fail2ban_get_jails():
         import shutil
         if not shutil.which('fail2ban-client'):
             return jsonify({'ok': False, 'error': 'fail2ban not installed'}), 200
-        # Only return toolkit-managed jails — external jails (ServerGuardian etc.) are not shown
-        jails = [j for j in _f2b_all_jails() if j.get('is_toolkit', False)]
+        # Only toolkit-managed jails are listed: the toolkit does not edit another
+        # product's config and showing rows it cannot change would invite people
+        # to try. But reporting an empty list as "no jails configured" was its own
+        # kind of wrong — one VPS ran eleven jails, including one named
+        # mysterium-dashboard, while this screen said none existed. The count of
+        # what is deliberately not shown goes back with the list.
+        _all_jails = _f2b_all_jails()
+        jails = [j for j in _all_jails if j.get('is_toolkit', False)]
+        _external = [j.get('name', '') for j in _all_jails if not j.get('is_toolkit', False)]
         # Check if running
         running = False
         try:
@@ -8860,7 +8867,17 @@ def fail2ban_get_jails():
             else:
                 jail['active_bans'] = 0; jail['total_bans'] = 0; jail['banned_ips'] = []
                 jail['currently_failed'] = 0; jail['total_failed'] = 0
-        return jsonify({'ok': True, 'jails': jails, 'running': running}), 200
+        _health = _f2b_health()
+        return jsonify({
+            'ok': True,
+            'jails': jails,
+            'running': running,
+            # What the screen is not showing, so an empty list can say why.
+            'external_jails': _external,
+            'jail_file': TOOLKIT_JAIL_FILE,
+            'status': _health.get('status'),
+            'repairable': bool(_health.get('repairable')),
+        }), 200
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 200
 
@@ -9672,7 +9689,8 @@ def fleet_node_proxy(node_id, endpoint):
         'node/config/current', 'node/config/set', 'node/config/reset',
         'firewall', 'firewall/cleanup',
         'firewall/fail2ban/unban', 'firewall/fail2ban/jails',
-        'firewall/fail2ban/reload', 'firewall/fail2ban/start', 'firewall/fail2ban/stop',
+        'firewall/fail2ban/reload',
+        'firewall/fail2ban/repair', 'firewall/fail2ban/start', 'firewall/fail2ban/stop',
         'firewall/ufw/add', 'firewall/ufw/delete',
         'system/fail2ban/install',
         'data/stats', 'data/delete', 'data/retention',
