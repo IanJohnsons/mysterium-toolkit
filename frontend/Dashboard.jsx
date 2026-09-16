@@ -2140,6 +2140,25 @@ const MysteriumDashboard = () => {
       // Kept out of the JSX: an expression starting with {/ can be mistaken for the
       // opening of a JSX comment by the bundler.
       const fleetUrlIsHttps = String(fleetForm.toolkit_url || '').toLowerCase().startsWith('https://');
+      // What pinning a certificate is worth depends entirely on the address the
+      // operator just typed, and the panel used to give everyone the same
+      // warning regardless. Someone on localhost was told a man-in-the-middle
+      // attack becomes possible; someone on a public IP got no more emphasis
+      // than that. The result is a warning nobody reads and a correct setup that
+      // looks wrong.
+      //
+      // Read from the input field, not from any knowledge of the remote machine
+      // — the master has none before it connects.
+      const fleetHost = (String(fleetForm.toolkit_url || '')
+        .replace(/^https?:\/\//i, '').split('/')[0].split(':')[0] || '').toLowerCase();
+      const fleetReach =
+        (fleetHost === 'localhost' || fleetHost === '127.0.0.1' || fleetHost === '::1')
+          ? 'loopback'
+        : /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(fleetHost)
+          ? 'tailscale'
+        : /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(fleetHost)
+          ? 'lan'
+        : 'public';
 
       const handleFleetProbe = async () => {
         if (!fleetForm.toolkit_url) return;
@@ -2428,9 +2447,44 @@ const MysteriumDashboard = () => {
                             <div className="border border-emerald-500/30 bg-emerald-500/5 rounded p-3 space-y-2">
                               <p className="text-xs text-emerald-300 font-semibold">TLS certificate</p>
                               <p className="text-xs text-slate-500">
-                                Toolkit certificates are self-signed, so this node's certificate has to be
-                                pinned. Copy its config/tls/cert.pem to this machine and enter the path.
+                                Toolkit certificates are self-signed, so a browser and this master cannot
+                                verify them against a public authority. Whether that matters depends on how
+                                this node is reached.
                               </p>
+                              {fleetReach === 'loopback' && (
+                                <p className="text-xs text-slate-400">
+                                  <span className="text-emerald-300">This address is on this machine.</span>{' '}
+                                  The traffic never leaves it, so there is nothing to intercept. Tick
+                                  <em> skip verification</em> below; pinning adds no protection here.
+                                </p>
+                              )}
+                              {fleetReach === 'tailscale' && (
+                                <p className="text-xs text-slate-400">
+                                  <span className="text-emerald-300">This is a Tailscale address.</span>{' '}
+                                  That connection is already encrypted and authenticated on keys, so
+                                  <em> skip verification</em> is the normal choice. Pin the certificate as
+                                  well if you want a second layer.
+                                </p>
+                              )}
+                              {fleetReach === 'lan' && (
+                                <p className="text-xs text-slate-400">
+                                  <span className="text-emerald-300">This is a private network address.</span>{' '}
+                                  Anyone able to intercept it is already on your network. Either choice is
+                                  reasonable; pinning is stricter.
+                                </p>
+                              )}
+                              {fleetReach === 'public' && (
+                                <p className="text-xs text-amber-300">
+                                  <span className="font-semibold">This address is reachable from the internet.</span>{' '}
+                                  Pin the certificate here. Without it the connection is encrypted but not
+                                  authenticated, and anything between this master and the node could
+                                  impersonate it — including your API key.
+                                  <span className="block text-slate-500 mt-1">
+                                    Copy the node's config/tls/cert.pem to this machine and enter the path
+                                    below, then check the fingerprint matches what the node reports.
+                                  </span>
+                                </p>
+                              )}
                               <input
                                 type="text"
                                 value={fleetForm.tls_cert}
@@ -2447,10 +2501,20 @@ const MysteriumDashboard = () => {
                                 />
                                 <span className="text-xs text-slate-400">
                                   Skip certificate verification
-                                  <span className="block text-amber-400/80">
-                                    Traffic stays encrypted but is not authenticated — a man-in-the-middle
-                                    attack becomes possible. Use only on a network you trust, for example a
-                                    node whose IP address changes.
+                                  {/* The same alarm for every address taught people to ignore it. It is
+                                      true on a public address and misleading on loopback, where there is
+                                      no network to attack. */}
+                                  <span className={`block ${fleetReach === 'public' ? 'text-amber-400/80' : 'text-slate-500'}`}>
+                                    {fleetReach === 'public'
+                                      ? 'Traffic stays encrypted but is not authenticated — anything between '
+                                        + 'this master and the node could impersonate it. On an address '
+                                        + 'reachable from the internet, pin the certificate instead.'
+                                      : fleetReach === 'loopback'
+                                      ? 'Traffic stays encrypted but is not verified against a certificate. '
+                                        + 'On this machine there is no network for anyone to sit in.'
+                                      : 'Traffic stays encrypted but is not verified against a certificate. '
+                                        + 'Reasonable on a network you control; also the way to keep a node '
+                                        + 'working whose IP address changes.'}
                                   </span>
                                 </span>
                               </label>

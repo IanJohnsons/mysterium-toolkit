@@ -4,6 +4,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.24
+
+- fix: the TLS panel in Add/Edit Node explains what applies to the address you typed. It told everyone the certificate "has to be pinned" and warned about man-in-the-middle attacks regardless — including on `localhost`, where there is no network to attack. It now distinguishes loopback, Tailscale, private network and public addresses, and reserves the warning for the case where it is true. Behaviour is unchanged; only the text and its emphasis.
+
 ## v1.4.23
 
 - fix: the auto-update wrapper reports why it did nothing. It ended with `exit 0` on every path, so a failed version check and an up-to-date install looked identical — systemd logged "Finished successfully" hourly while the machine stayed on an older release. It now names the reason, and says so when sudo needs a password it cannot supply.
