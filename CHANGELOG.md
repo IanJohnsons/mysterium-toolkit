@@ -2,151 +2,125 @@
 All notable changes to Mysterium Node Toolkit are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
+
+## v1.4.23
+
+- fix: the auto-update wrapper reports why it did nothing. It ended with `exit 0` on every path, so a failed version check and an up-to-date install looked identical — systemd logged "Finished successfully" hourly while the machine stayed on an older release. It now names the reason, and says so when sudo needs a password it cannot supply.
+- fix: the Node Quality badge shows "stale" instead of "Monitoring OK" when there is no current data. The badge came from the metrics poll while the Discovery Check fetched separately, so a proxy error could appear directly under a green badge.
+- feat: setup installs `cpupower`. The diagnostics advise `cpupower frequency-set -g performance` when the CPU is scaling down, which on a Pi is a real finding — without the package that advice fails at the first command. Skipped in containers.
+- fix: a failed package install reports the reason. A held package, a missing suite for the distribution and a full disk all produced the same "some features may be limited".
+- docs: releases before v1.4.0 moved to `CHANGELOG-archive.md`, and the v1.4.x entries were shortened. The file had grown to 151 KB with single bullets over 1800 characters; it is 51 KB now.
+
 ## v1.4.22
 
 - fix: removed `sessions/live` from the fleet proxy allow-list. No such route exists and nothing calls it — it allowed an endpoint that could never answer.
 
 ## v1.4.21
 
-Three places where the toolkit contradicted itself, and the tests that catch the pattern.
-
-- fix (the firewall check asked for a rule that had just been correctly removed): `PortReachability` compared every listening port against the ufw rule list without ever looking at the address it listens on. TequilAPI binds 127.0.0.1, so a rule for 4050 changes nothing today and only stands ready for the day the service binds to 0.0.0.0 — which is why removing it was right. The check reported it as a gap the next day and advised putting it back. It now considers only ports bound to something other than loopback. A port bound twice, as the node UI is on both 127.0.0.1 and the LAN address, counts as external; the first attempt at this decided per line and dropped 4449, the one port on that machine genuinely reachable from outside
-- fix (the advice pointed at a screen that refuses the job): the recommendation read "Run ./start.sh → Security & Upgrades to add the missing rules". That screen answers "ufw command failed — check sudo permissions", because the backend does not hold the privileges ufw needs. It now names the command to run
-- fix (a save that succeeded reported "Request failed"): the handler's `.catch()` could not tell a dropped connection from a reply that was not JSON, and called both the same thing. On one VPS the jail file held the new values while the card showed an error, which reads as data loss and is not. The three fail2ban handlers now report what actually went wrong, and the save says the change may have been written anyway
+- fix: the firewall check no longer asks for a rule on ports that only listen on loopback. TequilAPI binds 127.0.0.1, so a ufw rule for it changes nothing.
+- fix: firewall advice names the command to run instead of pointing at the Security screen, which cannot run ufw.
+- fix: failed fail2ban requests report what went wrong. A save that reached the backend could report "Request failed" over a change that was written.
 
 ## v1.4.20
 
-The Security screen said no jails were configured on a machine running eleven.
-
-- fix (the jail list called an empty list "no jails configured"): the screen deliberately shows only jails the toolkit owns — offering to edit another product's config would invite people to try, and the toolkit does not write files it did not create. But on a VPS where its own file was missing, that filter left nothing and the box announced that no jails existed, while fail2ban was running eleven of them including one named `mysterium-dashboard`. The list is unchanged; it now states that the toolkit has no jail of its own here, and names how many are managed elsewhere without offering to touch them
-- feat (a button for the repair route): `POST /firewall/fail2ban/repair` was added in v1.4.18 and never wired to anything. The health check reported `repairable: true` and the screen gave no way to act on it. There is a button now, shown only when the health check says repair would help, and it writes the toolkit's own file and reloads fail2ban — nothing else is touched
-- docs (the Security texts described a layout from v1.3.x): five places still told the operator that the toolkit writes to `jail.local` and that custom jails belong outside "the toolkit block". Neither has been true since the jail moved to its own file in `jail.d/`. They now name the real file, explain that anything outside it is never read or written, and say why the name starts with `zz-` — fail2ban merges `jail.d/` alphabetically per key, so a file sorting later would override the port this jail bans on
+- fix: the jail list explains an empty result instead of claiming no jails exist. It shows only jails the toolkit owns, and now says how many are managed elsewhere.
+- feat: a Repair button writes the toolkit's jail file back when it is missing. Only that file is touched.
+- docs: Security texts name the real jail file in `jail.d/` instead of `jail.local`.
 
 ## v1.4.19
 
-Two faults in the systemd unit, one of them introduced the release before.
-
-- fix (comments landed inside the generated unit, and were executed on the way there): v1.4.18 added an explanatory note above the StandardOutput lines, but those lines sit inside a `<< UNIT_EOF` heredoc whose delimiter is unquoted. Bash therefore expands everything in it, so the two backtick pairs in that comment ran as commands during every update — producing "backend: command not found" and "journalctl: option requires an argument" — and the comment text itself was written into the service file. systemd tolerates the stray `#` lines and the redirect worked, so nothing failed outright; it was noise in a file nobody reads until something breaks. The note moved out of the heredoc. A sweep of every heredoc in the shell scripts found no other unquoted comment of this kind — the remaining substitutions are escaped on purpose
-- fix (the toolkit could start before the node it monitors): `After=` was written without the unit suffix, which systemd refuses outright — `systemd-analyze verify` reports "Failed to add dependency on mysterium-node, ignoring: Invalid argument". The ordering was silently absent on every install. Worse in `bin/setup.sh`, where the detection list contained `myst` and `mysterium` but not `mysterium-node`, which is the name the official installer creates: on a normal install no node service was matched at all. Both scripts now search the same three names and append `.service`
+- fix: comments no longer end up inside the generated systemd unit. Backticks in them were executed during every update.
+- fix: `After=` now carries the `.service` suffix, which systemd requires. Without it the toolkit could start before the node it monitors. `bin/setup.sh` also searched for the wrong service names.
 
 ## v1.4.18
 
-The fail2ban button now works without the other product installed, and a container is no longer told its kernel tuning was applied.
-
-- fix (the dashboard jail could be owned by another product and the toolkit only described it): until now a missing jail file alongside a running jail produced a diagnosis — this file is not ours, inspect it yourself — on the reasoning that rewriting it would lose to the alphabetically later file anyway. That reasoning was half right. fail2ban merges `jail.d` per key, not per section: an explicit `backend` and `logpath` in our file beat another product's `[DEFAULT]`, and only the keys the later file also sets are lost. In practice that was `port`, which is the dangerous one — one node had 4050 and 4449 in its dashboard jail, where a ban blocks TequilAPI and the node UI and 4050 is exactly where a fleet master queries the node. The jail file moved to `zz-mysterium-toolkit.conf` so it sorts last and keeps that key, and `POST /firewall/fail2ban/repair` writes it back and reloads. A node operator who has never heard of the other product gets a working jail, which is the point of the button being in this dashboard
-- fix (the pre-v1.4.18 jail file is removed when the new one is written): only when it still carries the header the toolkit writes itself. A file without it was edited by hand, and deleting someone's own config because the filename matches is not ours to do
-- fix (the toolkit wrote nothing to the journal): the systemd unit sent stdout and stderr to `backend.log` with `StandardOutput=append:`, while the application already wrote that file itself through its logging handler. The journal stayed empty, so a jail pushed onto the systemd backend by another product's `[DEFAULT]` had nothing to read — 22 failed logins sat in the log file while the jail reported zero bans. The redirect is dropped; the file keeps being written by the handler
-- fix (`_f2b_apply_live` discarded every failure): a jail could ignore every setting the dashboard displayed with nothing to indicate it. Failures are collected and logged now. Its scope is documented from testing rather than assumption: against Fail2Ban v1.1.0, bantime/maxretry/findtime apply live, `addlogpath` is accepted but does nothing while the jail runs on the systemd backend, and `backend` cannot be read or set at all
-- fix (a container was called a virtual machine and promised kernel tuning): `systemd-detect-virt --quiet` returns 0 for both, and setup then announced that "network tuning will still be applied". It cannot be — a container shares the host kernel, sysctl writes fail or reach outside the container, and `/etc/sysctl.d` is often read-only. Setup now tells them apart and skips kernel work in a container, the same distinction `system_health.py` already made internally. `fix_all()` skips the nine kernel-level subsystems there for the same reason
-- fix (setup reported sysctl settings it had not persisted): the success line printed regardless of what `tee` returned, so on a read-only `/etc/sysctl.d` the tuning was announced as persisted and vanished at the next reboot. Each `sysctl -w` now reports its own failure, with an extra line for `ip_forward` — losing that one leaves a node that looks healthy, stays in discovery and routes nothing
-- fix (nothing warned that enabling a firewall later would close everything): setup deliberately never enables a default-deny firewall, since that can lock someone out of their own machine. But turn ufw on a week afterwards and the dashboard port and the whole Mysterium UDP range go dark with the node still online and in discovery. Setup now says so and names the two ways to put the rules back, and `PortReachability` reports ports that an active ufw has no rule for — it only ever checked whether something was listening, which is a different question from whether it can be reached
-- fix (`NatChainHealth` had no `fix()`): added in v1.4.10 with only a `scan()`, so `fix_all()` raised AttributeError on it every single run, caught it, and pulled `overall_success` to False on every machine regardless of its actual state. It now returns a deliberate no-op: recovery means restarting the node and dropping live sessions, which is the operator's call
-- fix (the node installer only guarded its apt path against containers): the script path runs the same `install.sh` and needed the same guard
-- fix (retention defaults the operator never chose are removed): `update.sh` wrote a `data_retention` block into any setup.json that lacked one, undoing the v1.3.3 decision to keep everything until someone decides otherwise. A Pi whose Data Manager had never been opened carried 30/90/365/730 and the card displayed them as a running schedule. Nothing was ever deleted by it — pruning also needs `data_retention_enabled`, which only a real save sets — but the numbers were shown as fact. A one-off migration removes the block, and only when there is no enabled flag and the values match what update.sh wrote byte for byte, so anything edited by hand stays
-- fix (a failed write to `modules-load.d` was silent): without it `nf_conntrack` may not load at boot, leaving the persisted `conntrack_max` inert — right in the file and not in effect
-- fix (the self-updater badge moved between columns): Node Status is a two-column grid filled left to right, and the Clients row was conditional, so every field after it shifted sides depending on whether any client was connected. The version block travelled with it and the badge landed beside a blank half-row. Clients is always rendered now, including at zero, which also removes the older ambiguity between a missing row and a row saying none
+- fix: the toolkit writes its fail2ban jail back when another product has taken it over. The file moved to `zz-mysterium-toolkit.conf` so it keeps its port setting — fail2ban merges `jail.d/` alphabetically, per key.
+- fix: the pre-v1.4.18 jail file is removed when the new one is written, but only if it still carries the toolkit's header.
+- fix: the systemd unit sends output to the journal again. It went only to `backend.log`, so a jail reading the journal found nothing.
+- fix: live fail2ban changes report their failures instead of discarding them.
+- fix: setup tells a container apart from a VM and skips kernel tuning there. A container shares the host kernel.
+- fix: setup only reports persisted sysctl settings when the file was actually written, and each setting reports its own failure.
+- fix: setup warns that enabling a firewall later closes the dashboard and UDP ports, and names how to restore them. `PortReachability` reports ports an active ufw has no rule for.
+- fix: `NatChainHealth` has a `fix()`. Without it `fix_all()` failed on every run and reported overall failure regardless of machine state.
+- fix: the node installer guards its script path against containers as well as its apt path.
+- fix: retention defaults the operator never chose are removed once, and only when they match what `update.sh` wrote.
+- fix: a failed write to `modules-load.d` is reported. Without it `nf_conntrack` may not load at boot.
+- fix: the Clients row is always shown, including at zero. It was conditional, which shifted every field after it between columns.
 
 ## v1.4.17
 
-A save that worked, reported by a card that said it had not.
-
-- fix (the retention card showed "Not pruning" beside its own "Saved" confirmation): v1.4.16 added an `enabled` flag to `GET /data/retention` so the card could stop claiming a daily prune on machines that prune nothing. The POST reply was left as it was — and saving is the exact moment that flag changes, since writing retention is what sets `data_retention_enabled`. The values were stored correctly every time; the card simply kept the stale flag until the page was reloaded, so it displayed a success message and a contradicting status line at once. That reads as a save that did not take, which is how it was reported. The POST now returns `enabled` and `active` alongside the saved values, and the editor forwards the whole reply to the parent instead of the values alone
+- fix: saving retention returns the enabled flag, so the card stops showing "Not pruning" beside its own "Saved" confirmation. The values were always stored correctly.
 
 ## v1.4.16
 
-Retention that was never running, overhead that was never overhead, and an installer that could take a machine's package manager with it.
-
-- fix (the toolkit wrote retention settings the operator never chose): `update.sh` added a `data_retention` block with defaults to any setup.json that lacked one. `setup_wizard.py` stopped doing exactly that in v1.3.3, for the reason that pre-writing defaults makes every install look user-configured. One Pi carried 30/90/365/730 purely because this ran on its first update — nobody had ever opened the Data Manager on it. Removed; data is kept until the operator saves retention themselves, which is also what sets the enabled flag
-- fix (the Data Manager said "Pruned daily" on machines that prune nothing): the card read one source and the daily prune read another. The display falls back to defaults whenever nothing is configured; the prune requires `data_retention_enabled` and deletes nothing without it. So a machine keeping everything showed a full schedule of retention windows and announced that it was enforcing them, indistinguishable from a machine that really was. `GET /data/retention` now returns `enabled` and the `active` set the prune will actually use, and the card says plainly when nothing is being pruned
-- fix (the retention editor showed another node's numbers): `RetentionEditor` initialised its local state from the props once, at mount, with no key and no effect tracking the current values. Switching fleet nodes left the previous node's numbers in the fields while `current` updated underneath them — which turned `isDirty` true on its own, and saving would have written node A's retention onto node B. It is also why the card showed 730 for a machine whose setup.json said 90. Now remounts per node and follows `current` when it changes
-- fix ("Tunnel overhead" was the work, not the waste): the row showed the whole VPN volume, reasoning that every byte crosses the NIC twice. The arithmetic is right; the word is wrong. That second crossing is the internet side of the same transfer — what the node fetched on a consumer's behalf and forwarded — which is the work being paid for. Reporting 23.55 GiB of it as overhead reads as tunnels burning bandwidth. Real transport overhead is WireGuard's encapsulation: 60 bytes per packet on the 1420-byte tunnel MTU, about 4.2%, or one GiB where the old row claimed twenty-three. Split into `Internet side` and `Encapsulation`, with the Help text rewritten to match
-- fix (installing a node inside a container could break apt for good): Mysterium's `install.sh` guards its kernel-header step with `if [[ "$container" != "docker" ]]`, but `container` is never set inside that script — it comes from the environment, and only Docker images set it. An LXD container such as ChromeOS/FydeOS Penguin sets `container=lxc`, so the guard misses and the script installs `linux-headers-$(uname -r)` for the host's kernel, which has no package. With `set -e` the install stops part-way, `apt install wireguard` pulls in dkms that compiles against a kernel that is not there and triggers update-initramfs, and what is left is a half-configured dpkg that blocks every later apt operation. `node_installer.py` now detects a container via systemd-detect-virt, the environment variable, or `/proc/1/cgroup`, tells the operator what it found, and passes `container=docker` so the header step is skipped — which is correct in any container, since a container shares the host kernel and cannot build modules against it
-- fix (two silent failures in the CLI): a failed fetch of the node config left the config screen empty with no reason shown, indistinguishable from a node with nothing configured; and a corrupt setup.json sent the CLI to the default port, where it found nothing and reported the dashboard unreachable. Both now report — the first through the per-key status column the screen already has, the second to stderr before curses starts. The remaining `except: pass` blocks in the CLI guard `curses.addstr` against a too-small terminal and are left alone
+- fix: `update.sh` no longer writes retention defaults into `setup.json`. An install that had never been configured carried a schedule nobody chose.
+- fix: the Data Manager says when nothing is being pruned. It read one source while the daily prune read another, and claimed "Pruned daily" either way.
+- fix: the retention editor follows the selected node. It kept the previous node's values, which could write node A's settings onto node B.
+- fix: the traffic card separates `Internet side` from `Encapsulation`. What was labelled overhead is the other half of each transfer; real WireGuard overhead is about 4.2%.
+- fix: installing a node inside a container skips kernel headers. Installing them for the host kernel left dpkg half-configured and apt unusable.
+- fix: two silent failures in the CLI now report — a failed config fetch and a corrupt `setup.json`.
 
 ## v1.4.15
 
-Documentation caught up with four releases of changes, and CI stopped arriving after the fact.
-
-- fix (CI ran only on `main`): the workflow checked syntax and built the frontend on the release branch, which is the branch where the work has already landed. It now runs on `dev` as well, so a broken build is reported while it is still on the branch it was written on
-- docs (README): sections on how earnings per GiB are calculated now that the hourly component is separated out, on the rollup being the permanent record that outlives pruned sessions, and on reaching the node installer from the CLI menu
-- docs (in-app Help): corrected to 15 health subsystems rather than 13, rewrote the Earnings Efficiency entry to describe the two-component pricing and what the card now shows, and documented the node installer as menu option N. The CLI section no longer pins Security & Upgrades to a number, since the numbering shifts with install type
+- fix: CI runs on `dev` as well as `main`, so a broken build is reported before it is merged.
+- docs: README covers earnings per GiB, the rollup as permanent record, and reaching the node installer from the CLI menu.
+- docs: in-app Help corrected to 15 health subsystems, the new Earnings Efficiency behaviour, and menu option N.
 
 ## v1.4.14
 
-A fleet master never showed its own IP, and nothing anywhere said why.
-
-- fix (the master's own node card was missing its IP and NAT type): `nodeStatus` stores these under `nat_type` and `public_ip`, but three call sites asked for `nat` and `ip` — keys the collector has never written. They got the default every time. The peer branch reads both spellings and works, so a real peer showed its IP while the machine acting as fleet master did not, and since the card only renders a field when it is non-empty the line simply disappeared rather than showing as blank. Two paths carrying the same payload, one of them updated. All three now read `nat_type` and `public_ip` first and fall back to the short spelling, so peers sending the older form keep working
-- fix (a failed public IP lookup left no trace): the request to `/connection/ip` sat inside a bare `except: pass`, so a node that could not resolve its address produced a card with one fewer line and no log entry to explain it. The node returns HTTP 503 when its resolver fails — a real outcome, not a hypothetical. Both the non-200 case and the exception now log a warning naming the endpoint
+- fix: the fleet master shows its own IP and NAT type. Three call sites read keys the collector never writes, so the fields silently disappeared.
+- fix: a failed public IP lookup is logged. The node answers HTTP 503 when its resolver fails, and the card simply lost a line.
 
 ## v1.4.13
 
-The earnings-per-GB figure was measuring two things and calling it one.
-
-- fix (MYST per GB was overstated by up to eleven times): Mysterium pays a provider twice for the same session — a rate per GiB and a rate per hour. Measured on a live node: every service type pays 0.000462 MYST/hour, while the data rate ranges from 0.093329 for scraping to 1.663293 for wireguard, a factor of eighteen apart. The efficiency card divided total earnings by bytes, which hands the entire hourly component to the data. On a long-running low-traffic service that is most of the figure: a 300-hour scraping session moving 0.15 GiB earns 0.1386 MYST for the time and 0.014 for the data, and the card reported 1.01 MYST/GB against an advertised 0.093. Public was overstated too, by a smaller margin, because its data rate is high enough to dominate. The card now shows the data rate with the hourly component removed, the share of earnings that came from uptime instead, and the node's own current list price beside it for comparison. Against the real numbers the split lands at 0.0893 for scraping (listed 0.0933) and 1.7038 for Public (listed 1.6633)
-- feat (`PriceCache`): reads `/v2/prices/current` from TequilAPI, cached for an hour. `/prices` does not exist and `/prices/current` returns wireguard only — both verified in the node source at `tequilapi/endpoints/proposals.go:433` rather than guessed. Prices are forwarded to the frontend so the card can name what it is comparing against. When the node returns nothing the card says so and falls back to the gross figure with a label, because a split that cannot be computed is better left uncomputed than approximated: the previous values are kept rather than reporting no pricing at all, since a stale hourly rate still separates the two far better than ignoring the hourly rate entirely
-- note: the split applies today's hourly rate to historical sessions, which is an approximation — prices track the exchange rate, and a session from June was paid at June's rate. It is a much smaller error than attributing the whole hourly component to bytes, and the card labels the figures as current pricing rather than as what was actually paid
+- fix: earnings per GB were overstated by up to eleven times. Mysterium pays per GiB and per hour for the same session, and dividing the total by bytes handed the hourly pay to the data. The card now shows the data rate with the hourly part removed, the share that came from uptime, and the node's list price for comparison.
+- feat: `PriceCache` reads the node's current prices from TequilAPI, cached for an hour. Rates are current pricing applied to past sessions, which the card states.
 
 ## v1.4.12
 
-The lifetime figures on a fresh install described a fraction of the data, and said so nowhere.
-
-- fix (analytics showed a fraction of the data and two of five service types): the rollup that feeds lifetime totals and the service breakdown was built once, the first time `daily_totals` was empty, after which `refresh_recent()` covered only the last three days. On a fresh install those run in the wrong order — the toolkit starts, the backfill aggregates a nearly empty sessions table and sets its flag, and only then does the collector pull months of history off the node. Everything older than the refresh window never reached the rollup and nothing noticed. Measured on a Pi: 620 sessions spanning 1 June to 14 September against a rollup holding 130 sessions across four days, with `data_transfer` and `scraping` absent from the analytics card entirely while both had dozens of sessions on record. This hits every new installation, and hardest on exactly the people the toolkit is for — anyone adding it to a node that has been running for months. The backfill now also runs when the rollup is incomplete, not only when it is empty: two indexed MIN() queries compare the oldest session against the oldest rollup day, and a rollup that starts later than the sessions do is rebuilt once with a log line naming both dates. It deliberately does not rebuild when the rollup merely reaches further back than the sessions, which is the normal state after session pruning — and the rebuild does not clear the table first. `daily_totals` is the permanent record: sessions are pruned after 90 days by default and this table never is, so it holds days whose sessions no longer exist anywhere. Clearing it and rebuilding from the sessions table would destroy exactly the history it is kept for. The upsert already writes ON CONFLICT DO UPDATE on (date, provider_id, service_type), so the days the aggregate covers are corrected and every older row is left alone
-- fix (one unusable token value aborted the whole rollup pass): `_aggregate` called `int()` on the TEXT tokens column with no guard, so an empty or non-numeric value raised ValueError inside `refresh_recent`'s try and skipped the entire round, leaving behind a single warning that named neither the row nor the consequence. The bad value is now counted as zero and logged with the session id
-- fix (`tokens > 0` let through what it meant to exclude): three analytics queries filtered a TEXT column against an integer. SQLite applies numeric affinity when comparing a TEXT column to an integer literal, so `'0' > 0` is correctly false there — but `'000'` and any non-numeric string still compare as greater than zero, because text sorts above integers once affinity cannot convert it. Replaced with `CAST(tokens AS REAL) > 0`, which is right for every value. Narrower than the comparison in the UPSERT that protects frozen tokens, where both operands are literals and `'0' > 0` really is true
-- feat (the node installer was unreachable once setup had run): `scripts/node_installer.py` has always been a standalone script with its own `--install` and `--method` flags, but the only path to it was `setup.sh`, and only when no node was detected at all. Anyone already running a node who later wanted to reinstall it, move from apt to docker, or add a node to a machine that started as a remote-mode dashboard had to re-run the entire setup. Added as option N in both CLI menus. This is the missing entry point, not a second installer — splitting the installation logic itself would give two places that touch sudoers, systemd and the firewall, which is the arrangement that caused a six-hour fail2ban outage in August
+- fix: the rollup is rebuilt when it is incomplete, not only when it is empty. On a fresh install the backfill ran before the collector had pulled any history, so months of sessions never reached it and the analytics described a fraction of the data. The rebuild does not clear the table: it is the permanent record and outlives pruned sessions.
+- fix: one unusable token value no longer aborts the whole rollup pass.
+- fix: three analytics queries use `CAST(tokens AS REAL) > 0`. Padded and non-numeric values passed the plain comparison.
+- feat: the node installer is reachable from both CLI menus as option N. It was only available during setup on a machine with no node.
 
 ## v1.4.11
 
-A full audit of the toolkit, and everything it turned up.
-
-- fix (two cards stayed empty on every fleet node): `EarningsEfficiencyChart` and `AnalyticsCard` both receive `getNodeAwareUrl()`, so on a selected fleet node they ask for `/services` and `/sessions/db/stats` through the proxy — and neither was in its allow-list, so the proxy answered 403 and the cards sat empty behind a silent catch. Same shape as the price bug in v1.4.9, which is why this time every node-aware fetch in Dashboard.jsx was compared against the allow-list rather than chasing one card at a time. These two were the only ones; `metrics` looked like a third but goes to `/fleet/node/{id}` directly and never touches the proxy
-- fix (Public could be reported as disabled while the node config still carried its access policy): the wireguard-mode handler tried the myst CLI, fell back to writing the config file, and returned `success: True` regardless — the write's return code only decided whether to stop looping, and the surrounding `except` did nothing. It now reports which of the two routes succeeded and returns an error naming the failure when neither did, with a log line to match. All four paths were exercised: CLI works, CLI fails and the file write works, both fail, and an exception part-way through
-- fix (update.sh announced an ownership repair it had not made): the `chown` discarded its own errors and the success line printed unconditionally, so a failed repair looked like a completed one and the build then failed for a reason the operator had just been told was fixed. The check also only looked for root-owned files, which is why a laptop whose `dist/` belonged to neither root nor the service user passed inspection and then failed the Vite build on EACCES. It now looks for anything not owned by the service user, reports the repair only when it actually succeeded, and says so when `find` itself cannot resolve the user name — that last case would otherwise have printed nothing and read as healthy, reintroducing the silence the check exists to break
-- fix (fourteen requests could fail without leaving a trace): every empty `.catch(() => {})` in Dashboard.jsx now logs the endpoint and the error, among them `/api/autoupdate`, `/fleet/config`, `/settings`, `/api/update-check` and `/firewall/fail2ban/unban`
-- fix (sixteen failures were invisible on a Pi): `logger.debug` sits below the WARNING level `pi_mode` runs at, so a failed write left nothing behind on exactly the machine where nobody is watching the console. Promoted the ones that write or change state — retention pruning, SessionDB upserts, rollup refreshes, traffic snapshots, the integrity log, firewall chain setup, jail migration and node config updates. The remaining `logger.debug` calls are reads from external APIs and optional enrichment, which fail routinely on a flaky connection and would drown the log
-- fix (a phone showed durations for sessions whose duration was never recorded): the session list is rendered twice, once for mobile and once for desktop. Desktop draws an amber em dash with an explanation when a row is stale — orphaned from a previous node process, so its final data was never written and never will be. The mobile branch printed `s.duration` straight through. Two renderers of the same data, and only one of them had been corrected
-- chore: removed `scripts/migrate_all.py`, 299 lines that nothing has called in any version — it is where the `settled_tokens` overflow lived
-- chore: `deploy_production.sh` no longer sets up nginx by default. That made sense when Flask's development server was doing the serving; since v1.4.4 cheroot handles keep-alive and TLS itself, so nginx in front adds a second TLS termination, a second set of timeouts and a second place to look when something breaks. Still available with `--with-nginx`
-- fix (two swallowed writes at startup): a failed rotation of an oversized `backend.log` left the file growing with nobody told, which is the failure the rotation exists to prevent; and a failed write of `logs/.backend.pid` left anything looking for the running backend with a stale pid and no explanation. Both now report. The other 110 `except: pass` blocks were reviewed and left alone — they guard reads, parsing and optional lookups where continuing is the right response
-
-Also audited and found clean: no duplicate routes (all seven apparent duplicates are GET/POST pairs), no duplicate function names, no hooks after an early return, no kebab-case SVG attributes in JSX, no `React.useState` without the import. Mobile viewport and breakpoints are consistent across the seven mobile/desktop pairs. Not audited: `cli/dashboard.py`, `bin/setup.sh`, and most of `system_health.py` — around 8000 lines.
+- fix: `/services` and `/sessions/db/stats` added to the fleet proxy allow-list. Two cards sat empty on every fleet node behind a silent 403.
+- fix: `/services/wireguard-mode` reports failure when the node config could not be written. It returned success either way.
+- fix: `update.sh` only claims an ownership repair it actually made, and checks for any foreign owner rather than only root.
+- fix: fourteen empty `.catch()` handlers in the frontend now log the endpoint and error.
+- fix: sixteen write failures raised from debug to warning, so they are visible in `pi_mode`.
+- fix: mobile shows an em dash for stale sessions, matching desktop. It printed a duration that was never recorded.
+- chore: removed `scripts/migrate_all.py`, which nothing called.
+- chore: `deploy_production.sh` no longer sets up nginx by default; cheroot serves directly since v1.4.4. Available with `--with-nginx`.
+- fix: two swallowed writes at startup now report — log rotation and the pid file.
 
 ## v1.4.10
 
-A node can be online, in discovery, and earning nothing, and until now nothing said so.
-
-- feat (detect a node whose NAT chain is gone): the node creates an iptables chain called MYST in the nat table at startup, in `nat/service_iptables.go:prepare()`, and every session afterwards inserts a jump into it. `prepare()` runs `sudo /usr/sbin/iptables --new MYST --table nat` exactly once, without `-w`, and `bootstrapServiceComponents` logs the failure as a WARN and carries on. One lost race for `/run/xtables.lock` therefore leaves the node running without the chain for the rest of its uptime — and two processes on this machine take that lock every two minutes, this toolkit among them. Every session after that dies with "Couldn't load target `MYST'", the tunnel interface is created and stays at exactly zero bytes, and the node reports itself healthy throughout: still in discovery, quality score intact, dashboard green. A VPS node ran twelve hours in that state on 13 September 2026 with twenty-four tunnels up and not one byte carried, and the only trace anywhere was a single WARN line in the node's own journal. The new `NatChainHealth` subsystem looks for the one combination nothing else produces: `myst*` interfaces present while the MYST chain is not. It reads the nat table through `/usr/sbin/iptables` specifically, because that is the binary the node hardcodes and checking the other backend would answer about the wrong table. A read that fails for any other reason — permission denied, a busy lock, a missing binary — is reported as a warning that says the table could not be read, never as a missing chain: sending an operator to restart a node on the strength of a failed read would be the same class of mistake in the other direction. It reports and never acts, because recovery means restarting the node and that is the operator's call
-
-- fix (System CPU card showed a temperature and no percentages): the card decides which sensor is "the CPU sensor" by comparing its label to the exact string `cpu`, and CPU% and RAM% are rendered only inside the CPU and RAM branches. A Raspberry Pi reports its sensor as `cpu_thermal` with an empty `entry.label`, so the label falls back to the sensor name, misses the exact match, and lands in the ambient branch — which prints a temperature and nothing else. The card is called System CPU and showed neither a CPU nor a RAM percentage. The same happens on any machine whose sensor is named `coretemp`, `k10temp` or `Package id 0`, which is most x86 hardware. The label match now also accepts a `cpu_` or `cpu-` prefix, and both percentages are appended when no sensor carried that name, so the numbers no longer depend on hardware happening to use a label we recognise. `cpufreq_*` and `soc_thermal` deliberately still count as ambient
-- fix (running ./setup.sh from the repo root ran the February installer): `start.sh` and `stop.sh` in the root are two-line wrappers that exec their counterpart in `bin/`, but `setup.sh` was not — it was a full 69 KB copy of the installer whose last commit was v1.2.12, while `bin/setup.sh` had gone on to v1.4.10. Anyone running `./setup.sh` instead of `bin/setup.sh` got an installer with no TLS step, no `udp.ports` read from the node config, and no `rps_cpus` in sudoers, and it reported success throughout. Replaced with the same wrapper the other two use
-- fix (a jail taken over by another tool was reported as simply missing): when the toolkit's own jail file is gone but `mysterium-dashboard` is still loaded, some other tool defines it. The health check saw only the missing file and advised re-running setup — which writes a second section with the same jail name, and since fail2ban reads `jail.d` alphabetically the other tool's file keeps winning, so the fix reports success and changes nothing. The new `jail_foreign` status names the owning file and checks two things about it that the toolkit would never do itself: whether the jail covers Mysterium's own ports, where a ban blocks TequilAPI and the node UI rather than the dashboard and 4050 is exactly where a fleet master queries the node, and whether it sets a logpath at all, because without one the jail inherits the default log, loads cleanly, reports zero bans and protects nothing. Reported through `/api/fail2ban-health`; not yet surfaced in the dashboard UI
-
-- fix (the toolkit jail inherited another product's backend and went blind): the toolkit writes its own jail file with a filter, a port and a logpath, but never wrote `backend`. fail2ban merges every `[DEFAULT]` section it finds across `jail.conf`, `jail.d/*.conf` and `jail.local` and hands the result to any jail that does not set the key itself, so a second tool writing `backend = systemd` there silently moved our jail from the log file to the journal. On one VPS that is exactly what happened: the jail loaded, monitored no file, had no journalmatch to fall back on, and reported zero bans while twenty-two failed logins sat in `logs/backend.log`. `backend` is now always written explicitly — `auto` with the logpath, or `systemd` when that is what the jail wants — so an omitted setting is no longer an invitation for another product to decide it. The health check was corrected in the same way: it judged the jail by its own lines and reported "no logpath", which is the wrong diagnosis when the merged default is `systemd` and what is actually missing is a journalmatch. It now resolves the effective backend and reports whichever of the two is missing. Reading those defaults needed its own parser: `configparser` keeps `[DEFAULT]` out of `sections()` and copies it into the sections of the same file, so the first version of this check read an empty default and still looked correct — it missed precisely the cross-file case it was written for. It also reports when more than one file defines the jail, and which one wins
+- feat: `NatChainHealth` detects a node whose MYST nat chain is missing. The node creates it once at startup without retrying, so a single lost lock leaves every session failing while the node reports itself healthy and stays in discovery. Read-only: recovery means restarting the node.
+- fix: the System CPU card shows CPU and RAM percentages when the sensor label is not literally `cpu`. A Pi reports `cpu_thermal`, and the card showed a temperature and nothing else.
+- fix: root `setup.sh` is a wrapper again. It had been a full copy of the v1.2.12 installer for months.
+- fix: a fail2ban jail defined by another product is reported as such, with its ports and logpath checked. `backend` is now always written explicitly so a foreign `[DEFAULT]` cannot redirect the jail.
 
 ## v1.4.9
 
-The fiat value under the earnings never arrived on any fleet node, and nothing said so.
-
-- fix (fiat value stuck on "loading" for every node but this one): `EarningsCard` and `SettlementHistoryCard` receive `getNodeAwareUrl()`, which becomes `<base>/fleet/node/<id>/proxy` the moment a fleet node is selected. That is right for anything the node owns and wrong for the MYST price, which comes from a public exchange API through the local backend and is the same number on every machine in the fleet. The request went to the remote node's proxy, whose allow-list has never contained `myst-price`, so the proxy answered 403 and an empty `.catch(() => {})` threw it away. The result was "fiat value loading…" forever under the unsettled earnings on every node except the one serving the page, with no log line on either side and nothing in the UI to suggest a request had been refused — visible only by opening the browser console on a page nobody had a reason to suspect. A new `localBase()` strips the proxy suffix so the price is always fetched locally, which is also what stops the endpoint from being added to the proxy allow-list to fix a symptom: a node should not be asked for a global value. Both call sites now check `r.ok` and report the status code through `console.warn` instead of discarding the failure, because the silence was the larger part of the bug
+- fix: the MYST price is fetched from the local backend instead of through the fleet proxy. The price is the same on every machine, and the proxy refused it, so the fiat value never appeared on any fleet node.
 
 ## v1.4.8
 
-An override for nodes the Mysterium PPA cannot reach, and a version block that describes the node you are actually looking at.
-
-- feat (install a node release from GitHub, bypassing APT): `myst-updater` only accepts packages from the Mysterium PPA. That PPA has no suite for Debian, trails the GitHub tags by two minor versions, and refuses to touch a node whose package was installed from a `.deb` by hand — leaving those nodes with a timer that fails every six hours and no way forward. `bin/node_update.sh` is the deliberate override: it takes a version number and nothing else, derives the architecture itself, and rejects anything that is not three numbers separated by dots. It downloads only from the `mysteriumnetwork/node` release path, verifies the SHA256 that GitHub publishes per asset before handing anything to dpkg, falls back to `apt-get install -f` when dependencies are missing, and reports failure if the node does not come back up. A release without a published digest is installed on the strength of HTTPS alone and says so rather than claiming to be verified. The button sits beside the version badge and works on every node tab, not only this machine: the master proxies the request and the remote toolkit runs sudo on its own hardware, exactly as `/system/update` has always done. The second click names the node it will restart and how many sessions that drops, so a mis-click on the wrong tab is visible before it happens. No APT repository is added, which is what makes it distribution-agnostic: the official `install.sh` reads `ID` from `/etc/os-release` and rejects anything it does not recognise, so Parrot, Kali, Mint and Devuan come out unsupported there despite being Debian underneath — here only dpkg and the architecture matter, and a system without dpkg is told so plainly rather than left with a bare error
-- fix (the version block described the wrong machine): `nodeUpdateInfo` was fetched with a bare `fetch('/api/node-update-check')` on mount with an empty dependency array — always the local backend, never re-fetched on a node switch. Viewing a remote node from the fleet master therefore showed the master's updater state and APT candidate underneath the remote node's name. Harmless-looking on a fleet of three where every machine runs the same distribution; on a mixed fleet it means reading one machine's package state for all of them. The fetch now goes through `getNodeAwareUrl()`, re-runs when the selected node changes, clears the previous answer first so a failed fetch cannot leave stale data on screen, and waits for `isConnected` because the proxy route requires auth
-- fix (the update button appeared to do nothing): `check_node_update()` caches the GitHub answer for an hour and handed `current` and `update_available` back from that cache untouched. A node updated to the newest release therefore kept showing "1.39.3 available" beside "Version: 1.39.3" for up to an hour — the one moment the operator is looking for confirmation that the install worked. Only the network call is expensive; the comparison against the node's live version now runs on every request, cache hit or not. The frontend also re-reads the block six seconds after a successful install, so it settles by itself instead of asking for a page reload
-- fix (the restart quietly triggers a payout): restarting the node settles whatever is unsettled, regardless of the threshold you configured. `handleNodeStart()` in `session/pingpong/hermes_promise_settler.go` calls `ForceSettleInactiveHermeses()` for every identity on every start, which never reaches `needsSettling()` and therefore never consults `payments.zero-stake-unsettled-amount`. Two nodes updated on 16 August settled 12.15 MYST between them at a threshold of 12.5, seventeen seconds apart, with no `needsSettling` line anywhere in the logs to explain it. Nothing is lost — the Hermes fee is proportional and the extra cost is the transaction fee, roughly 0.03 MYST per forced settlement — but it is not the operator's decision unless they are told first. The confirmation click now names the amount it will settle alongside the sessions it will drop
-- fix (a permanent warning about a situation you chose): the version block grew to three lines — badge, updater state, APT candidate — which reads as an alarm on a node kept current through the GitHub button, where `myst-updater` fails every six hours by design and always will. A warning that is always on is a warning nobody reads on the day it matters. State and APT candidate are now one line, and it is amber only when the node is actually missing a release it cannot reach on its own; otherwise the same fact in grey, shorter: "node self-updater: inactive - PPA has 1.37.9, you run 1.39.3 from a .deb". The detection did not change, only its weight
-- chore: `update.sh` restores the executable bit on `bin/*.sh` and the root wrappers. Files copied by hand out of a browser download lose it, and git does not restore it on a file it already tracks — which would surface as a permission error with no obvious cause on a script invoked through sudo
+- feat: install a node release directly from GitHub when the Mysterium PPA has no package for the distribution. `myst-updater` only accepts PPA packages, which leaves Debian trixie stranded.
+- fix: the version block describes the selected node instead of the machine serving the page. It was fetched once on mount, before a node was chosen.
+- fix: the node update button reports a result. The GitHub answer was cached for an hour and returned stale, so pressing it appeared to do nothing.
+- fix: restarting the node warns that it settles whatever is unsettled, regardless of the threshold you configured.
+- fix: the version block no longer shows a permanent warning about a state you chose yourself.
+- chore: `update.sh` restores the executable bit on `bin/*.sh` and the root wrappers, which a browser download strips.
 
 ## v1.4.7
 
-The node's own updater was failing on every run while the dashboard reported it as healthy.
-
-- fix (the self-updater badge promised an update that could never arrive): `_node_self_updating()` asked `systemctl is-active myst-updater.timer` and read `MYST_UPDATER_ENABLED`, then reported a boolean. Both were true on the VPS and the Pi while `myst-updater.service` exited 1 on every cycle, so the version badge read `1.39.3 — self-updating` on a node that had been failing to update for days. The timer being active says nothing about the service getting anywhere. The state now also carries the outcome of the last run, read from `systemctl show`, which needs neither root nor journal access, and the badge distinguishes four cases: on, on but failing every run, off, and not installed. The version badge only claims a pending self-update when the last run actually succeeded
-- note (why it fails is not a toolkit problem, but it is now visible): `myst-updater` only installs candidates that come from the Mysterium PPA. On Debian trixie that PPA has no suite at all, which gives `authenticated APT metadata for origin LP-PPA-mysteriumnetwork-node was not found`. On a machine where the node was installed from a GitHub `.deb`, that hand-installed package outranks the PPA version and APT offers it as the candidate, which gives `candidate 1.39.2 is not supplied by the Mysterium node PPA`. The PPA also trails GitHub by some distance — 1.37.9 on focal and 1.38.5 on noble against 1.39.3 tagged. The tooltip on a failing badge names the command that shows which of the two applies
-- feat (the dashboard now says what APT itself would install): knowing that the updater fails is half an answer. `apt-cache policy myst` holds the other half and needs no root, so its verdict is read and shown as one line beside the version. Three cases are named: no Mysterium PPA present on this system at all, a PPA outranked by a package installed from a `.deb`, and a PPA that has something newer waiting. A node whose package tracks the PPA normally shows nothing, and a system without apt shows nothing rather than an empty badge. Cached fifteen minutes — long enough not to re-read the package lists on every poll, short enough that adding the PPA and running `apt update` shows up while you are still looking at the screen
+- fix: the node self-updater state is read rather than written. Writing `/etc/default` from the dashboard changed a setting the operator had made deliberately.
+- fix: the APT candidate version is shown beside the installed one, so an update that APT cannot reach is visible.
+- fix: the auto-update toggle reflects the timer's real state instead of what was last clicked.
 
 ## v1.4.6
 
@@ -259,741 +233,22 @@ Session token amounts above ~9.22 MYST were being truncated on write — SQLite'
 - note: the rollup exists so that daily earnings totals survive session pruning. Because it was empty, lifetime figures were being derived from the session table alone; installs with pruning enabled may have lost earnings history that the rollup was meant to preserve. Pruning is opt-in and off by default
 
 ## v1.4.2
-- fix (firewall opened the node's default UDP range instead of its configured one): setup.sh had `10000:60000` hardcoded, matching the node's default for `udp.ports`. An operator who widened that range to `10000:65000` in `config.toml` ended up with 5000 ports the node listened on but ufw dropped. Inbound p2p connections failed, latency reported by Discovery rose into the seconds, and nothing anywhere reported a cause. Setup now reads `udp.ports` from `/etc/mysterium-node/config.toml` (or `/var/lib/mysterium-node/config.toml`), opens that exact range, and prints which range it found; the old default remains the fallback when no node config is readable
-- fix (fail2ban filter was written without sudo, so the jail never loaded): the filter file was written with plain `tee` while the jail file three lines below used `$SUDO tee`. Running setup as a normal user meant the write to `/etc/fail2ban/filter.d/` failed with permission denied, the error went to stderr, and setup still printed "fail2ban configured". fail2ban then logged "Unable to read the filter" and skipped the jail entirely, leaving the dashboard with no brute-force protection and no indication of it. The filter is now written with sudo, and setup verifies afterwards that both files exist and that `fail2ban-client status` actually lists the jail, reporting a clear failure instead of assuming success
-- fix (backend.log grew without bound): logging used a plain `FileHandler`, so the file only ever grew — one install reached 154 MB, which fail2ban then had to scan on every pass. Now a `RotatingFileHandler` at 10 MB with 3 backups, capping the logs directory at roughly 40 MB. On first start after upgrading, an existing oversized log is moved to `backend.log.oversized` rather than being appended to indefinitely. Both limits are overridable with `LOG_MAX_BYTES` and `LOG_BACKUP_COUNT`
-- fix (database write failures were invisible): the databases moved to `backend/databases/` in v1.2.28, but update.sh only corrected ownership on `config/`. On one install a sudo migration left the database files owned by root while the service ran as a normal user: SQLite could not write, the database modules caught their own exceptions and returned False, the callers ignored that return value, and `quality_history`, `service_events` and `system_metrics` recorded nothing for six weeks with no visible sign. update.sh now corrects ownership on `backend/` as well and verifies afterwards that every database is writable by the service user, and the callers check the return value instead of only watching for exceptions
-- feat (new endpoint `/api/database-health`): reports per database whether the file is writable, its size and when it was last modified, plus any write failures recorded at runtime. Checking the filesystem directly catches exactly the failure above, which is invisible to a caller that only sees swallowed exceptions
-- feat (new endpoint `/api/fail2ban-health`): distinguishes between fail2ban not installed, not running, filter missing, jail file missing, jail present but not loaded, and healthy. The existing jail listing returns an empty list in every one of the failure cases, which is indistinguishable from a working install with no bans
-- docs (firewall port range): the README described the range as fixed at the node default; it now documents that setup follows `udp.ports` from the node config and that changing it requires re-running setup
+
+- fix: the UFW range is read from the node config instead of assuming the default. A node on 10000:65000 had 5000 ports closed.
+- fix: the fail2ban filter matches the line the application writes. The old pattern matched an access log cheroot does not produce, so the jail loaded and saw nothing.
+- fix: database errors are visible instead of logged at debug level. Three databases wrote nothing for six weeks behind a `logger.debug`.
+- fix: log rotation added; one install had grown a single log past 4 GB.
+- fix: the fail2ban filter is written with sudo, which it needs.
+- fix: `/api/database-health` reports writability per file.
+- fix: Parrot OS `use_pty` handled by listing both `/bin/systemctl` and `/usr/bin/systemctl` in sudoers.
 
 ## v1.4.1
 - fix (backend failed to start on v1.4.0 -- NameError on `_serve`): v1.4.0 replaced the `app.run()` call with `_serve(app, PORT)` but placed the function definition after the `if __name__ == '__main__'` block that calls it, so Python reached the call before the name existed and the service died on every start. The function now sits above the entry point. This slipped through because `py_compile` accepts it (the syntax is valid) and importing the module does not execute the `__main__` block -- validation now starts the app as `__main__` and checks that it answers on its port, over both HTTP and HTTPS
 
 ## v1.4.0
-- feat (TLS support for the dashboard and for fleet peer traffic): the dashboard and the `/peer/data` endpoints can now be served over HTTPS using a self-signed certificate generated locally by setup.sh (step 12.55). No domain name, no Let's Encrypt, no certbot and no reverse proxy are required -- the certificate carries the machine's IP addresses and, optionally, a hostname in its SAN. The fleet master pins that certificate per node via the new `tls_cert` field in nodes.json, which binds the connection to that one certificate rather than trusting any public certificate authority. `tls_verify: false` is available for nodes whose address changes: traffic stays encrypted but is no longer authenticated, so it is only appropriate on a trusted network. Off by default -- an existing install is unaffected until `https_enabled` is set, and a mixed fleet of HTTP and HTTPS nodes is fully supported
-- feat (production WSGI server replaces the Flask development server): `app.run()` was Flask's built-in development server, which sends `Connection: close` on every response. Every request therefore opened a fresh connection, and under TLS that means a fresh handshake -- measured at ~360 ms to open the dashboard over HTTPS against ~35 ms with keep-alive, and 80 ms against 13 ms for 150 concurrent requests. The dashboard is now served by cheroot: a single process with a thread pool (30 threads, 10 in pi_mode, override with `server_threads`), TLS built in, and about 1 MB more resident memory. Falls back to the Flask server if cheroot is missing or DEBUG is enabled
-- feat (update check follows the branch the install is on): `/api/update-check` and the auto-update timer wrapper both had the `main` branch hardcoded in the raw GitHub URL. An install checked out on another branch compared its own version against main's and reported an update indefinitely. Both now read the branch from `git rev-parse --abbrev-ref HEAD`, falling back to main for a detached HEAD or a non-git install, and the update-check response carries the branch name
-- docs (README privacy claim corrected): the header claimed "no third-party service, no data leaving your server", which was not accurate. Six outbound destinations exist, two of which receive identifiers -- the provider ID goes to `discovery.mysterium.network` and the beneficiary address plus your own API key go to `api.etherscan.io`. Both identifiers are already public, on the discovery service and on the Polygon blockchain respectively, but they were undocumented. The new "Privacy and outbound connections" section lists every destination and what it receives, and states plainly what never leaves the machine: session records, consumer addresses, earnings history, traffic figures, metrics, logs and keys. There is no telemetry and never has been
-- docs (new TLS section, and fleet transport security spelled out): documents certificate generation, per-node pinning, the browser warning for a self-signed certificate, mixed fleets, and why a certificate issued for a bare IP address breaks when a provider changes that address -- along with the point that `nodes.json` holds a stale address in that case whether or not TLS is in use. Fleet Mode now recommends running the master on a machine with a stable public address
 
-## v1.3.13
-- fix (v1.3.12 "dead session" rule corrected -- it mislabeled live top-earning sessions): v1.3.12 marked any New session with 0 bytes / 0 tokens older than 10 minutes as "(dead -- final write lost)", reasoning from the node's keepalive that multi-hour New rows could not be live. Debug logs from a live node disproved this: three days-old New/0/0 B2B sessions were receiving consumer keepalive pings every ~5 seconds (2,870 per session per 4h window, zero failures) and held 10.37 / 2.48 / 0.32 MYST of in-memory SessionTokensEarned totals -- live, paying, top-earning sessions that v1.3.12 hid from the Active tab and labeled dead. Root cause of the confusion is node-side: provider sessions are persisted only at create and clean close, so a live multi-day session legitimately reports New/0/0 over the API its entire lifetime. The filter is now restricted to the only case provable from the API alone: rows whose started_at predates the current node process (session objects cannot survive a restart), labeled "(orphaned -- predates node restart)". All post-boot New/0/0 sessions are shown as active with bytes pending. The pre-v1.3.12 4-hour ghost demotion is likewise gone -- it hid the same live sessions
-- docs (Help section rewritten to match the corrected, log-verified picture): "Dead Sessions & Lost Data" is now "Long-Running Sessions, 0-Byte Rows & Lost Data" -- explains that New/0/0 can be a live earner, that all mid-session state exists only in node memory riding on one droppable final write, and that only pre-restart rows are provably orphaned
-- note: the SessionDB duration freeze from v1.3.12 (only Completed overwrites duration_secs) is unchanged -- it remains correct for both live sessions (exact value arrives at close) and orphaned rows (prevents unbounded fake growth)
-
-## v1.3.12
-- fix (dead 'New' sessions no longer shown as live with fake ever-growing durations): sessions stuck at status New with 0 bytes and 0 tokens are dead sessions whose final write the node lost, not live tunnels. Verified in mysteriumnetwork/node source (v1.38.5): the provider keepalive closes unreachable consumers within ~95 seconds (core/service/session_manager.go), the final bytes/tokens write goes through a capacity-100 non-blocking queue and is silently dropped when full (consumer/session/session_storage.go), and the API fabricates duration = now - started on every call for New rows (GetDuration, Updated is zero). The old 4-hour ghost window is replaced by a 10-minute dead-session filter: such rows are marked "(dead -- final write lost)", excluded from active counts, and their duration shows as em-dash instead of a fake number
-- fix (SessionDB no longer stores ever-growing fake durations): the upsert overwrote duration_secs with the API value on every poll, so dead New rows accumulated days of fabricated duration in the archive, polluting statistics. duration_secs is now only overwritten when the incoming status is Completed (the node's exact final value); for New rows the first recorded value is kept frozen
-- feat (Help -- "Dead Sessions & Lost Data" section): documents the node-side session accounting verified in node source: bytes/tokens persist only on create / paid invoice / clean close, the live counters exist only in node memory, the final write can be silently dropped, the first invoice of every session is literally 1 wei, and why fast-moving tunnel data can legitimately appear on no session at all -- so operators seeing "data without a session" find the explanation in the dashboard instead of suspecting the toolkit
-
-## v1.3.11
-- fix (probe classification no longer broken by 1-wei artifact sessions): the node occasionally emits sessions with tokens=1 (1 wei = 1e-18 MYST) -- a node-side artifact, not a real payment. The strict ==0 / >0 earnings comparisons in probe detection and the paying-consumers count meant a single 1-wei session flipped a probe-pattern consumer (e.g. Mysterium quality-monitoring agents doing many tiny sessions) into a "paying" consumer and suppressed its wrench probe flag. Both /metrics and /consumers/top now use a shared PROBE_EARNINGS_EPSILON threshold (1e-6 MYST): earnings at or below it count as zero for classification. The smallest real payment observed on a live node is ~1.3e-5 MYST, so real payers are unaffected
-- feat (Consumer history modal now shows the probe verdict): the wallet history modal showed only country flags and "Earned: --" with no probe indicator, while the Consumers list showed the wrench icon for the same wallet -- making the Mysterium monitoring agent (many small sessions since months, zero tokens) look like a non-paying freeloader. /sessions/by-wallet now computes is_probe in its summary using the exact same criteria as the consumer list, and the modal header shows a "Mysterium monitoring agent" badge with an explanatory tooltip when it matches
-
-## v1.3.10
-- feat (daily data-integrity log): a new append-only log (backend/databases/integrity_log.jsonl), written at most once per calendar day, records total sessions, unique consumers, a safe token sum (CAST AS REAL, avoids the SQLite integer-overflow crash on SUM(tokens)), and the count of sessions stuck at the exact node-side token-clamp value. Readable via GET /data/integrity-log. Purpose: independent, tamper-evident evidence that counts never decrease -- the operator can verify this directly instead of relying on any assistant's word. At roughly 114 bytes/day (about 40 KB/year, 400 KB/decade) this never needs rotation or cleanup, including on storage-constrained devices like a Raspberry Pi
-- fix (session-based earnings fallback no longer looks like a real total): when the identity API is temporarily rate-limited, the dashboard fell back to showing the raw session-token sum in the same large, bold style as the real Unsettled figure, with only a faint caption. Per-session tokens are known to be an incomplete accounting basis (a session that never closes cleanly on the node never gets its true final amount recorded -- a node-side characteristic, not a toolkit bug), so this number can legitimately read far lower than real lifetime earnings. It's now shown smaller, in amber, with an explicit warning that it's an approximate, possibly-understated estimate, not a real total
-
-## v1.3.9
-- tune (fleet light-poll interval raised to 10s): the v1.3.8 default (60s) made live metrics (speed, temperature, CPU/RAM, ping, tunnels) feel sluggish when actively viewing a remote fleet node's dashboard. Raised to 10s -- still roughly 35x less bandwidth than the pre-v1.3.8 design (about 2 GB/month per remote node at 10s vs about 68 GB/month and growing, previously), while keeping the dashboard responsive
-- fix (fleet Peak clients always showed 0): the frontend hardcoded peak: 0 when viewing a remote fleet node, discarding the real peak_clients value the backend already tracks. /peer/data (light response) and the fleet collector now carry the real clients (connected + peak) field through, and the frontend uses it
-- fix (traffic history artificially capped at 30 days for fleet peers): TrafficDB keeps every day permanently (no storage-level limit -- it imports full vnstat history back to before the toolkit even existed), but the fleet /peer/data heavy fetch only ever requested a 30-day window. Changed to request the full history (days_back=None), matching how earnings_history already behaves -- no functional risk, the data was always there, just under-requested
-- fix (uptime-log retention raised from 31 to 365 days): the source-level uptime ping log pruned entries older than 31 days, a real (if minor) permanent-loss risk for an operator who wants long-term history. Raised to 365 days, matching the retention convention already used for earnings. The 24h/30d uptime percentages themselves are unaffected -- only how long the underlying raw pings are kept before pruning
-
-## v1.3.8
-- fix (major fleet-peer bandwidth reduction): the fleet background collector polled every configured remote node's FULL /peer/data (unbounded earnings history, 30-day traffic, session-archive stats, logs) roughly every 3-5 seconds, permanently, regardless of whether that node was even being viewed. Measured impact: on the order of 1-2 MB/minute per remote node today, growing unbounded over the node's lifetime as earnings_snapshots accumulates (calculated: current ~1.6 MB/min per node, rising to 68+ MB/min after 6 months). Fixed with two changes: (1) /peer/data now accepts ?light=1, returning only live/summary fields and skipping the heavy history/logs entirely; the fleet collector uses this for its routine poll. (2) The heavy fields are fetched in full once per calendar day per node and cached, merged into the light data in between -- so charts and history still populate, just refreshed daily instead of every few seconds. Poll cadence for the fleet collector also moved to a new, dedicated FLEET_POLL_INTERVAL (default 60s, independent of UPDATE_INTERVAL which still governs the local node's own fast metrics cache for the 5s frontend poll -- unrelated and unchanged). Net effect for a typical single-remote-node fleet setup: roughly two orders of magnitude less background bandwidth, and the cost no longer grows with node age. The three other, occasional /peer/data callers (node test, setup, identity lookup) are untouched -- only the recurring collector poll changed
-
-## v1.3.7
-- fix (significant bandwidth reduction -- Consumers list no longer sent on every poll): the full consumer array (top_consumers, unbounded -- 1000+ entries on an active node) was embedded in every /metrics response, sent by default every 5 seconds regardless of whether the Consumers tab was even open. Confirmed via nethogs on a live node as a major contributor to sustained backend network egress. It is now fetched via a new on-demand endpoint, GET /consumers/top, called only when the Consumers tab is opened -- the same pattern already used for wallet history. The lightweight summary counts (unique/paying/probe consumer counts) still update on every poll for the tab counter; only the heavy per-consumer array moved off the polling path
-
-## v1.3.6
-- fix (firewall UDP range narrowed to match the node's own default): setup.sh opened 10000-65000/udp, wider than the node's actual `udp.ports` default of 10000:60000 (verified against node source). Narrowed to 10000-60000 so the firewall opens exactly what the node uses by default -- no functional loss, since nothing listens above 60000 unless the node's own udp.ports is manually widened, in which case the firewall range should be widened to match on that specific node
-- feat (payment config panel): added the real key payments.settle.max-fee-percentage (node default 0.05) -- a gas-efficiency check that decides WHEN the node bothers to auto-settle below the Max Unsettled ceiling, separate from Hermes's fixed 20 percent cut. Help text rewritten to state the fixed 20 percent up front as a constant fact, clearly separated from this fee-timing setting so the two are never conflated again
-- docs (README -- payment config table corrected): still listed all 7 pre-v1.3.3 keys including the 4 phantom ones removed from the actual panel, and the old unsettled-max-amount dash key. Replaced with the 4 real keys the panel now has
-- docs (README -- pruning/Data Management corrected): described automatic daily pruning with default retention windows as active out of the box; this has been opt-in only since v1.3.1/v1.3.3. Rewritten to state history is kept indefinitely until retention is explicitly saved via the Data Manager, and that editing setup.json by hand does not enable it
-- docs (README -- missing install steps added): setup.sh's Step 12a (systemd re-apply on re-run), Step 12.5 (optional fail2ban) and Step 12.6 (optional Tailscale) exist in code but were never documented in the install walkthrough. Added
-- docs (README -- preset names synced): 'Node Defaults'/'High Load' corrected to the actual UI labels 'Standard . Stable Node'/'High Load . 50+ Sessions'
-
-## v1.3.5
-- fix (Unsettled Earnings showed an inflated, ever-growing number right after a real settlement): the dashboard fell back to a raw 30-day sum of all session tokens (session_total — can be 20, 100, 200+ MYST, never reset) whenever unsettled reached 0, which is exactly the normal, correct state right after a settle. So a genuine 0-after-settlement was replaced by a large stale-looking number, making it seem like the toolkit had not registered settlements that had already landed on-chain. The fallback now only triggers when the identity API is genuinely unreachable (rate-limited/blocked), never on a real zero balance
-- fix ('Last pruned' date in Data Manager updated even when nothing was deleted): the once-per-day run guard and the 'last actually pruned' timestamp shared one variable, so the guard stamped today's date even when no retention was configured and nothing was removed — making the Data Manager look like it silently purged data every day. The run guard now uses its own variable; the displayed 'Last pruned' date only updates when rows were actually deleted
-
-## v1.3.4
-- fix (observed-active showed ~50 months-old zombie sessions as Active): the node's /sessions list permanently contains stale 'New' rows that were never closed (e.g. after a node crash), and every fetch refreshed their last_seen, so the last_seen window alone let them all through — inflating the Active counter to 50 and burying the real consumers. A live session cannot predate the node process that owns it, so observed-active now also requires started_at to be after the node process start (fallback: last 7 days when no myst process is visible). Months-old zombies are gone; genuine multi-day consumers still show. This was a structural flaw in the observed-active filter since v1.2.48, not caused by v1.3.3
-- fix (wallet history did not open in fleet views): /sessions/by-wallet was missing from the fleet proxy endpoint whitelist, so on a fleet master viewing another node (?node=...) the history fetch was rejected. Added to the whitelist
-- improvement (wallet address itself is now clickable): in the Consumers tab the wallet address opens the history modal directly — the small arrow button also remains. Clicking the wallet is the natural gesture; the tiny arrow alone was easy to miss
-
-## v1.3.3
-- feat (wallet history view): every consumer wallet in the Consumers tab now has a 'history' button that opens a theme-following modal with that wallet's full archived session history (time, country, service, data up/down, earnings) plus a summary (total sessions, total data, total earned, first seen). Backed by a new GET /sessions/by-wallet endpoint reading sessions_history.db — the per-wallet audit view: exactly when and how much each address used your node
-- fix (payment config verified against the Mysterium node source, v1.38.3): the Max Unsettled setting wrote payments.unsettled-max-amount (dash), but the node reads payments.unsettled.max-amount (dot, node default 20) — earlier values were silently ignored; the key is now correct, so re-apply your value once after updating. Four settings were removed because the node never reads them at all: Manual Settle Min (payments.settle.min-amount), Min Promise Amount (payments.min_promise_amount), Balance Check Interval (pingpong.balance-check-interval + session.pingpong companion) and Promise Wait Timeout (pingpong.promise-wait-timeout — the provider-side wait is a hardcoded 50s constant in the node). TequilAPI stores any key it is given without validation, which is why these appeared to work. Presets now contain only real keys and the 'Read before using' help text was rewritten to the node's actual fee-driven settlement mechanics (settles when the threshold is reached AND the tx fee is under ~5% of the amount, forced at the max ceiling; the fixed 20% Hermes fee explains why a 12.5 threshold arrives as ~10 MYST)
-- fix (duplicate 'B2B Data Scraping' chip): Discovery returns separate proposals for scraping and quic_scraping, which share one display name; the per-service quality chips now dedupe on the display label
-- fix (daily auto-prune is now truly opt-in): the setup wizard pre-wrote a data_retention block with defaults into setup.json at install, which made every install look user-configured and defeated the v1.3.1 opt-in — the daily prune kept deleting history nobody asked to expire. Pruning now additionally requires data_retention_enabled: true, which is set only when the operator saves retention in the Data Manager; the wizard no longer pre-writes retention defaults. Existing installs stop pruning automatically until retention is saved again deliberately
-
-## v1.3.2
-- fix (unsettled earnings display lagged behind after a settle): the medium-tier settle detector called a method name that does not exist (get_identity_earnings instead of _get_identity_earnings), so every check raised an AttributeError that was silently swallowed by its debug-level except. As a result the detector never ran: after the node auto-settled in the background, the dashboard kept showing the climbing pre-settle unsettled balance (e.g. ~13 MYST) until the regular 10-minute slow-tier poll happened to refresh, or until a manual Settle click forced a refresh. Fixing the method name restores prompt (~1 min) reflection of both auto and manual settles. Regression introduced in v1.2.38; node payments themselves were always correct — only the toolkit display was affected. No routes, config keys, or fleet logic touched; behaves identically on solo and fleet-master
-- fix (settle-detect failures were invisible): the except around the settle detector logged at debug level, so the AttributeError above never surfaced in the journal at the default log level. It now logs at warning level, so any future failure of the settle detector is visible without enabling debug logging
-
-## v1.3.1
-- fix (data retention — auto-prune is now opt-in, never deletes on defaults): the daily automatic prune previously used built-in default retention windows (sessions 90d, system/services 30d, etc.), so it would eventually delete history the operator never chose to expire. It now prunes ONLY the data types for which the operator explicitly set a retention in the Data Manager (config/setup.json -> data_retention). With nothing configured, all history is kept indefinitely. Manual delete and retention settings in the Data Manager keep working exactly as before. This matches the rule that a purge must only happen when set or executed via the Data Manager
-
-## v1.3.0
-- feat (CLI — consumers and tunnels): the terminal dashboard (cli/dashboard.py) now shows, on the Status page, the observed-active consumers with their real wallets (service, duration, data, earnings) and the live tunnels with their idle/transferring status — the same honest data as the web UI. The CLI reads the backend /metrics API so it stays in sync automatically, and it stays light enough for slow laptops and older Raspberry Pi devices. Previously the CLI only showed an active-sessions counter with no consumer or tunnel detail
-- fix (idle tunnel indicator — option B, consistent for every tunnel): a tunnel is now marked idle when it is connected but has carried no meaningful traffic in the last 60 seconds, instead of being judged on its lifetime-average throughput. The old average-based test wrongly kept high-volume tunnels from ever going idle (a consumer that moved gigabytes but is now quiet stayed 'active') and pinned low-volume tunnels as permanently idle even during a burst. The 60-second window uses real traffic only (never keepalives) so the label reflects the actual moment-to-moment state without flickering each refresh
-- docs: README updated — CLI section now documents the observed-active consumers and idle tunnel display; the session-analytics section describes observed-active reporting and the option-B idle indicator accurately
-
-## v1.2.50
-- fix (idle label no longer wrong on active tunnels): a tunnel is now only marked 'idle' when it is moving almost nothing BOTH over its lifetime AND right now. Previously the label used only the lifetime-average throughput, so a tunnel transferring at this moment (e.g. 315 B/s) but with a low lifetime average was wrongly shown as idle. Added a not-has-speed guard so a currently-transferring tunnel is never labelled idle
-- fix (System Health — duplicate Uptime row and recurring false warning): the Mysterium Service health check assessed every myst process, so a second process (e.g. a separately started noop service) added its own Uptime/Memory row and its fresh start raised a 'recent restart' warning that Fix & Lock couldn't clear. The check now assesses only the main (oldest) node process, so there is a single Uptime row and no spurious restart warning
-- fix (mobile — connections rows no longer overlap): the observed-active and recently-closed session rows used a fixed 12-column grid that overflowed on narrow phone screens, overlapping time and byte columns. They now stack cleanly on mobile (wallet + flag on top, service/duration/data/earnings wrapping below) and keep the 12-column layout on desktop
-
-## v1.2.49
-- fix (Active counter matches the observed-active list): the connections 'Active (N)' counter previously showed 0 whenever the node's live API reported no active sessions, even while the Observed-active list below it showed real consumers — the counter and the list contradicted each other. The counter now falls back to the observed-active count (the real wallets seen in the node's session log within the last 10 min) when the API reports zero, so 'Active' matches what is shown. This does not double-count tunnels: observed-active are wallets from the session log, a separate source from the Tunnels tab. The raw API value is still available as active_api for reference
-
-## v1.2.48
-- feat (sessions — observed-active consumers, real node data, no guessing): the connections list now shows 'Observed active' consumers when the node temporarily stops reporting live sessions while the tunnel keeps running. Every time the node surfaces a session, the toolkit already records it in the local session log (sessions_history.db) with the real consumer wallet, time and bytes. A new SessionDB.get_observed_active() returns the sessions we genuinely saw active within the last 10 minutes that are not yet Completed — real wallets the node actually reported, shown with a cyan dot and clearly labelled. Once the node reports the session Completed, its final bytes/tokens land in the archive and it drops out of the observed list. This restores the operator's view of who is currently using the node across the window where Mysterium drops live session status, without fabricating anything. Works on all three install types (full, fleet master, lightweight) — the data is stored locally and forwarded to the master via /peer/data
-
-## v1.2.47
-- feat (sessions — recently-closed consumers, real node data): when the node reports no live-active sessions, the connections list now also shows recently-closed sessions (started within the last 10 minutes) with the real consumer wallet, time, data and service, clearly labelled 'Recently closed' with a grey dot — not disguised as live. Mysterium never exposes live-active sessions over any API (they live only in the node's in-memory map; /sessions returns only closed sessions from storage), so a just-closed session is the genuine, non-guessed way to keep the operator's view of who used the node. This restores the recent-consumer visibility without fabricating anything. Backed by a new recently_closed flag per session and recently_closed_count in the response
-- fix (EUR price — Frankfurter host moved): the USD→EUR rate fetch used api.frankfurter.app/latest, which now 301-redirects and silently dropped the EUR price. Switched to api.frankfurter.dev/v1/latest (the current host). USD (CoinPaprika) was unaffected; EUR is shown again
-
-## v1.2.46
-- fix (live sessions — honest reporting, no more guessing): the connections list no longer fabricates active sessions. Previously, when TequilAPI reported zero active sessions while WireGuard tunnels were still live (the node drops session status while the tunnel persists via keepalives), the toolkit promoted the most recent history rows to 'active' — which showed the wrong consumer (e.g. a low-traffic monitoring probe) while the real multi-GB tunnel had no visible session. The node's tunnel-to-wallet mapping lives only in its in-memory event bus and is never exposed over any API, and `wg show` yields only peer public keys, so that attribution is fundamentally unknowable. The session list now shows only what the node genuinely reports; when it reports no active sessions but tunnels are live, the UI says so and points to the Tunnels tab, which is the source of truth for live throughput (with the idle indicator from v1.2.45). A new tunnels_without_session field backs this
-- change (probe label — honest wording): the 🔧 marker on low-traffic non-paying connections now reads "Likely monitoring probe — 0 earnings, tiny sessions (behavioural inference)" instead of asserting "Mysterium network probe". The detection is a behavioural heuristic (Mysterium does not publish these wallet addresses), so the label no longer claims more than is known. The marker itself is unchanged and stays useful for separating probes from paying consumers
-- docs: README now documents the honest live-session behaviour (session list = what the node reports, Tunnels tab = source of truth for live traffic) and the behavioural basis of the 🔧 probe label; stale in-code comment about using interface count as ground truth for active sessions removed
-
-## v1.2.45
-- feat (firewall — never lock out SSH): setup no longer force-enables an inactive firewall (that could activate a default-deny ruleset with no SSH rule and lock you out of a VPS). It now only adds allow-rules to a firewall that is already active, and always whitelists the real SSH port(s) FIRST — detected from sshd_config (and sshd_config.d), defaulting to 22 but honouring custom ports. When no firewall is active, required ports are already open and none is forced on. Works across all supported backends (ufw, firewalld, nftables, iptables)
-- fix (firewall — P2P range): the Mysterium UDP range is now opened up to 65000 (was 60000), matching nodes that use udp.ports 10000:65000
-- feat (fail2ban — isolated jail.d file): the toolkit jail now lives in its own /etc/fail2ban/jail.d/mysterium-toolkit.conf instead of a managed block inside jail.local, so it can never conflict with a user's existing jail.local. Existing installs are migrated automatically — the old jail.local block is stripped (sshd, recidive and any other user jail are left untouched). The toolkit only ever creates the mysterium-dashboard jail; it no longer creates or rebuilds an sshd jail, and the save endpoint now refuses any non-toolkit jail name
-- feat (Tailscale — optional): setup now asks whether to use Tailscale for private dashboard access (default no). It detects Tailscale and shows the private URL, and stores the preference — without changing bind addresses, so the dashboard can never become unreachable from a setup run. Everything continues to work with or without Tailscale or fail2ban
-- fix (earnings efficiency — removed misleading 'Latest'): the 'Latest MYST/GB' figure was the ratio of the most recent day alone, which swings wildly with the day's service mix — a near-empty Public-only day shows ~3 MYST/GB even though the real blended rate is ~0.11. It implied thousands of MYST from a TB of traffic. Removed; the volume-weighted Combined avg and the per-service rates remain as accurate measures
-- feat (idle tunnel indicator — correct layer): tunnels in the live view that stay open for hours while moving almost nothing on average (lifetime throughput below ~1 KB/s, e.g. a monitoring probe holding a tunnel open with only keepalives) are now marked 'idle' with a grey dot, so a probe tunnel is no longer indistinguishable from a real consumer on the same interface pool. This replaces the earlier session-level attempt, which never fired because Mysterium resets the session timer every ~2 minutes while the tunnel persists — idle is now judged at the tunnel layer where the interface age and total bytes are known
-
-## v1.2.44
-- feat (idle tunnel indicator): active sessions that hold a WireGuard tunnel open but move almost no data (long-running with average throughput below ~1 KB/s) are now marked 'idle' in the connections list instead of showing an identical pulsing 'active' dot. WireGuard tunnels linger after real traffic stops and monitoring probes briefly hold a tunnel, so an idle probe tunnel that stayed open for hours no longer looks like a busy consumer — the dot turns grey and an 'idle' tag appears next to the duration
-- cleanup (on-chain data source): removed the dead api.polygonscan.com fallback from the wallet-balance and token-transfer fetches. Since the Etherscan V2 migration that host only returns a 301 redirect. Etherscan V2 (chainid=137) is the sole source and accepts legacy Polygonscan API keys, so on-chain balance, settlement history and rewards are unaffected
-
-## v1.2.43
-- fix (Public mode toggle — B2B services): switching Public between Open and Verified deleted and recreated the wireguard service. On the standard multi-service node, wireguard, dvpn, scraping, data_transfer and monitoring share ONE WireGuard subnet, and that DELETE tore the subnet down — taking the B2B services with it until the next full node restart. The v1.2.32 fix only covered the Off path; the Open/Verified path still did the blunt DELETE. It now cycles wireguard through the active-services list (remove then re-add) so the new access policy applies while the shared subnet — and the B2B/dvpn/monitoring services on it — stay up. A direct service cycle is used only when wireguard is managed separately (not in active-services)
-- fix (earnings efficiency — combined average): the 'Combined avg MYST/GB' was a plain mean of per-day ratios, which over-weighted low-volume high-rate days (a few MB of Public at ~3 MYST/GB counted as much as tens of GB of B2B at ~0.08 MYST/GB), inflating the figure well above the real earned rate. It is now volume-weighted (total earnings / total data across the window), so it reflects the true blended rate (e.g. ~0.12 instead of ~1.84 on a B2B-heavy node)
-
-## v1.2.42
-- fix (earnings efficiency chart): days with negligible data (a few hundred KB) divided a tiny earnings figure by a near-zero GB value, producing meaningless MYST/GB ratios that collapsed the per-service line into sharp V-drops. Each service's daily ratio is now clamped up to the 10th percentile of that service's own real days. No day is removed — low-earning nodes keep every data point — only genuine divide-by-near-zero noise is lifted into the real range
-- fix (settlement history): the on-chain settlement list now shows only incoming transfers (actual settlements into the wallet). Outgoing transfers (e.g. moving MYST out to top up a service) are no longer listed or counted, keeping the settlement total accurate
-- fix (network rewards): rewards are now matched to the known MystNodes monthly reward pool address instead of any incoming non-Hermes transfer. This prevents unrelated incoming MYST (e.g. a one-off transfer from a Mysterium admin wallet to help an operator get started) from being wrongly counted as a reward
-
-## v1.2.41
-- fix (earnings overflow): the lifetime/service-breakdown rollup summed raw token wei with SUM(tokens), which overflows SQLite's 64-bit integer limit once lifetime earnings pass ~9.2 MYST worth of summed wei (any real node). The query now uses SUM(CAST(tokens AS REAL)), matching the other earnings queries. Without this the rollup raised 'integer overflow' and fell back to a partial live computation, so lifetime and per-service earnings could read low or incomplete
-
-## v1.2.40
-- fix (no setup needed): the read-only 'wg show' sudoers permission for exact handshake-based tunnel counts is now added by update.sh, not just setup.sh. update.sh already rewrites the sudoers file on every run, so existing users get exact tunnel counts automatically on a normal update — without ever re-running setup. This corrects v1.2.35, which wrongly required a setup re-run
-- ui (tunnels): the fallback hint no longer says 'run setup'; it now points to the only remaining cause (the wireguard-tools package not being installed), since the sudoers permission applies automatically on update
-
-## v1.2.39
-- feat (settle feedback): the Settle button now reports the actual outcome instead of always showing 'queued'. The node can return HTTP 200 while Hermes refuses the settlement (the reason is in the body), so the response is now inspected. The most common case — Hermes 'Limit exceeded' after recent settlements — is shown as a clear notice (earnings are safe, the node settles automatically once the rate-limit window clears, no need to retry). 'Nothing to settle' and 'insufficient fee' are surfaced too; unknown endpoint variants still fall through to the async settle path
-- ui (settle): the result now shows below the button with a readable hint instead of being squeezed into the button label, and errors stay visible long enough to read
-
-## v1.2.38
-- fix (settle detection): the dashboard now reflects a settlement (auto OR manual) within ~1 minute instead of lagging up to the 10-minute slow-tier interval. The medium tier (60s) reads the node's own unsettled earnings and, when it drops by more than 0.5 MYST (unsettled only ever falls on a settle, otherwise it climbs with accrual), forces an immediate earnings refresh. Replaces the previous heuristic that estimated unsettled from live session tokens — an unreliable signal that rarely fired
-
-## v1.2.37
-- security (firewall): setup no longer opens the Mysterium Node UI port (4449/tcp) to the network. It exposed the node's own control UI with no toolkit protection in front of it. The Node UI stays reachable on localhost and LAN; node onboarding now documents the secure SSH-tunnel method (ssh -L 4449:127.0.0.1:4449) so it works without exposing the port and without Tailscale
-- fix (firewall/docs): corrected the documented P2P UDP range to 10000-60000, matching the node's udp.ports default (10000:60000) confirmed in Mysterium core config — the README previously said 65000
-- docs (ports): the Ports-opened table now reflects what setup actually opens (5000/tcp + 10000-60000/udp on local installs only; remote/fleet opens 5000 only). Clarified that 4050/tcp (TequilAPI) is localhost-only and never firewalled open, and that 4449/tcp is intentionally left closed
-
-## v1.2.36
-- fix (node quality in Verified mode): the Discovery query now includes access_policy=all. Without it, Discovery only returns proposals under the default public policy, so when Public ran in Verified mode the wireguard proposal (moved to the 'mysterium' policy) was omitted and quality wrongly showed 0 score / 0% uptime / 0 Mbit/s. With access_policy=all the node's proposals and quality are read correctly in every mode — verified live against the Discovery API (1 proposal without the flag vs 6 with it)
-- fix (false warning removed): dropped the inaccurate 'Verified mode blocks Mysterium monitoring agents' notice. Verified does not block monitoring — the 0% readings were caused solely by the missing query parameter above, not by Mysterium
-
-## v1.2.35
-- fix (tunnel count): tunnels are now counted from WireGuard handshake recency via `sudo wg show` — an interface counts as a live tunnel when its peer handshaked in the last ~3 minutes. Mysterium creates one interface per consumer, so this reflects genuinely connected consumers (including connected-but-idle ones) and tracks clients coming and going, instead of byte-based heuristics that under- or over-counted. Falls back to the previous traffic-based estimate (marked "estimated" in the UI) when wg/sudo is unavailable
-- feat (setup): setup adds read-only `wg show` to the toolkit sudoers (both /usr/bin and /usr/sbin paths) so the handshake-based count works on hardened installs. Existing users get exact counts after re-running setup; until then the estimated fallback is used
-- docs: corrected the live-connections note (wg show IS used now) and updated Help/README for handshake-based tunnel counts
-
-## v1.2.34
-- fix (export via fleet): the CSV/TXT session export now works when viewing a node through the fleet master. The fleet proxy lacked export/sessions in its allowlist and force-parsed every response as JSON (which mangled file downloads); it now allowlists the endpoint and forwards non-JSON responses raw, preserving Content-Type and the download filename
-- fix (export errors): the Download button now surfaces a visible error instead of failing silently
-- fix (tunnel count): the Tunnels count no longer includes idle-but-connected interfaces kept alive only by WireGuard keepalives. A tunnel counts as active only with real traffic (>2 KB/interval) in the last 5 minutes, so the number reflects tunnels actually serving consumers instead of the full interface pool
-
-## v1.2.33
-- fix (Public/monitoring, second path): the generic service stop now stops Public (wireguard) via the active-services rewrite instead of a blunt DELETE — closing the same monitoring-killing footgun that v1.2.32 fixed for the Open/Verified/Off toggle. Falls back to a direct stop only when wireguard is managed separately. The UI already routes Public through the mode selector, so this hardens the API path against direct or future callers
-- cleanup: removed an unreachable dead return in the stop-service route
-
-## v1.2.32
-- fix (Public/monitoring): turning Public Off no longer deletes the wireguard service (which tore down the shared WireGuard subnet and killed monitoring + other services on it). On nodes that manage wireguard via active-services, Off now removes only wireguard from the list and lets the node reconcile gracefully — monitoring keeps running. Falls back to a direct stop only when wireguard is managed separately. Open/Verified re-adds wireguard to active-services so Public persists across restarts
-- fix (tunnels): the Tunnels & Sessions count now reads recent-active tunnels (traffic in the last 5 minutes) instead of the cumulative since-boot interface count, so it no longer shows idle pool interfaces (e.g. '6 tunnels / 1 session')
-- feat (export): new CSV/TXT export of the session archive — choose last 30/90 days or all history, optionally filtered to a single consumer wallet. Generated read-only from the frozen archive so settled earnings are accurate. Available from the History tab
-- docs: updated in-app Help and README for the new Off behavior and the export feature
-
-## v1.2.31
-- fix (G1): lifetime totals (earnings, data, sessions, service breakdown) now come from a permanent daily rollup (`earnings_rollup.db`) that survives session pruning — pruning old sessions can no longer shrink lifetime figures; a full data reset clears the rollup too
-- fix (A): Consumers tab, top earners, paying-consumer count and probe detection now use frozen archive tokens instead of live (settlement-zeroed) tokens, so settled real payers are no longer counted as 0-earning
-- fix (H1): the unsettled balance refreshes within ~2 minutes after a node-side auto-settle instead of lagging up to the 10-minute slow-tier poll
-- fix (F1): "Tunnels" now counts WireGuard interfaces active in the last 5 minutes (recent activity) instead of any interface that ever carried traffic, aligning it with the live consumer count
-- fix (E1): the earnings chart now also drops corrupt snapshots with an absurd forward jump (>50 MYST between consecutive snapshots), matching the write-side guard
-- fix (D1): hardened settle-amount parsing to reliably distinguish wei from MYST, preventing inflated amounts on tiny settlements
-- fix (D2): wallet balance keeps its last good cached value on Polygonscan rate-limit instead of blanking (removed dead branch)
-- fix (D3): replaced deprecated `datetime.utcfromtimestamp` with a timezone-aware call
-- docs: updated in-app Help/FAQ and README for the rollup, retention defaults, recent-active tunnels, frozen consumer stats and prompt settle refresh
-
-## v1.2.30
-- fix: manual settle no longer reports an error when `/transactor/settle/sync` takes long — a read-timeout is now treated as "settling on-chain" (success/pending) instead of HTTP 504, matching the official Mysterium SDK which disables the timeout on this slow on-chain call
-- fix: settle busts the balance/earnings cache after success (was dead code placed after `return`) so the dashboard refreshes promptly
-- fix: settle builds the TequilAPI URL per node inside the retry loop, adds `/transactor/settle/async` fallback, and distinguishes connect-timeout (node down) from read-timeout (node busy)
-- feat: History tab search bar — find all sessions by consumer wallet (`0x…`) or session ID, searched server-side across the entire archive (`/sessions/archive?search=`)
-- feat: session IDs are now click-to-copy with the same popup as consumer IDs, in both live and archive history rows
-- fix: removed dead duplicate `fail2ban_reload` function (orphaned definition that had no route)
-
-## v1.2.29
-- fix: database migration in `update.sh` now correctly migrates existing data from `config/` to `backend/databases/` — previous check skipped migration when empty placeholder files existed in `backend/databases/` (affects all users who updated to v1.2.28)
-- fix: `data_manager.py` — `uptime_log.json` and `node_identity.txt` now correctly read from `config/` instead of `backend/databases/`; SQLite databases correctly use `backend/databases/`
-- fix: README database paths corrected from `config/` to `backend/databases/`
-- fix: README firewall table removed incorrect ports 1194 (OpenVPN) and 51820 (WireGuard) — Mysterium does not use these ports
-
-## v1.2.28
-- fix: all SQLite databases moved from `config/` to `backend/databases/` (correct location) [file:38]
-- fix: `update.sh` auto-migrates existing `config/*.db` to `backend/databases/` on first run — no data loss [file:38]
-
-## v1.2.27
-- fix: `setup.sh` now downloads Node.js 18 binary directly when apt fails (Debian Buster/EOL systems) [file:38]
-- fix: `setup.sh` detects and repairs broken npm (`TypeError: Class extends value`) [file:38]
-- fix: Node.js minimum raised to v18 — Vite requires `crypto.getRandomValues` [file:38]
-- fix: sqlite3 Buster fallback via `snapshot.debian.org` [file:38]
-- fix: npm install log no longer uses `/tmp` — uses toolkit `logs/` directory [file:38]
-- fix: `logs/` and `config/` chown after sudo install — prevents permission errors [file:38]
-- fix: `nodes.json` template creation default changed to `N` — prevents ghost nodes in fleet UI [file:38]
-- fix: backend skips template nodes with `REPLACE_WITH_NODE_IP` — never shown in fleet [file:38]
-- fix: delete node immediately updates fleet UI state without waiting for metrics refresh [file:38]
-
-## v1.2.26
-- feat: setup wizard new entry question — node location instead of Easy/Custom [file:38]
-- feat: fleet wizard added — guides Type 2 (fleet master) and Type 3 (lightweight backend) setup [file:38]
-- feat: Easy mode now asks for Polygonscan API key [file:38]
-- feat: Easy mode auto-detects Raspberry Pi — sets log level to WARNING automatically [file:38]
-- feat: Easy mode wallet address explanation improved [file:38]
-- feat: post-setup port reachability guide added to wizard [file:38]
-- docs: README Step 8 wizard section fully rewritten to match new wizard flow [file:38]
-- docs: Help section — log level and debug mode explanation added [file:38]
-
-## v1.2.25
-- fix: TequilAPI port corrected to 4050 throughout setup_wizard.py, app.py, README and Dashboard.jsx [file:38]
-- fix: removed non-existent ports 14449/14050 from port scan [file:38]
-- fix: nodes.json examples updated to use port 4050 (TequilAPI) instead of 4449 (Node UI) [file:38]
-- fix: port scan now tries 4050 first (bare metal), then 4449 (Docker) [file:38]
-
-## v1.2.24
-- fix: Help section autostart option numbers corrected (8 for Type1/2, 6 for Type3) [file:38]
-- fix: setup.sh Step 13 key tips corrected — option 8 autostart, option 9 security [file:38]
-- docs: Help section now explains security can be added after install via option 9 [file:38]
-- docs: README new section `Adding Security After Install` [file:38]
-
-## v1.2.23
-- fix: fail2ban start/stop use `fail2ban-client` instead of `systemctl` — fixes permission error on non-root installs [file:38]
-
-## v1.2.22
-- fix: SecurityPage settings routes (fail2ban managed toggle, install) use local backend URL instead of fleet proxy — fixes 403 FORBIDDEN in fleet context [file:38]
-
-## v1.2.21
-- fix: fail2ban managed toggle no longer resets every 5s — settings fetch split from firewallData useEffect [file:38]
-
-## v1.2.20
-- docs: removed outdated sudo ./update.sh warning from README [file:38]
-- docs: README menu tables updated with Security & Upgrades option [file:38]
-- docs: README firewall table corrected (port 4050, not 4449) [file:38]
-- docs: README new Security section — fail2ban, Tailscale, custom jails [file:38]
-- docs: README permissions table updated with fail2ban entries [file:38]
-- docs: Help section in dashboard — Security tab, Tailscale, Pi mode, CLI option 9 explained [file:38]
-
-## v1.2.19
-- fix: auto-update wrapper now uses `sudo -n` on non-root systems (fixes Parrot OS and other security-hardened distros) [file:38]
-- fix: removed Add custom jail UI — toolkit only manages mysterium-dashboard jail; info hint added pointing to manual jail.local editing [file:38]
-- fix: Tailscale card now shows actionable message when installed but not connected [file:38]
-- feat: Tailscale card shows optional UFW commands to hide dashboard from internet when connected [file:38]
-
-## v1.2.18
-- fix: `_f2b_all_jails()` is_toolkit computed inside inner loop — prevents wrong toolkit label on external jails (sshd, nginx-botsearch etc.) [file:38]
-- fix: fail2ban_get_jails now only returns toolkit-managed jails — external jails never shown in dashboard [file:38]
-- fix: fail2ban managed toggle now renders correctly regardless of jail load state [file:38]
-- fix: removed mention of specific tool names from fail2ban managed toggle description [file:38]
-
-## v1.2.17
-- fix: setup.sh Python check now detects pyenv shims under sudo (Raspberry Pi Buster + other EOL systems) [file:38]
-- fix: fail2ban only creates `mysterium-dashboard` jail — SSH and other jails managed by other tools are never touched [file:38]
-- fix: update.sh sudoers rewritten in multi-line heredoc format (fixes Parrot OS and other security-hardened distros) [file:38]
-- feat: Tailscale detection in firewall data (installed/running/IP/peers) [file:38]
-- feat: Tailscale status card in Security tab with install guide [file:38]
-- feat: fail2ban managed toggle in Security tab (disable to prevent toolkit from writing jail.local) [file:38]
-- feat: Security & Upgrades menu in CLI (option 9) — install fail2ban, Tailscale wizard, reconfigure sudoers [file:38]
-
-## v1.2.16
-- fix: auto-update service exit code 1 when up-to-date (add exit 0 to wrapper script) [file:38]
-- fix: fleet Add Node input fields uneditable due to nested component definition causing remount on every render [file:38]
-
-## v1.2.15
-- Added Pi mode toggle for Raspberry Pi SD card protection [file:38]
-- Added firewalld rule display for Fedora/RHEL/CentOS/Rocky Linux [file:38]
-
-## v1.2.14
-- Fixed probe detection incorrectly relaxed in v1.2.9 and restored original probe logic [file:38]
-
-## v1.2.13
-- Fixed port 4449 vs 4050 in PortReachability health check [file:38]
-- Removed deprecated delete endpoints [file:38]
-- Corrected incorrect success message after data delete [file:38]
-
-## v1.2.12
-- Fixed manual and timer-based updates requiring password on Parrot OS and other `use_pty` distros [file:38]
-
-## v1.2.11
-- Fixed auto-update timer not triggering on existing installs [file:38]
-- Reverted globe icon behavior for wireguard sessions [file:38]
-
-## v1.2.10
-- Fixed globe icon missing in History and Consumers detail views [file:38]
-
-## v1.2.9
-- Fixed probe detection falsely flagging wireguard Public consumers as network probes [file:38]
-- UI: wireguard consumers shown as globe icon instead of dash [file:38]
-- Code comment corrected for noop service description [file:38]
-
-## v1.2.8
-- Fixed sudoers missing ufw, iptables-nft, cpufreq scaling governor, and cpupower on non-root installs [file:38]
-
-## v1.2.7
-- Fixed sudoers missing `/usr/bin/systemctl` paths on security-hardened distros [file:38]
-- Added missing `systemctl reset-failed mysterium-toolkit` NOPASSWD [file:38]
-- Added missing `systemctl restart mysterium-*` in `update.sh` [file:38]
-
-## v1.2.6
-- Fixed broken auto-update timer wrapper script [file:38]
-- Fixed wrapper never repaired on existing installs [file:38]
-- Fixed `is_local_request()` trusting entire RFC1918 on VPS installs [file:38]
-
-## v1.2.5
-- Fixed Docker compatibility in README and setup wizard [file:38]
-- Added Docker-aware service watchdog and live data fallbacks [file:38]
-- Added Docker-specific restart hint and host note in system health [file:38]
-
-## v1.2.4
-- Fixed fail2ban jail edits not applying live [file:38]
-- Changed auto-update timer from daily to hourly and version-check based [file:38]
-
-## v1.2.3
-- Fixed missing NOPASSWD commands for sudoers update flow [file:38]
-
-## v1.2.2
-- Fixed fail2ban config handling to use `/etc/fail2ban/jail.local` [file:38]
-- Preserved user customizations outside toolkit-managed jail block [file:38]
-- Updated sudoers paths to match jail.local usage [file:38]
-
-## v1.2.1
-- Fixed fail2ban jail edit fields disappearing after save [file:38]
-- Fixed fail2ban health scan sudo fallback issues [file:38]
-- Added auto-update re-exec when update content changes [file:38]
-- Added auto-create of update timer when missing [file:38]
-
-## v1.2.0
-- Fixed fail2ban access for non-root installs [file:38]
-- Added fail2ban firewall-type detection and broader distro support [file:38]
-- Raised default bantime for sshd and dashboard jails [file:38]
-- Improved Raspberry Pi install handling and Node.js version checks [file:38]
-
-## v1.1.66
-- Fixed multiple dashboard crashes from undefined values [file:38]
-- Fixed Security routing and fail2ban/UFW form issues [file:38]
-
-## v1.1.65
-- Fixed fail2ban exception cascade [file:38]
-- Fixed earnings chart undefined values [file:38]
-- Added fail2ban-client and config paths to NOPASSWD [file:38]
-
-## v1.1.64
-- Rewrote fail2ban jails to use fail2ban-client as primary source [file:38]
-- Added UFW edit support and restored firewall refresh [file:38]
-
-## v1.1.63
-- Added firewallData prop and corrected iptables field names [file:38]
-- Added sudo fallback for fail2ban on non-root installs [file:38]
-- Added `/firewall` to fleet proxy whitelist [file:38]
-
-## v1.1.62
-- Fixed SecurityPage open crash and iptables column names [file:38]
-- Fixed fail2ban ping behavior on non-root installs [file:38]
-
-## v1.1.61
-- Added `/firewall` whitelist support for fleet nodes [file:38]
-- Loaded UFW rules from firewallData [file:38]
-- Allowed editing all jails and saved external jails as overrides [file:38]
-
-## v1.1.60
-- Complete Security page rewrite for fail2ban and UFW management [file:38]
-- Added `/firewall/fail2ban/start`, `/stop`, and `/reload` endpoints [file:38]
-- Added running-state-aware jail loading [file:38]
-
-## v1.1.59
-- Fixed blank dashboard crash caused by orphaned module-level lines [file:38]
-
-## v1.1.58
-- Added all new security endpoints to fleet proxy whitelist [file:38]
-- Fixed dashboard crash caused by React default export issues [file:38]
-
-## v1.1.57
-- Removed duplicate components that caused dashboard crashes [file:38]
-- Added security endpoints to fleet proxy whitelist [file:38]
-
-## v1.1.56
-- Firewall card fail2ban now shows only status and counts [file:38]
-- Manage link now points to Security page [file:38]
-
-## v1.1.55
-- Added install fail2ban button in Security page [file:38]
-- Added active bans and unban buttons [file:38]
-- Added backend fail2ban install endpoint [file:38]
-- Removed old Fail2banManager modal [file:38]
-
-## v1.1.54
-- Removed incorrect toolkit.conf restriction text [file:38]
-
-## v1.1.53
-- Replaced dynamic Tailwind classes with static conditionals [file:38]
-
-## v1.1.52
-- Added Security button in bottom nav bar [file:38]
-- Added full fail2ban and UFW management to Security page [file:38]
-
-## v1.1.51
-- Collapsed firewall card sections by default [file:38]
-- Added manage panel behavior for fail2ban [file:38]
-
-## v1.1.50
-- Added fail2ban manager modal [file:38]
-- Changed UFW rules to be collapsed by default [file:38]
-
-## v1.1.49
-- Added fail2ban status in firewall card [file:38]
-- Added `/firewall/fail2ban/unban` endpoint [file:38]
-- Added optional fail2ban install step in setup scripts [file:38]
-
-## v1.1.48
-- Fixed consumer ID copy scrolling issue [file:38]
-- Moved network probes to top of consumer list [file:38]
-
-## v1.1.47
-- Fixed consumer ID copy focus scrolling issue [file:38]
-
-## v1.1.46
-- Fixed update.sh being killed by the service cgroup during update [file:38]
-
-## v1.1.45
-- Fixed consumer ID copy helper reference errors [file:38]
-
-## v1.1.44
-- Added SIGTERM handler so systemd does not restart during updates [file:38]
-- Fixed backend restart/update race conditions [file:38]
-
-## v1.1.43
-- Fixed consumer ID copy remount issues from inline component definitions [file:38]
-
-## v1.1.42
-- Fixed update restart race condition [file:38]
-
-## v1.1.41
-- Replaced `grep -oP` with portable `awk` for PID extraction [file:38]
-
-## v1.1.40
-- Restored consumer ID popup copy behavior [file:38]
-- Fixed `toFixed()` crashes on undefined values [file:38]
-
-## v1.1.39
-- Restored full consumer ID display [file:38]
-
-## v1.1.38
-- Fixed build-to-temp update flow [file:38]
-- Removed `pkill -f` self-matching issue [file:38]
-- Added verified mode warning [file:38]
-
-## v1.1.37
-- Removed `ExecStartPre pkill` self-kill issue [file:38]
-
-## v1.1.36
-- Fixed `ExecStartPre` heredoc command substitution issue [file:38]
-
-## v1.1.35
-- Added fallback for writing wireguard config on non-root installs [file:38]
-- Added config files to NOPASSWD [file:38]
-
-## v1.1.34
-- Added `ExecStartPre` to ensure port 5000 is free before start [file:38]
-
-## v1.1.33
-- Killed process on port 5000 by PID [file:38]
-
-## v1.1.32
-- Waited for port 5000 to become free before starting [file:38]
-
-## v1.1.31
-- Killed leftover process on port 5000 after stop [file:38]
-
-## v1.1.30
-- Added Network Rewards section to Settle History [file:38]
-- Added rewards transaction data to settle history response [file:38]
-
-## v1.1.29
-- Restart flow now uses systemd stop+start [file:38]
-- Added `systemctl reset-failed` before start [file:38]
-- Moved `StartLimitIntervalSec` and `StartLimitBurst` to `[Unit]` [file:38]
-- Switched service file write to `$SUDO tee` [file:38]
-
-## v1.1.28
-- Fixed wireguard mode read/write handling [file:38]
-- Fixed `toFixed()` on undefined session earnings [file:38]
-- Changed license to AGPL-3.0 [file:38]
-
-## v1.1.27
-- Added update-in-progress screen [file:38]
-
-## v1.1.26
-- Moved system update logs out of `/tmp` [file:38]
-- Auto-cleaned stale `/tmp` logs [file:38]
-- Updated update status to read only `logs/update.log` [file:38]
-
-## v1.1.25
-- Replaced `systemctl restart` with `stop` + `start` [file:38]
-
-## v1.1.24
-- Skipped sudoers updates when unchanged [file:38]
-
-## v1.1.23
-- Added earnings efficiency breakdown by service type [file:38]
-- Added configured node price legend [file:38]
-- Merged `quic_scraping` into `scraping` [file:38]
-
-## v1.1.22
-- Fixed JSX syntax error in help section [file:38]
-
-## v1.1.21
-- Made `chown` commands conditional [file:38]
-
-## v1.1.20
-- Added CLI and help improvements [file:38]
-- Added fleet Add Node URL auto-complete [file:38]
-- Improved README and update documentation [file:38]
-
-## v1.1.19
-- Fixed root-owned `.git/objects` after sudo update [file:38]
-- Added urgent notice for previous sudo update users [file:38]
-
-## v1.1.18
-- Removed outer sudo requirement from update.sh [file:38]
-- Updated fleet update button to run full update flow [file:38]
-- Fixed build file copy and node_modules handling [file:38]
-
-## v1.1.17
-- fix: `mystPrice` ReferenceError in fleet bar — undefined variable crash on load
-- fix: `update.sh` no longer exits on frontend build failure — backend always restarts even when build fails
-
-## v1.1.16
-- feat: GitHub Actions CI workflow added
-- docs: CHANGELOG added to repo
-
-## v1.1.15
-- Added net earned and fleet bar summaries [file:38]
-- Added Ansible mass update section [file:38]
-- Fixed unsettled display logic and Hermes channel row [file:38]
-
-## v1.1.14
-- Added fleet aggregate bars for MYST and fiat values [file:38]
-- Fixed confusing unsettled fallback behavior [file:38]
-
-## v1.1.13
-- Added Docker support for fleet update [file:38]
-- Documented fleet update manager and Docker stats [file:38]
-
-## v1.1.12
-- Fixed fleet update on non-root installs [file:38]
-
-## v1.1.11
-- Fixed orphaned visible text in Data Management panel [file:38]
-
-## v1.1.10
-- Fixed fleet update on non-root installs to use stop/start flow [file:38]
-
-## v1.1.9
-- Fixed firewall panel JSX bracket error [file:38]
-
-## v1.1.8
-- Fixed orphaned visible text in mobile view [file:38]
-- Hid redundant fleet card label at 100% uptime [file:38]
-
-## v1.1.7
-- Fixed firewall panel JSX closing bracket error [file:38]
-
-## v1.1.6
-- Added inline firewall panel [file:38]
-- Added legacy port detection and removal [file:38]
-- Reduced version check cache time [file:38]
-
-## v1.1.5
-- Added Open/Verified/Off selector for public service [file:38]
-- Fixed deprecated ports and port labels [file:38]
-
-## v1.1.4
-- Added tunnel counter tooltip and firewall help text [file:38]
-- Fixed firewall cleanup chain handling [file:38]
-
-## v1.1.3
-- Reverted broken `get_sessions` behavior from v1.1.2 [file:38]
-- Added isolated `/sessions/live` endpoint [file:38]
-
-## v1.1.2
-- Attempted realtime active session fetch, later reverted [file:38]
-
-## v1.1.1
-- Fixed update endpoint SSH key detection and HOME handling [file:38]
-- Added update status endpoint [file:38]
-
-## v1.1.0
-- Added public service 3-mode selector [file:38]
-- Added sessions pagination support [file:38]
-- Added default TequilAPI credentials hint [file:38]
-- Added config verification after active-services write [file:38]
-- Added earnings sanity checks [file:38]
-- Added docs for new features [file:38]
-
-## v1.0.30
-- Fixed chart colors to use inline hex [file:38]
-
-## v1.0.29
-- Added Fleet Update Manager [file:38]
-- Added node offline warning [file:38]
-- Added reliable analytics bar colors [file:38]
-
-## v1.0.28
-- Fixed systemd service `StartLimitIntervalSec` placement [file:38]
-- Fixed myst service detection [file:38]
-
-## v1.0.27
-- Fixed wireguard active-services handling [file:38]
-- Fixed monitoring/noop service toggle blocking [file:38]
-- Fixed TequilAPI error logging [file:38]
-
-## v1.0.26
-- Fixed access_policies handling in start_service and metrics refresh [file:38]
-
-## v1.0.25
-- Changed default chart period from 90d to 30d [file:38]
-
-## v1.0.24
-- Changed transfer chart color to indigo [file:38]
-
-## v1.0.23
-- Merged quic_scraping into scraping [file:38]
-
-## v1.0.22
-- Fixed ghost deduplication and consumer counter [file:38]
-
-## v1.0.21
-- Fixed active-services config and TequilAPI port auto-correction [file:38]
-
-## v1.0.20
-- Fixed fleet routing and merged QUIC Scraping into B2B Data Scraping [file:38]
-
-## v1.0.19
-- feat: adaptive CLI start menu per install type (Type 1/2/3 tonen andere opties)
-- feat: detect and separate Mysterium network probes in Consumers tab with probe indicator
-- fix: missing `fmtType` in 5 mobile views
-- fix: `duration_secs` added to live sessions for working Duration sort
-- fix: reset archive offset on fleet node switch
-- fix: deduplicate ghost reconnect sessions per consumer/service-type pair
-- fix: `_run` input_data encoding bug
-- fix: `cpu_governor` persist via tee + systemd service
-- fix: replace `sudo bash` with `sudo tee` for all health fix file writes
-- fix: expand sudoers with missing sysctl/modules-load.d/chmod paths
-- fix: `fmtType` applied to ServiceSplitChart legend and SVG tooltips
-- fix: sync `_DEFAULT_RETENTION` with actual setup defaults
-- docs: README menu option numbers corrected per install type
-
-## v1.0.18
-- fix: phantom active sessions from stale WireGuard interfaces
-- fix: History tab showing wrong node archive in fleet mode
-
-## v1.0.17
-- feat: context-aware health profiling (Laptop, VM/VPS, LXC, Raspberry Pi, Bare metal, Alpine)
-- fix: quieter toast notifications
-
-## v1.0.16
-- fix: `TOOLKIT_DIR` path bug in root `setup.sh`
-- fix: NodeSource Node.js 20 install updated
-- fix: `fmtType` missing in mobile views
-- fix: Network Quality card display
-- docs: Ubuntu and Pi OS compatibility noted in README
-
-## v1.0.15
-- feat: uniform 7d/30d/90d/1y/All period selectors across all charts
-- feat: data retention raised to 365 days default
-- feat: new analytics charts (service split, earnings efficiency)
-- fix: auto-detect OS timezone, persist to `setup.json`
-- fix: earnings chart daily bucketing to local time
-- fix: service-split and earnings-efficiency endpoints use raw tokens/bytes columns
-
-## v1.0.14
-- fix: service-split and earnings-efficiency endpoints: `SessionDB.init()` and local timezone bucketing
-
-## v1.0.13
-- fix: auto-detect OS timezone and persist to `setup.json`
-- feat: fleet uptime/efficiency, MYST/GB per session, service split chart, earnings efficiency chart
-- fix: dynamic retention-aware period selectors and All button for quality/system history
-- fix: service stop stale UUID and scraping/quic_scraping functional link
-
-## v1.0.12
-- fix: sudo LXC/root compatibility
-- fix: venv pre-install check
-- fix: Node.js false positive version detection
-- fix: README port references corrected
-
-## v1.0.11
-- fix: earnings UTC timezone handling
-- fix: rate-limit snapshot
-- fix: system health inline expand
-- fix: logs position
-- fix: `fetchArchive` fleet routing
-- fix: QUIC label display
-
-## v1.0.10
-- feat: node update badge in dashboard
-- feat: editable data retention per node
-- feat: `data_retention` added to `setup.json`
-
-## v1.0.9
-- fix: fleet routing fix for quality/metrics history
-- fix: quality/metrics history reload on node switch
-- fix: duplicate data management card removed
-
-## v1.0.7
-- feat: extended system metrics (tunnels, speed, latency, temperatures)
-- fix: update badge visible in fleet overview
-- fix: metrics reading from correct cache tier
-- fix: system metrics DB writing speed/latency/tunnels from wrong cache tier
-
-## v1.0.4
-- feat: update check badge
-- feat: extended system metrics (tunnels, speed, latency, temperatures)
-- fix: config ownership after sudo operations
-
-## v1.0.3
-- Fixed SessionDB migration issue with missing provider_id [file:38]
-
-## v1.0.2
-- Fixed chown on config after sudo operations [file:38]
-
-## v1.0.1
-- Initial post-launch bug fixes [file:38]
-
-## v1.0.0
-- Initial public release [file:38]
-- Flask/React monitoring dashboard for Mysterium VPN node operators [file:38]
-- Earnings tracking, session analytics, node quality monitoring [file:38]
-- Fleet mode for multi-node monitoring [file:38]
-- System health panel with adaptive CPU/conntrack tuning [file:38]
-- 11 themes, autostart, remote node restart/settle/payment configuration [file:38]
+- feat: TLS support. Self-signed, generated by setup or `setup.sh --tls-only`. The fleet master pins each node's certificate; a certificate on an IP breaks if the provider changes it.
+- feat: cheroot replaces the Flask development server. Flask sends `Connection: close` on every response, so under TLS that is a full handshake per request — measured 360 ms to open the dashboard against 35 ms with keep-alive.
+- feat: the update check is branch-aware, so an install on `dev` follows `dev`.
+- fix: the README privacy claim corrected.
+- fix: fleet TLS settings exposed in the UI.

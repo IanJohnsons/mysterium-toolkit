@@ -510,14 +510,36 @@ CURRENT=\$(cat "$TOOLKIT_DIR/VERSION" 2>/dev/null)
 BRANCH=\$(cd "$TOOLKIT_DIR" && git rev-parse --abbrev-ref HEAD 2>/dev/null)
 [ -z "\$BRANCH" ] || [ "\$BRANCH" = "HEAD" ] && BRANCH=main
 LATEST=\$(curl -sf "https://raw.githubusercontent.com/IanJohnsons/mysterium-toolkit/\$BRANCH/VERSION" 2>/dev/null)
-if [ -n "\$LATEST" ] && [ "\$CURRENT" != "\$LATEST" ]; then
-    if [ "\$(id -u)" -eq 0 ]; then
-        exec "$TOOLKIT_DIR/update.sh"
-    else
-        exec sudo -n "$TOOLKIT_DIR/update.sh"
-    fi
+
+# Everything below reports why it did nothing. This script used to end in a bare
+# exit 0 on every path, so a failed version check and an up-to-date install were
+# indistinguishable: systemd logged "Finished successfully" hourly while the
+# machine sat on an older release. Output goes to the journal via the unit.
+if [ -z "\$CURRENT" ]; then
+    echo "auto-update: cannot read \$TOOLKIT_DIR/VERSION — skipping"
+    exit 0
 fi
-exit 0
+if [ -z "\$LATEST" ]; then
+    echo "auto-update: could not fetch the VERSION for branch \$BRANCH from GitHub — skipping"
+    exit 0
+fi
+if [ "\$CURRENT" = "\$LATEST" ]; then
+    echo "auto-update: already on \$CURRENT (\$BRANCH)"
+    exit 0
+fi
+
+echo "auto-update: \$CURRENT -> \$LATEST on \$BRANCH"
+if [ "\$(id -u)" -eq 0 ]; then
+    exec "$TOOLKIT_DIR/update.sh"
+fi
+# sudo -n fails outright without NOPASSWD, and an exec that cannot start leaves
+# nothing behind to explain the silence.
+if ! sudo -n true 2>/dev/null; then
+    echo "auto-update: sudo requires a password for \$(whoami) — cannot update unattended"
+    echo "auto-update: run ./update.sh by hand, or grant NOPASSWD for it"
+    exit 1
+fi
+exec sudo -n "$TOOLKIT_DIR/update.sh"
 WRAPPER_EOF
     $SUDO chmod +x "$_WRAPPER"
 fi

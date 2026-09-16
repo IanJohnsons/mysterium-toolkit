@@ -6237,8 +6237,19 @@ const NodeQualityCard = ({ nodeQuality: q, nodeStatus, backendUrl, authHeaders, 
     <div className={`w-3 h-4 rounded-sm ${active ? (scoreBars === 3 ? 'bg-green-400' : scoreBars === 2 ? 'bg-amber-400' : 'bg-red-400') : 'bg-slate-700'}`} />
   );
 
-  const monitoringBadge = monFail === null ? null
-    : monFail
+  // Two sources feed this card: monitoring_failed arrives with the metrics poll,
+  // the Discovery Check button fetches separately. When the poll has no current
+  // data — `available` is false, which is also what prints "Quality data not yet
+  // available" below — a green badge is the last successful answer, not this
+  // one. Shown beside a proxy error and an empty card it reads as three parts
+  // disagreeing, and an operator stops believing any of them.
+  const monitoringBadge = (monFail === null || !available) ? (
+    monFail === null ? null
+      : <span className="text-xs px-2 py-0.5 rounded font-semibold bg-slate-700/40 text-slate-400 border border-slate-600/40"
+              title="No current quality data — this is the last known state, not a live check">
+          Monitoring — stale
+        </span>
+  ) : monFail
       ? <span className="text-xs px-2 py-0.5 rounded font-semibold bg-red-500/20 text-red-300 border border-red-500/30">Monitoring Failed</span>
       : <span className="text-xs px-2 py-0.5 rounded font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">Monitoring OK</span>;
 

@@ -284,17 +284,30 @@ pkg_install() {
         echo -e "  ${GREEN}✓ ${tool}${NC}"; return 0
     fi
     echo -e "  ${YELLOW}⚠ ${tool} not found — installing...${NC}"
+    # The || true per line is correct: the command -v check below is what decides
+    # whether this worked. What was missing is why it did not. "Could not install
+    # X — some features may be limited" sends nobody anywhere; a held package, a
+    # missing suite for this distribution and a full disk all looked identical.
+    local _pkg_log
+    _pkg_log=$(mktemp 2>/dev/null || echo /dev/null)
     case "$PKG_MGR" in
-        apt)    sudo apt-get install -y -qq "$apt_p" >/dev/null 2>&1 || true ;;
-        dnf)    sudo dnf install -y -q   "$dnf_p"  >/dev/null 2>&1 || true ;;
-        yum)    sudo yum install -y -q   "$dnf_p"  >/dev/null 2>&1 || true ;;
-        pacman) sudo pacman -S --noconfirm "$pac_p" >/dev/null 2>&1 || true ;;
-        apk)    apk add "$apk_p"                   >/dev/null 2>&1 || true ;;
+        apt)    sudo apt-get install -y -qq "$apt_p" >"$_pkg_log" 2>&1 || true ;;
+        dnf)    sudo dnf install -y -q   "$dnf_p"  >"$_pkg_log" 2>&1 || true ;;
+        yum)    sudo yum install -y -q   "$dnf_p"  >"$_pkg_log" 2>&1 || true ;;
+        pacman) sudo pacman -S --noconfirm "$pac_p" >"$_pkg_log" 2>&1 || true ;;
+        apk)    apk add "$apk_p"                   >"$_pkg_log" 2>&1 || true ;;
         *)      echo -e "  ${YELLOW}⚠ No supported package manager — install ${tool} manually${NC}"; return 0 ;;
     esac
-    command -v "$tool" >/dev/null 2>&1 \
-        && echo -e "  ${GREEN}✓ ${tool} installed${NC}" \
-        || echo -e "  ${YELLOW}⚠ Could not install ${tool} — some features may be limited${NC}"
+    if command -v "$tool" >/dev/null 2>&1; then
+        echo -e "  ${GREEN}✓ ${tool} installed${NC}"
+    else
+        echo -e "  ${YELLOW}⚠ Could not install ${tool} — some features may be limited${NC}"
+        if [ -s "$_pkg_log" ]; then
+            echo -e "  ${DIM}    $(grep -iE '^E:|error|not found|unable|no candidate' "$_pkg_log" | tail -1 | cut -c1-100)${NC}"
+        fi
+    fi
+    [ "$_pkg_log" != "/dev/null" ] && rm -f "$_pkg_log"
+    return 0
 }
 # ============ PRE-FLIGHT: PYTHON VERSION CHECK ============
 echo "Pre-flight checks..."
@@ -665,6 +678,22 @@ case "$_ARCH" in
         pkg_install "sensors" "lm-sensors" "lm_sensors" "lm_sensors" "lm_sensors" ;;
 esac
 pkg_install "sqlite3" "sqlite3" "sqlite" "sqlite" "sqlite"
+# cpupower: the diagnostics tell an operator to run `cpupower frequency-set -g
+# performance` when the CPU is scaling below its maximum, and on a Pi that is a
+# real finding — one was throttled to 40% of its clock. Without the package the
+# advice fails at the first command, which teaches people to ignore the whole
+# report. Binary is `cpupower`; Debian ships it in linux-cpupower, and on a Pi
+# that pulls in kernel headers, so it is installed here rather than left to the
+# moment someone is already troubleshooting.
+# Skipped in a container: the governor belongs to the host. Detected inline
+# because IS_CONTAINER is not set until the kernel-tuning step further down, and
+# reading it here would test an empty variable that always passes.
+if ! systemd-detect-virt --container --quiet 2>/dev/null \
+   && ! grep -qE "docker|lxc|kubepods|containerd" /proc/1/cgroup 2>/dev/null; then
+    pkg_install "cpupower" "linux-cpupower" "kernel-tools" "kernel-tools" "cpupower"
+else
+    echo -e "  ${DIM}Skipping cpupower — CPU governor belongs to the host${NC}"
+fi
 # v1.4.5: the node maps ports over UPnP by default (nat-port-mapping is on, traversal
 # is manual,upnp,holepunching). Without miniupnpc the toolkit could not see the router's
 # mapping table at all, so a failed mapping showed up only as quality 0.00 with no
