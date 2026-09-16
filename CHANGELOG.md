@@ -4,6 +4,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.26
+
+- fix: the CLI health panel shows the readable subsystem names the backend has always sent. It printed `nic_coalesce` where the web dashboard shows "NIC Interrupt Coalescing", using the raw key while a `title` field sat unused. Status moved to its own right-hand column — fifteen rows of ragged `name: status` gave the eye nowhere to land.
+- fix: a live consumer row reads `— at close` instead of `↑0 MB ↓0 MB`. TequilAPI reports session bytes when a session ends, so a running session is always zero, which looked like a consumer moving nothing beside tunnels carrying gigabytes.
+- fix: `Settled: 0.0000 ← withdrawable` no longer reads as missing money. It is the Hermes buffer at this moment; settled earnings have already gone to the wallet, and the line says so.
+- fix: descriptions in the payment config wrap instead of being cut at the panel edge. "DO NOT exceed 300s" lost its number, which is the only part that mattered.
+
 ## v1.4.25
 
 - docs: reviewed all 29 in-app Help sections against how the toolkit actually behaves, rather than correcting them one at a time when a change happened to touch them. Four were wrong: Data Management still said databases are pruned automatically every day, which has not been true since v1.4.16 — nothing is deleted until you save retention once; the Security tab pointed at CLI menu "option 9", a number that shifts with install type; Setup did not mention that kernel tuning is skipped in a container; and Updating the Toolkit described the fleet button and manual runs but never the hourly timer that updates the machine on its own.

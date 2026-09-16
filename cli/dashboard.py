@@ -13,6 +13,7 @@ Usage:
 
 import argparse
 import curses
+import textwrap
 import json
 import os
 import signal
@@ -1115,7 +1116,9 @@ class CLIDashboard:
 
     def _draw_health_panel(self, stdscr, h, w, GREEN, YELLOW, RED, WHITE, ACCENT, DIM, BOLD):
         """Draw the system health overlay.
-        Shows all 13 subsystems with status, allows fix/persist/unpersist actions.
+        Shows every health subsystem with status, allows fix/persist/unpersist
+        actions. The count is not hardcoded: it follows whatever scan_all()
+        returns, which is 15 at the time of writing and has grown before.
         Keys: ↑↓=select  1=scan  f=fix  3=fix all  p=persist  4=persist all
               u=unpersist  5=unpersist all  2=back from results  ESC=close
         """
@@ -1186,14 +1189,25 @@ class CLIDashboard:
                 if y >= py + ph - 1:
                     break
                 sel     = real_idx == self.health_selected
-                name    = sub.get('name', '?')
+                # The backend has carried a human title per subsystem all along —
+                # the web dashboard shows "Connection Tracking" where this showed
+                # conntrack. Fall back to the raw name so a subsystem without one
+                # still appears rather than vanishing.
+                name    = sub.get('title') or sub.get('name', '?')
                 status  = sub.get('status', '?')
-                persist = '🔒' if sub.get('persisted') else ''
+                persist = ' 🔒' if sub.get('persisted') else ''
                 prefix  = '▶ ' if sel else '  '
+                mark    = {'ok': '●', 'warning': '▲',
+                           'error': '✗', 'critical': '✗'}.get(status, '·')
                 col     = GREEN if status == 'ok' else \
                           YELLOW if status == 'warning' else \
                           RED    if status in ('error', 'critical') else WHITE
-                line    = f'{prefix}{name}: {status} {persist}'
+                # Status in its own right-hand column instead of trailing the
+                # name: with names of differing length the eye had nowhere to
+                # land, and fifteen rows of ragged text read as noise.
+                tail    = f'{mark} {status}{persist}'
+                pad     = max(1, inner_w - len(prefix) - len(name) - len(tail) - 1)
+                line    = f'{prefix}{name}{" " * pad}{tail}'
                 self._safe_addstr(stdscr, y, px + 2, line[:inner_w],
                                   (col | BOLD) if sel else col)
                 y += 1
@@ -1430,7 +1444,12 @@ class CLIDashboard:
                 unit  = meta['unit']
                 desc  = meta['desc']
                 lines.append(('setting', f"  {label}: {val} {unit}  {src}"))
-                lines.append(('desc',    f"    {desc}"))
+                # The descriptions carry the numbers that matter — "DO NOT exceed
+                # 300s" sat past the panel edge and was cut mid-word, so the one
+                # warning on the line never arrived. Wrap on whitespace instead
+                # of slicing; a value nobody can read is a value nobody sets.
+                for wrapped in textwrap.wrap(desc, width=max(20, inner_w - 6)) or ['']:
+                    lines.append(('desc', f"    {wrapped}"))
                 lines.append(('blank',   ''))
             lines.append(('hint', '  Scroll to bottom then press SPACE or ENTER to edit settings.'))
 
@@ -1609,7 +1628,17 @@ class CLIDashboard:
                 self._safe_addstr(stdscr, y, 24, stype[:14], DIM)
                 self._safe_addstr(stdscr, y, 40, dur, ACCENT)
                 if not compact and w > 70:
-                    self._safe_addstr(stdscr, y, 52, f"↑{format_size(out_mb)} ↓{format_size(in_mb)}", DIM)
+                    # TequilAPI reports session bytes at close, not while a
+                    # session runs, so a live row is always 0/0. Printing that
+                    # reads as a consumer moving nothing, next to tunnels
+                    # carrying gigabytes. An em dash says "not known yet", which
+                    # is what it is — the web dashboard makes the same
+                    # distinction.
+                    if out_mb or in_mb:
+                        btxt = f"↑{format_size(out_mb)} ↓{format_size(in_mb)}"
+                    else:
+                        btxt = "— at close"
+                    self._safe_addstr(stdscr, y, 52, btxt, DIM)
                 if not compact and w > 96:
                     etxt = f"{earn:.6f} MYST" if earn > 0 else '—'
                     self._safe_addstr(stdscr, y, 80, etxt, GREEN if earn > 0 else DIM)
@@ -1783,7 +1812,13 @@ class CLIDashboard:
             self._safe_addstr(stdscr, y, 4,  'Settled:', DIM)
             bal_c = ACCENT if balance > 0 else DIM
             self._safe_addstr(stdscr, y, 13, f'{_fe(balance)} MYST', bal_c | BOLD)
-            self._safe_addstr(stdscr, y, 28, '← withdrawable', DIM)
+            # "withdrawable" beside a zero, with a four-figure lifetime two rows
+            # down, reads as money that went missing. This is the Hermes buffer
+            # right now — what settled already left for the wallet.
+            self._safe_addstr(stdscr, y, 28,
+                              '← in Hermes now' if balance > 0
+                              else '← nothing buffered; settled goes to your wallet',
+                              DIM)
             y += 1
 
         if y < ymax:
