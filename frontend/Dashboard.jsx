@@ -2083,6 +2083,28 @@ const MysteriumDashboard = () => {
     if (metrics.fleet?.fleet_mode && !selectedNodeId) {
       const fleetNodes = metrics.fleet.nodes || [];
 
+      // Which nodes are behind, and is anything behind at all.
+      //
+      // All three update buttons used to hang on updateInfo.update_available,
+      // which compares THIS machine's release against the branch. The master is
+      // the machine you are looking at and the one whose timer fires first, so
+      // it reaches the new version before the others — and at that moment every
+      // update button disappeared, while the rest of the fleet sat one or two
+      // releases behind with no way to act on it. Observed with the master on
+      // 1.4.28 and the two others on 1.4.26 and 1.4.27.
+      //
+      // A node whose toolkit_version is empty is running a peer older than
+      // v1.4.29 and cannot report it; fall back to the master's own answer for
+      // those rather than guessing they are fine.
+      const fleetLatest = updateInfo?.latest || '';
+      const nodeIsBehind = (n) => {
+        if (!fleetLatest) return false;
+        const v = n.toolkit_version || '';
+        return v ? v !== fleetLatest : !!updateInfo?.update_available;
+      };
+      const behindNodes = fleetNodes.filter(nodeIsBehind);
+      const anyBehind = behindNodes.length > 0 || !!updateInfo?.update_available;
+
       // ── Fleet Node Manager — uses top-level state to survive re-renders ───
       const openFleetAdd = () => {
         setFleetEditNode(null);
@@ -2310,10 +2332,13 @@ const MysteriumDashboard = () => {
                     ? 'bg-emerald-500/20 text-emerald-300'
                     : 'bg-amber-500/20 text-amber-300'
                 }`}>{metrics.fleet.fleet_online}/{metrics.fleet.fleet_nodes} online</span>
-                {updateInfo?.update_available && (
+                {anyBehind && (
                   <button
                     onClick={async () => {
-                      const ids = fleetNodes.map(n => n.id);
+                      // Only the nodes that need it. Sending system/update to a
+                      // node already on the latest release restarts its backend
+                      // for nothing and drops whoever is connected to it.
+                      const ids = (behindNodes.length ? behindNodes : fleetNodes).map(n => n.id);
                       for (const id of ids) {
                         setNodeUpdateStates(s => ({ ...s, [id]: 'updating' }));
                       }
@@ -2330,7 +2355,7 @@ const MysteriumDashboard = () => {
                     }}
                     className="text-xs px-3 py-1.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 transition font-semibold"
                   >
-                    ↑ Update All to v{updateInfo.latest}
+                    ↑ Update {behindNodes.length ? `${behindNodes.length} node${behindNodes.length !== 1 ? 's' : ''}` : 'All'} to v{updateInfo?.latest}
                   </button>
                 )}
                 <>
@@ -2643,7 +2668,7 @@ const MysteriumDashboard = () => {
                         <span>NAT: {fmtNat(n.nat, isOn)}</span>
                       </div>
                       {/* Toolkit update button per node */}
-                      {updateInfo?.update_available && (
+                      {nodeIsBehind(n) && (
                         <div className="mt-1" onClick={e => e.stopPropagation()}>
                           {nodeUpdateStates[n.id] === 'updating' ? (
                             <span className="text-[10px] text-amber-400 animate-pulse">⟳ Updating…</span>
@@ -2891,7 +2916,7 @@ const MysteriumDashboard = () => {
                           {nodeUpdateInfo?.update_available && n.version === nodeUpdateInfo.current && <div className="mt-0.5"><span className="text-amber-400 border border-amber-500/40 bg-amber-500/10 rounded px-1 text-[9px]" title={`Node v${nodeUpdateInfo.latest} available`}>↑ {nodeUpdateInfo.latest}</span></div>}
                           {n.uptime  && <span>{formatUptime(n.uptime)}</span>}
                         </div>
-                        {updateInfo?.update_available && (
+                        {nodeIsBehind(n) && (
                           <div onClick={e => e.stopPropagation()}>
                             {nodeUpdateStates[n.id] === 'updating' ? (
                               <span className="text-[9px] text-amber-400 animate-pulse">⟳ updating…</span>

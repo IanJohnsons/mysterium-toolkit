@@ -6693,6 +6693,9 @@ def _collect_single_node(node_entry):
                     'status':           ns.get('status', 'unknown'),
                     'uptime':           ns.get('uptime', '0s'),
                     'version':          data.get('version', 'unknown'),
+                    # Peers older than v1.4.29 do not send this; those nodes fall
+                    # back to the master's own version, as before.
+                    'toolkit_version':  data.get('toolkit_version', ''),
                     'earnings':         data.get('earnings', {}),
                     'sessions':         data.get('sessions', {}),
                     'services':         data.get('services', {}),
@@ -6919,6 +6922,9 @@ def _build_fleet_aggregate():
             'status':      n.get('status'),
             'uptime':      n.get('uptime'),
             'version':     n.get('version'),
+            # The toolkit release on that node, so the UI can tell which of them
+            # is behind instead of asking only whether the master is.
+            'toolkit_version': n.get('toolkit_version', ''),
             'nat':         n.get('nat', n.get('node_status', {}).get('nat', '')),
             'ip':          n.get('ip', n.get('node_status', {}).get('ip', '')),
             'identity':    n.get('identity', n.get('earnings', {}).get('wallet_address', '')),
@@ -12643,6 +12649,13 @@ def peer_data():
             'peer_mode':        True,
             'light':            light,
             'version':          cache.get('nodeStatus', {}).get('version', 'unknown'),
+            # The toolkit's own version, distinct from 'version' above, which is
+            # the Mysterium node's. Without it a master could only compare its
+            # own release against the branch, so the moment the master updated —
+            # and it always updates first, being the machine you are looking at —
+            # every update button vanished while the other nodes were still
+            # behind. One field on a call that already happens.
+            'toolkit_version':  APP_VERSION,
             'node_status':      cache.get('nodeStatus', {}),
             'earnings':         cache.get('earnings', {}),
             'sessions':         cache.get('sessions', {}),

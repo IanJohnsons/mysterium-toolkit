@@ -4,6 +4,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.29
+
+- fix: the fleet update buttons follow the nodes instead of the master. All three — Update All and the per-node button on each card, desktop and mobile — were shown only when the master itself was behind. The master is the machine you are looking at and its timer fires first, so it reaches a new release before the others; at that moment every update button disappeared while the rest of the fleet sat one or two releases back with no way to act on it. Observed with the master on 1.4.28 and the other two on 1.4.26 and 1.4.27.
+- feat: a node reports its own toolkit version over `/peer/data`, separate from the Mysterium node version it already sent. One extra field on a call that was already being made. Nodes running an older release cannot report it and fall back to the previous behaviour.
+- fix: Update All only updates the nodes that are behind, and says how many. Sending the update to a node already on the latest release restarts its backend for nothing and drops whoever is connected to it.
+
 ## v1.4.28
 
 Four faults around one situation: a node running outside systemd while the service unit keeps trying to start a second one.
