@@ -11723,13 +11723,84 @@ def _invalidate_metric_cache():
     _tier_medium_last = 0
 
 
+def _node_port_holder(port=4050):
+    """Who is listening on the TequilAPI port, and is it the systemd unit?
+
+    Returns (pid, cmdline, owned_by_systemd) or (None, '', False).
+
+    A node started outside systemd holds this port perfectly well, and the unit
+    then fails on every start with "address already in use". systemd retries
+    every five seconds forever: one Pi reached 2147 attempts over two days while
+    the node itself ran fine, and the dashboard reported Process ok / systemd
+    active the whole time.
+    """
+    try:
+        for conn in psutil.net_connections(kind='tcp'):
+            if not conn.laddr or conn.laddr.port != port or conn.status != 'LISTEN':
+                continue
+            if not conn.pid:
+                return None, '', False
+            try:
+                proc = psutil.Process(conn.pid)
+                cmd = ' '.join(proc.cmdline())
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                return conn.pid, '', False
+            # A process systemd started sits in the unit's cgroup.
+            owned = False
+            try:
+                cgroup = Path(f'/proc/{conn.pid}/cgroup').read_text()
+                owned = 'mysterium-node.service' in cgroup
+            except Exception:
+                pass
+            return conn.pid, cmd, owned
+    except Exception as e:
+        logger.warning(f'Could not determine who holds port {port}: {e}')
+    return None, '', False
+
+
+def _node_answers(timeout=3):
+    """True when TequilAPI responds — the only proof a node is actually up."""
+    for node_url in NODE_API_URLS:
+        try:
+            r = requests.get(f'{node_url}/healthcheck',
+                             headers=MetricsCollector.get_tequilapi_headers(),
+                             timeout=timeout)
+            if r.status_code == 200:
+                return True
+        except Exception:
+            continue
+    return False
+
+
 @app.route('/node/restart', methods=['POST'])
 @require_auth
 def restart_node():
     """Restart the Mysterium node service.
-    Tries systemctl first (most common), then service, then docker, then TequilAPI stop/start."""
+    Tries systemctl first (most common), then service, then docker, then TequilAPI stop/start.
+    """
     actions = []
     try:
+        # Refuse when the port is held by a node systemd did not start.
+        # `systemctl restart` on that machine cannot succeed — it kills nothing
+        # (the unit owns no process) and the new one dies on bind. What it does
+        # start is a five-second retry loop that runs until someone notices.
+        # This button caused exactly that on two machines this week, and reported
+        # success both times.
+        _pid, _cmd, _owned = _node_port_holder()
+        if _pid and not _owned and 'myst' in _cmd:
+            return jsonify({
+                'success': False,
+                'error': 'refused',
+                'message': (f'A Mysterium node (PID {_pid}) is already listening on 4050 and '
+                            f'systemd did not start it. Restarting the service would fail on '
+                            f'every attempt and leave systemd retrying every five seconds.'),
+                'holder_pid': _pid,
+                'holder_cmd': _cmd[:200],
+                'remedy': ('Stop that process first, or run the node under systemd only: '
+                           'sudo systemctl stop mysterium-node; kill the manual process; '
+                           'sudo systemctl start mysterium-node'),
+            }), 409
+
         # Strategy 1: systemctl (most common — bare-metal/VM installs)
         result = subprocess.run(
             ['sudo', '-n', 'systemctl', 'restart', 'mysterium-node'],
@@ -11737,9 +11808,27 @@ def restart_node():
         )
         if result.returncode == 0:
             actions.append('Restarted via systemctl')
-            time.sleep(5)
+            # systemctl returns 0 once systemd accepts the job, not once the node
+            # runs. A unit that dies on bind and enters auto-restart returns 0
+            # too. Waiting for TequilAPI is the only answer that means anything.
             _invalidate_metric_cache()
-            return jsonify({'success': True, 'method': 'systemctl', 'actions': actions}), 200
+            for _ in range(12):          # up to ~30s
+                time.sleep(2.5)
+                if _node_answers():
+                    actions.append('Node answered on TequilAPI')
+                    return jsonify({'success': True, 'method': 'systemctl',
+                                    'actions': actions}), 200
+            _state = subprocess.run(['systemctl', 'is-active', 'mysterium-node'],
+                                    capture_output=True, timeout=5, text=True)
+            return jsonify({
+                'success': False,
+                'method': 'systemctl',
+                'actions': actions,
+                'error': 'no_response',
+                'message': ('systemd accepted the restart but the node did not answer within '
+                            f'30 seconds (unit is "{(_state.stdout or "").strip() or "unknown"}"). '
+                            'Check: journalctl -u mysterium-node -n 30'),
+            }), 200
 
         # Strategy 2: service command
         result = subprocess.run(

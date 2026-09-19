@@ -951,11 +951,95 @@ class ServiceWatchdog:
         # systemd status
         rc, out, _ = _run(['systemctl', 'is-active', 'mysterium-node'])
         svc = out if rc == 0 else 'unknown'
-        result['checks'].append({
-            'name': 'systemd',
-            'status': 'ok' if svc == 'active' else 'warning',
-            'detail': svc,
-        })
+
+        # Which of the two is actually running the node. A process systemd
+        # started sits in the unit's cgroup; one started by hand does not. Both
+        # machines here ran their node outside systemd without knowing it, which
+        # is what turned the service unit into a restart loop and made the
+        # Restart button dangerous. Not a fault on its own — plenty of people
+        # run it this way — but it decides what every other action means.
+        unmanaged = None
+        try:
+            for proc in main_procs:
+                cgroup = Path(f'/proc/{proc.pid}/cgroup').read_text()
+                unmanaged = 'mysterium-node.service' not in cgroup
+                break
+        except Exception:
+            unmanaged = None
+
+        if unmanaged:
+            result['checks'].append({
+                'name': 'systemd',
+                'status': 'warning',
+                'detail': f'{svc} — node is running outside systemd',
+            })
+            if result['status'] == 'ok':
+                result['status'] = 'warning'
+            result['recommendations'].append(
+                'The node was not started by systemd, so "systemctl restart" cannot manage it. '
+                'Disable the unit (sudo systemctl disable --now mysterium-node) or switch the '
+                'node over to it — running both fights over port 4050')
+        else:
+            result['checks'].append({
+                'name': 'systemd',
+                'status': 'ok' if svc == 'active' else 'warning',
+                'detail': svc,
+            })
+
+        # --- Restart loop -----------------------------------------------------
+        # NRestarts is useless here: it resets on every successful start, and a
+        # unit that never starts successfully never increments it either. One Pi
+        # showed NRestarts=0 with systemd's own counter at 2147 and 686 attempts
+        # an hour, for two days, while every check above read "ok" — the node was
+        # running fine outside systemd and the unit was failing on the port.
+        # Count what the journal records instead.
+        rc_j, out_j, _ = _run(
+            ['journalctl', '-u', 'mysterium-node', '--since', '1 hour ago', '--no-pager'],
+            timeout=15)
+        if rc_j == 0 and out_j:
+            starts = out_j.count('Starting Mysterium Node')
+            in_use = 'address already in use' in out_j
+            if starts >= 10:
+                result['status'] = 'critical'
+                detail = f'{starts} start attempts in the last hour'
+                if in_use:
+                    detail += ' — port 4050 already taken'
+                result['checks'].append({
+                    'name': 'Restart loop', 'status': 'critical', 'detail': detail,
+                })
+                if in_use:
+                    result['recommendations'].append(
+                        'A node is already listening on 4050 that systemd did not start. '
+                        'Either stop it and let systemd own the node, or run: '
+                        'sudo systemctl stop mysterium-node && sudo systemctl disable mysterium-node')
+                else:
+                    result['recommendations'].append(
+                        'journalctl -u mysterium-node -n 30 --no-pager')
+            elif starts > 2:
+                if result['status'] == 'ok':
+                    result['status'] = 'warning'
+                result['checks'].append({
+                    'name': 'Restart loop', 'status': 'warning',
+                    'detail': f'{starts} restarts in the last hour',
+                })
+
+            # --- Identity lock ------------------------------------------------
+            # "authentication needed: password or unlock" means the node cannot
+            # sign its quality metrics, so every proposal it broadcasts carries
+            # quality/latency/bandwidth/uptime all zero. One laptop logged this
+            # 281 times since boot while advertising itself as worthless, and
+            # nothing reported it. The fix is one line in the env file.
+            locked = out_j.count('authentication needed')
+            if locked:
+                result['status'] = 'critical'
+                result['checks'].append({
+                    'name': 'Identity lock', 'status': 'critical',
+                    'detail': f'{locked}x could not sign metrics in the last hour — '
+                              f'proposals go out with quality 0',
+                })
+                result['recommendations'].append(
+                    'Add --identity.passphrase= to SERVICE_OPTS in /etc/default/mysterium-node '
+                    '(empty value = no passphrase), then restart the node')
 
         return result
 

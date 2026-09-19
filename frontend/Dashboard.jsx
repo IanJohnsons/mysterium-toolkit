@@ -6932,9 +6932,12 @@ const NodeRestartButton = ({ backendUrl, authHeaders }) => {
     try {
       const resp = await fetch(`${backendUrl}/node/restart`, { method: 'POST', headers: authHeaders || {} });
       const data = await resp.json();
-      setStatus(data.success ? '✓ Restarting' : `✗ ${data.error}`);
+      // `error` is a code — "refused", "no_response". Showing it alone told the
+      // operator nothing; `message` carries what actually happened and what to
+      // do, including the PID holding port 4050.
+      setStatus(data.success ? '✓ Restarting' : `✗ ${data.message || data.error}`);
     } catch (e) { setStatus(`✗ ${e.message}`); }
-    setTimeout(() => setStatus(null), 8000);
+    setTimeout(() => setStatus(null), 30000);
   };
   return (
     <button onClick={handle} disabled={!!status}
@@ -6971,9 +6974,11 @@ const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, 
     try {
       const resp = await fetch(`${backendUrl}/node/restart`, { method: 'POST', headers: authHeaders || {} });
       const data = await resp.json();
-      setRestartStatus(data.success ? '✓ Restarting...' : `✗ ${data.error}`);
+      setRestartStatus(data.success ? '✓ Restarting...' : `✗ ${data.message || data.error}`);
     } catch (e) { setRestartStatus(`✗ ${e.message}`); }
-    setTimeout(() => setRestartStatus(null), 8000);
+    // A refusal explains a situation that needs acting on; eight seconds is not
+    // enough to read it, let alone copy the command out of it.
+    setTimeout(() => setRestartStatus(null), 30000);
   };
 
   return (

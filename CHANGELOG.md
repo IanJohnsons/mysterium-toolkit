@@ -4,6 +4,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.28
+
+Four faults around one situation: a node running outside systemd while the service unit keeps trying to start a second one.
+
+- fix: Restart Node refuses when a node systemd did not start is already listening on 4050. `systemctl restart` cannot work there — the unit owns no process to stop, and the new one dies on bind — but it does start a five-second retry loop that runs until someone notices. One Pi reached 2147 attempts over two days, 686 an hour, while the node itself ran fine and the dashboard reported everything healthy. This button caused that, and reported success.
+- fix: a restart is only called successful once the node answers on TequilAPI. `systemctl restart` returns 0 when systemd accepts the job, which it also does for a unit that immediately dies and enters auto-restart. The route now waits up to 30 seconds for a real answer and reports the unit state when none comes.
+- feat: the service health check counts start attempts from the journal. `NRestarts` is useless for this — it resets on every successful start and never increments for a unit that never succeeds; it read 0 against systemd's own counter of 2147. Ten or more attempts in an hour is critical, and the message says so when port 4050 is the cause.
+- feat: the check reports "authentication needed" in the node log. When the node cannot unlock its identity it cannot sign quality metrics, and every proposal it broadcasts carries quality, latency, bandwidth and uptime as zero — the node advertises itself as worthless. One laptop logged this 281 times since boot with nothing reporting it. The recommendation names the one-line fix in `/etc/default/mysterium-node`.
+- feat: the check says when the node is running outside systemd, by comparing the process cgroup against the unit. Not a fault by itself, but it decides whether `systemctl restart` means anything — and running both is what fights over port 4050.
+- fix: both Restart buttons show what went wrong instead of an error code. "✗ refused" told nobody anything; the message names the PID holding the port and the way out, and stays on screen long enough to read.
+
 ## v1.4.27
 
 - fix: the node payment config screen showed values again. The CLI kept its own list of config keys, written before v1.3.3, and five of its seven entries named keys the backend has not accepted since — they printed an em dash release after release, while the one key added in the meantime was missing. The backend now ships the key metadata with the values, so no client keeps a second copy that can drift.
