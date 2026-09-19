@@ -2961,7 +2961,18 @@ const MysteriumDashboard = () => {
                           {nodeUpdateInfo?.update_available && n.version === nodeUpdateInfo.current && <div className="mt-0.5"><span className="text-amber-400 border border-amber-500/40 bg-amber-500/10 rounded px-1 text-[9px]" title={`Node v${nodeUpdateInfo.latest} available`}>↑ {nodeUpdateInfo.latest}</span></div>}
                           {n.uptime  && <span>{formatUptime(n.uptime)}</span>}
                         </div>
-                        {nodeIsBehind(n) && (
+                        {/* Inline on purpose. nodeIsBehind is a const inside the
+                            fleet branch, which closes at line 2770; this card is
+                            below it, in the node view. Calling it here built
+                            cleanly and threw ReferenceError at render, taking
+                            the whole dashboard down — the same mistake as
+                            "toggleAutoUpdate is not defined" in v1.4.10, made
+                            two lines under a comment warning against it. */}
+                        {(() => {
+                          const _latest = updateInfo?.latest || '';
+                          const _v = n.toolkit_version || '';
+                          return _latest && (_v ? _v !== _latest : !!updateInfo?.update_available);
+                        })() && (
                           <div onClick={e => e.stopPropagation()}>
                             {nodeUpdateStates[n.id] === 'updating' ? (
                               <span className="text-[9px] text-amber-400 animate-pulse">⟳ updating…</span>
