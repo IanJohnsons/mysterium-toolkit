@@ -2316,14 +2316,20 @@ const MysteriumDashboard = () => {
                 </div>
                 <div>
                   <h1 className="text-lg font-bold tracking-tight">Mysterium Fleet</h1>
-                  <p className="text-xs text-slate-500">
-                    v{toolkitVersion} — select a node to view its dashboard
+                  {/* The tag used to sit inside the sentence, so it wrapped
+                      wherever the line happened to end — leaving "↑" dangling
+                      after "dashboard" and "v1.4.32 available" on the next line,
+                      underlined as though the whole paragraph were a link.
+                      Its own flex row keeps it beside the text and lets it move
+                      to the next line whole. */}
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                    <span>v{toolkitVersion} — select a node to view its dashboard</span>
                     {updateInfo?.update_available && (
-                      <span className="ml-2 text-amber-400 border border-amber-500/40 bg-amber-500/10 rounded px-1.5 py-0.5" title={`v${updateInfo.latest} available — run: sudo ./update.sh`}>
+                      <span className="whitespace-nowrap text-amber-400 border border-amber-500/40 bg-amber-500/10 rounded px-1.5 py-0.5" title={`v${updateInfo.latest} available`}>
                         ↑ v{updateInfo.latest} available
                       </span>
                     )}
-                  </p>
+                  </div>
                 </div>
               </div>
               <div className="flex items-center gap-3">

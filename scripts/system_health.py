@@ -1096,20 +1096,25 @@ class ServiceWatchdog:
                 # Nothing on the operator's machine can fix this, the passphrase
                 # least of all. It scales with traffic — one per session-token
                 # report — which is why a busy node logs more of them.
-                _detail = (f'{locked}x since startup — known node bug in 1.39.x, '
-                           f'not a fault on this machine')
+                _detail = (f'{locked}x since startup — originates in the node, '
+                           f'not in this machine\'s configuration')
                 if result['status'] == 'ok':
                     result['status'] = 'warning'
                 result['checks'].append({
                     'name': 'Identity lock', 'status': 'warning', 'detail': _detail,
                 })
+                # Earlier wording called this a "known bug" and named a specific
+                # line as the cause. Neither was established: no upstream report
+                # exists, and the node does not log which owner address failed,
+                # so the event behind it cannot be identified from the outside.
+                # What is certain is the mechanism — the node asked its keystore
+                # to sign as an address it does not hold — and that no local
+                # setting affects it.
                 result['recommendations'].append(
-                    'No action needed. The node signs its session-token metric as the '
-                    'consumer instead of the provider '
-                    '(core/quality/morqa_transport.go:247, IsProvider hardcoded false), '
-                    'so it asks for a key it does not have. Proposals are signed '
-                    'correctly and earnings are unaffected; only that one metric is '
-                    'lost. Report upstream if you want it fixed.'
+                    'No action needed on this machine. The node asked its keystore to '
+                    'sign metrics as an address it does not hold; a passphrase or '
+                    'keystore change cannot affect that. Earnings and proposals are '
+                    'unaffected — only that metrics batch goes out unsigned.'
                     + ('' if _passphrase_set else
                        ' Separately, --identity.passphrase= is not set in '
                        '/etc/default/mysterium-node; that is worth adding for the '

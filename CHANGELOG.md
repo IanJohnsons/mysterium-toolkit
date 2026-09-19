@@ -4,6 +4,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.33
+
+- fix: the identity-lock message no longer calls this a known bug or names a cause that was never established. No upstream report exists, and the node does not log which owner address failed — `mysterium_morqa.go:212` records the failure without it — so the event behind it cannot be identified from outside. What is certain is the mechanism: the node asked its keystore to sign as an address it does not hold, which no local setting affects. The card says that and nothing more.
+- fix: the update tag in the fleet header sits beside the text instead of wrapping inside the sentence. It was a span in the middle of a paragraph, so it broke wherever the line happened to end — leaving the arrow dangling after "dashboard" and the version on the next line, underlined as though the paragraph were a link.
+
 ## v1.4.32
 
 - fix: the identity-lock message says what the error actually is. It claimed "proposals go out with quality 0", which is wrong — proposals are signed correctly, through `proposalEventToMetricsEvent` with IsProvider true and the node's own ProviderID. The error comes from one event in the node itself: `core/quality/morqa_transport.go:247` returns `ctx.Consumer` with `IsProvider` hardcoded false, where every neighbouring function picks the signer with `if ctx.IsProvider`. The node therefore asks its keystore to sign as the customer, a key it has never held, and `identity/keystore_filesystem.go:223` returns ErrLocked. Nothing on the operator's machine can fix it and the passphrase flag least of all; only the per-session token metric is lost. Verified against node source 1.39.6. The check reports it as a warning with the source reference, so it can be sent upstream.
