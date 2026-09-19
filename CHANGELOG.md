@@ -4,6 +4,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.30
+
+- fix: the dashboard rendered as "ReferenceError: nodeIsBehind is not defined" and nothing else. The helper added in v1.4.29 lives inside the fleet branch, which closes before the node view; one of the two per-node update buttons sits below that line and called it anyway. The build was clean — Vite resolves no names — and the page went blank the moment that view rendered. Same shape as "toggleAutoUpdate is not defined" in v1.4.10, and this time the offending call sat two lines under a comment warning against it. The button now carries its own check.
+
 ## v1.4.29
 
 - fix: the fleet update buttons follow the nodes instead of the master. All three — Update All and the per-node button on each card, desktop and mobile — were shown only when the master itself was behind. The master is the machine you are looking at and its timer fires first, so it reaches a new release before the others; at that moment every update button disappeared while the rest of the fleet sat one or two releases back with no way to act on it. Observed with the master on 1.4.28 and the other two on 1.4.26 and 1.4.27.
