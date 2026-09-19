@@ -418,6 +418,7 @@ class CLIDashboard:
         self._config_editing    = False  # inline edit active
         self._config_edit_buf   = ''     # edit buffer
         self._config_current    = {}     # values from backend
+        self._config_keys       = {}     # key metadata from backend (v1.4.27+)
         self._config_pending    = {}     # user-modified values
         self._config_results    = {}     # {key: 'ok'|error_str}
         self._config_applying   = set()  # keys currently being applied
@@ -1326,6 +1327,11 @@ class CLIDashboard:
                 if resp.ok:
                     data = resp.json()
                     self._config_current = data.get('current', {})
+                    # Since v1.4.27 the backend ships the key metadata with the
+                    # values. Keeping a second copy here is what let this screen
+                    # ask for five keys the backend dropped in v1.3.3 and print
+                    # an em dash for each of them, release after release.
+                    self._config_keys = data.get('keys', {})
                     self._config_results.pop('_load', None)
                 else:
                     self._config_results['_load'] = f'HTTP {resp.status_code}'
@@ -1436,13 +1442,21 @@ class CLIDashboard:
             lines = []
             lines.append(('header', 'Current payment config values (read-only in this view):'))
             lines.append(('blank', ''))
-            for meta in CONFIG_KEYS_META:
+            # Prefer what the backend reports it supports; fall back to the
+            # local list only when talking to an older backend that sends none.
+            if getattr(self, '_config_keys', None):
+                _fields = [{'key': k, 'label': m.get('label', k),
+                            'unit': m.get('unit', ''), 'desc': m.get('description', '')}
+                           for k, m in self._config_keys.items()]
+            else:
+                _fields = CONFIG_KEYS_META
+            for meta in _fields:
                 key   = meta['key']
                 val   = self._config_current.get(key, '—')
                 src   = '(default)' if self._config_current.get(f'{key}.__source') == 'default' else ''
                 label = meta['label']
                 unit  = meta['unit']
-                desc  = meta['desc']
+                desc  = meta.get('desc', '')
                 lines.append(('setting', f"  {label}: {val} {unit}  {src}"))
                 # The descriptions carry the numbers that matter — "DO NOT exceed
                 # 300s" sat past the panel edge and was cut mid-word, so the one

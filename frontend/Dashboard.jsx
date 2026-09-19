@@ -3078,6 +3078,16 @@ const MysteriumDashboard = () => {
                   const parts = [`${tunnels} tunnel${tunnels !== 1 ? 's' : ''}`];
                   if (sessions > 0) parts.push(`${sessions} session${sessions !== 1 ? 's' : ''}`);
                   if (clients > 0) parts.push(`${clients} client${clients !== 1 ? 's' : ''}`);
+                  // "4 tunnels · 7 sessions · 7 clients" read as though all three
+                  // described the same thing at different granularity. They do
+                  // not: tunnels come from the kernel and sessions from the
+                  // node's own bookkeeping, which keeps a session until it is
+                  // cleanly closed. A consumer that disappears never closes
+                  // cleanly, so rows outlive their tunnel — three of them at 25,
+                  // 26 and 27 hours on a node that had been up 25. The kernel is
+                  // the one that cannot be wrong about a tunnel existing.
+                  const orphans = safeNum(metrics.sessions?.sessions_without_tunnel || 0);
+                  if (orphans > 0) parts.push(`${orphans} without a tunnel`);
                   return parts.join(' · ') + ' · Click to view';
                 })()}
               </div>
@@ -5457,6 +5467,16 @@ const EarningsHistoryCard = ({ backendUrl, authHeaders }) => {
   const allGranularityLabel = allAutoGranularity === 'week' ? 'weekly bars'
                             : allAutoGranularity === 'month' ? 'monthly bars'
                             : 'daily bars';
+  // What one bar represents. The All tab aggregates by itself — weekly past 60
+  // days, monthly past 180 — while the Peak and Avg labels fell back to "day",
+  // so a monthly average was captioned "Avg day". The figure was right; the word
+  // under it was not, and the word is the only way to tell 190 MYST a month from
+  // 190 MYST a day.
+  const barUnit = view === 'weekly'  ? 'week'
+                : view === 'monthly' ? 'month'
+                : view === 'daily'   ? 'day'
+                : allAutoGranularity;   // 'day' | 'week' | 'month'
+
   const visibleDays = view === 'daily' ? 'last 30 days'
                     : view === 'all'   ? `${data.days} calendar days · ${allGranularityLabel}`
                     : `${data.days} calendar days`;
@@ -5554,20 +5574,18 @@ const EarningsHistoryCard = ({ backendUrl, authHeaders }) => {
           <div className="text-emerald-300 font-semibold">{totalShown.toFixed(4)} MYST</div>
         </div>
         <div>
-          <div className="text-slate-500">Peak {view === 'daily' ? 'day' : view === 'weekly' ? 'week' : view === 'monthly' ? 'month' : 'day'}</div>
+          <div className="text-slate-500">Peak {barUnit}</div>
           <div className="text-slate-300 font-medium">{maxEarned.toFixed(4)} MYST</div>
         </div>
         <div>
-          <div className="text-slate-500">Avg {view === 'daily' ? 'day' : view === 'weekly' ? 'week' : view === 'monthly' ? 'month' : 'day'}</div>
+          <div className="text-slate-500">Avg {barUnit}</div>
           {/* Fix 5: always divide by days with actual data */}
           <div className="text-slate-300 font-medium">{daysWithData > 0 ? (totalShown / daysWithData).toFixed(4) : '—'} MYST</div>
         </div>
         <div>
           <div className="text-slate-500">
-            {view === 'weekly' ? 'Weeks'
-           : view === 'monthly' ? 'Months'
-           : view === 'all' && allAutoGranularity === 'week' ? 'Weeks'
-           : view === 'all' && allAutoGranularity === 'month' ? 'Months'
+            {barUnit === 'week' ? 'Weeks'
+           : barUnit === 'month' ? 'Months'
            : <span title="Days in the last 30 days where an earnings snapshot was recorded. Grows by 1 each day the toolkit runs.">Tracked</span>}
           </div>
           {/* Fix 6: show "X days with data / Y calendar days" for daily/all-daily */}
@@ -5804,7 +5822,19 @@ const DataTrafficCard = ({ bandwidth, backendUrl, authHeaders }) => {
       {/* Per-tunnel breakdown — today only */}
       {view === 'today' && bw.vpn_interfaces && Object.keys(bw.vpn_interfaces).length > 0 && (
         <div className="mt-3 pt-3 border-t border-slate-700/40">
-          <div className="text-[10px] text-slate-600 uppercase tracking-wider mb-1">Per tunnel</div>
+          {/* These totals are psutil counters, read from the interface itself and
+              running since that interface came up. Everything above them is
+              vnstat over the selected window. Under a "Today" heading they
+              therefore do not add up to the VPN row — one node showed 7.72 GiB
+              above and 3.68 GiB here — and the card said nothing about why.
+              Naming the period is enough; converting them to today's slice is
+              not possible, because a tunnel that appeared an hour ago has no
+              earlier history to subtract. */}
+          <div className="text-[10px] text-slate-600 uppercase tracking-wider mb-1">
+            Per tunnel <span className="text-slate-700 normal-case tracking-normal">
+              · since each tunnel came up, not today — these do not sum to the row above
+            </span>
+          </div>
           <div className="space-y-1">
             {Object.entries(bw.vpn_interfaces).map(([name, iface]) => {
               const rx = iface.rx_mb || 0;

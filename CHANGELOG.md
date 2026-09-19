@@ -4,6 +4,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.27
+
+- fix: the node payment config screen showed values again. The CLI kept its own list of config keys, written before v1.3.3, and five of its seven entries named keys the backend has not accepted since — they printed an em dash release after release, while the one key added in the meantime was missing. The backend now ships the key metadata with the values, so no client keeps a second copy that can drift.
+- fix: the connections card reports sessions that have no tunnel. Tunnels are counted from the kernel; sessions come from the node, which keeps a provider session until it is cleanly closed, and a consumer that disappears never closes cleanly. One node showed four tunnels against seven active sessions, three of them running 25, 26 and 27 hours on a node process that had been up 25. The sessions are not filtered out — the v1.3.12 rule that did exactly that hid live multi-day sessions that were earning — but the card no longer presents the larger number as fact.
+- fix: Peak and Avg in the earnings chart name the period the bars actually use. The All tab aggregates by itself, weekly past 60 days and monthly past 180, while the labels fell back to "day" — so a monthly average of 190 MYST was captioned "Avg day".
+- fix: the per-tunnel breakdown in Data Traffic says what period it covers. Those totals come from the interface counters and run since each tunnel came up, while everything above them is vnstat over the selected window; under a "Today" heading they did not add up and the card gave no reason why.
+
 ## v1.4.26
 
 - fix: the CLI health panel shows the readable subsystem names the backend has always sent. It printed `nic_coalesce` where the web dashboard shows "NIC Interrupt Coalescing", using the raw key while a `title` field sat unused. Status moved to its own right-hand column — fifteen rows of ragged `name: status` gave the eye nowhere to land.

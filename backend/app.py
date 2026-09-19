@@ -4591,6 +4591,22 @@ class MetricsCollector:
                 # The UI uses this to say "N live tunnels, see Tunnels tab" instead of
                 # showing an empty list (or a fabricated consumer) while traffic flows.
                 'tunnels_without_session': max(vpn_tunnel_count - active_count, 0),
+                # The other direction, which nothing reported until v1.4.27:
+                # sessions the node calls active while no tunnel carries them.
+                # TequilAPI keeps a provider session until it is cleanly closed,
+                # and a consumer that vanishes never closes cleanly, so rows can
+                # outlive their tunnel by days — one node showed three at 25, 26
+                # and 27 hours against a node process of 25h and four peers in
+                # `wg show`.
+                #
+                # These are NOT filtered out. The v1.3.12 dead-session rule did
+                # exactly that and hid live multi-day B2B sessions that were
+                # earning in node memory while reporting New/0/0 over the API;
+                # the only provably dead row is one that predates the current
+                # process, which is handled above. Counting them is safe where
+                # deleting them was not, and it lets the UI say the two numbers
+                # disagree instead of presenting the larger one as fact.
+                'sessions_without_tunnel': max(active_count - vpn_tunnel_count, 0),
                 'live_vpn_rx_mb': round(live_vpn_rx / (1024 * 1024), 2),
                 'live_vpn_tx_mb': round(live_vpn_tx / (1024 * 1024), 2),
                 'unique_consumers': unique_consumers,
@@ -12141,7 +12157,8 @@ NODE_CONFIG_KEYS = {
     'payments.zero-stake-unsettled-amount': {
         'toml_section': 'payments', 'toml_key': 'zero-stake-unsettled-amount',
         'unit': 'MYST', 'type': 'float', 'node_default': '5.0',
-        'description': 'Auto-settle threshold (zero-stake)',
+        'label': 'Auto-Settle Threshold',
+        'description': 'Unsettled MYST that triggers auto-settlement. Higher means fewer transactions and more MYST at risk between them.',
     },
     'payments.unsettled.max-amount': {
         # NOTE the dots: the node flag is payments.unsettled.max-amount
@@ -12149,7 +12166,8 @@ NODE_CONFIG_KEYS = {
         # payments.unsettled-max-amount (dash), which the node never reads.
         'toml_section': 'payments.unsettled', 'toml_key': 'max-amount',
         'unit': 'MYST', 'type': 'float', 'node_default': '20.0',
-        'description': 'Maximum unsettled MYST before the node always tries to settle',
+        'label': 'Max Unsettled',
+        'description': 'Hard ceiling on the unsettled balance. Above this the node always tries to settle, whatever the fee.',
     },
     'payments.settle.max-fee-percentage': {
         # v1.3.6: added. Flag: config/flags_payments.go, node_default 0.05 (5%). This is
@@ -12159,12 +12177,14 @@ NODE_CONFIG_KEYS = {
         # balance until gas is cheap relative to it.
         'toml_section': 'payments.settle', 'toml_key': 'max-fee-percentage',
         'unit': 'ratio', 'type': 'float', 'node_default': '0.05',
-        'description': 'Max fraction of the unsettled amount acceptable as tx fee when auto-settling',
+        'label': 'Max Settle Fee',
+        'description': 'Largest share of the unsettled amount acceptable as transaction fee. Not the Hermes cut, which is fixed at 20% and not configurable.',
     },
     'payments.provider.invoice-frequency': {
         'toml_section': 'payments.provider', 'toml_key': 'invoice-frequency',
         'unit': 'seconds', 'type': 'int', 'node_default': '60',
-        'description': 'How often to send payment invoices during a session',
+        'label': 'Invoice Frequency',
+        'description': 'How often a session sends a payment invoice. 300s means roughly five times fewer API calls.',
     },
 }
 
@@ -12306,9 +12326,27 @@ def get_node_config():
                 current[key] = meta['node_default']
                 current[f'{key}.__source'] = 'default'
 
+        # Ship the key metadata with the values. Every client kept its own copy
+        # of this list, and the CLI's predates v1.3.3: it still asked for
+        # payments.unsettled-max-amount, payments.settle.min-amount,
+        # payments.min_promise_amount and two pingpong keys, none of which this
+        # endpoint has known since. Five of its seven fields therefore showed an
+        # em dash forever, and the one key added since was missing entirely.
+        # One list, served from here, cannot drift from the code that reads it.
+        keys_meta = {
+            key: {
+                'label':        meta.get('label', key),
+                'unit':         meta.get('unit', ''),
+                'type':         meta.get('type', 'str'),
+                'description':  meta.get('description', ''),
+                'node_default': meta.get('node_default', ''),
+            }
+            for key, meta in NODE_CONFIG_KEYS.items()
+        }
         return jsonify({
             'success': True,
             'current': current,
+            'keys': keys_meta,
             'presets': NODE_CONFIG_PRESETS,
             'toml_exists': NODE_CONFIG_TOML.exists(),
             'toml_path': str(NODE_CONFIG_TOML),
