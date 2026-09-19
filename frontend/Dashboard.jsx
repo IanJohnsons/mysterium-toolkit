@@ -2801,11 +2801,56 @@ const MysteriumDashboard = () => {
               </div>
               <div>
                 <h1 className="text-lg font-bold tracking-tight">Mysterium Node <span className="text-xs font-normal text-slate-500">v{toolkitVersion}</span>
-                  {updateInfo?.update_available && (
-                    <span className="ml-2 text-xs font-normal text-amber-400 border border-amber-500/40 bg-amber-500/10 rounded px-1.5 py-0.5" title={`v${updateInfo.latest} available — run: sudo ./update.sh`}>
-                      ↑ v{updateInfo.latest}
-                    </span>
-                  )}
+                  {updateInfo?.update_available && (() => {
+                    // Was a <span> whose tooltip said "run: sudo ./update.sh" —
+                    // a label that sent you to a terminal while the auto-update
+                    // control right beside it was a working button. The endpoint
+                    // it needs has been proxyable all along.
+                    //
+                    // Deliberately self-contained: nodeIsBehind and behindNodes
+                    // live inside the fleet branch further up, and a const from
+                    // there is not in scope here. Referencing one would build
+                    // cleanly and throw at render — which is exactly how
+                    // "toggleAutoUpdate is not defined" shipped in v1.4.10.
+                    const st = nodeUpdateStates[selectedNodeId || '_local'];
+                    if (st === 'updating') return (
+                      <span className="ml-2 text-xs font-normal text-amber-400 animate-pulse">⟳ updating…</span>
+                    );
+                    if (st === 'done') return (
+                      <span className="ml-2 text-xs font-normal text-emerald-400">✓ update sent — restarting</span>
+                    );
+                    if (st === 'error') return (
+                      <span className="ml-2 text-xs font-normal text-red-400">✗ update failed</span>
+                    );
+                    return (
+                      <button
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          if (!confirm(`Update this node to v${updateInfo.latest}? The backend restarts and the dashboard reloads.`)) return;
+                          const key = selectedNodeId || '_local';
+                          setNodeUpdateStates(s2 => ({ ...s2, [key]: 'updating' }));
+                          try {
+                            // The refs, not the props: authHeaders does not exist
+                            // in this scope, and toggleAutoUpdate right beside
+                            // this button reads them the same way.
+                            const base = selectedNodeId
+                              ? `${backendUrlRef.current}/fleet/node/${encodeURIComponent(selectedNodeId)}/proxy`
+                              : backendUrlRef.current;
+                            const r = await fetch(`${base}/system/update`, {
+                              method: 'POST', headers: authHeaderRef.current || {},
+                            });
+                            const d = await r.json();
+                            setNodeUpdateStates(s2 => ({ ...s2, [key]: d.success ? 'done' : 'error' }));
+                          } catch {
+                            setNodeUpdateStates(s2 => ({ ...s2, [key]: 'error' }));
+                          }
+                        }}
+                        title={`Update this node to v${updateInfo.latest}`}
+                        className="ml-2 text-xs font-normal text-amber-400 border border-amber-500/40 bg-amber-500/10 rounded px-1.5 py-0.5 hover:bg-amber-500/20 transition cursor-pointer">
+                        ↑ v{updateInfo.latest}
+                      </button>
+                    );
+                  })()}
                   {autoUpdate?.supported && autoUpdate.status !== 'not_installed' && (
                     <button
                       onClick={toggleAutoUpdate}
