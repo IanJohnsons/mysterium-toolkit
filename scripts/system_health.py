@@ -993,15 +993,31 @@ class ServiceWatchdog:
         # an hour, for two days, while every check above read "ok" — the node was
         # running fine outside systemd and the unit was failing on the port.
         # Count what the journal records instead.
+        # Read the journal from the moment THIS process started, not a fixed hour
+        # back. A node restarted two minutes ago inherits the previous process's
+        # failures and gets reported critical for a fault that the restart just
+        # fixed — telling the operator to apply a change they have already made.
+        # Seen immediately: three identity-lock errors at 19:19, 19:22 and 19:28
+        # from a process that ended, against a node running since 19:38.
+        _since = '1 hour ago'
+        rc_t, out_t, _ = _run(
+            ['systemctl', 'show', 'mysterium-node', '-p', 'ActiveEnterTimestamp', '--value'],
+            timeout=5)
+        if rc_t == 0 and out_t.strip():
+            # "Sat 2026-09-19 19:38:01 CEST" — journalctl takes it without the
+            # weekday and zone.
+            parts = out_t.strip().split()
+            if len(parts) >= 3:
+                _since = f'{parts[1]} {parts[2]}'
         rc_j, out_j, _ = _run(
-            ['journalctl', '-u', 'mysterium-node', '--since', '1 hour ago', '--no-pager'],
+            ['journalctl', '-u', 'mysterium-node', '--since', _since, '--no-pager'],
             timeout=15)
         if rc_j == 0 and out_j:
             starts = out_j.count('Starting Mysterium Node')
             in_use = 'address already in use' in out_j
             if starts >= 10:
                 result['status'] = 'critical'
-                detail = f'{starts} start attempts in the last hour'
+                detail = f'{starts} start attempts since this process began'
                 if in_use:
                     detail += ' — port 4050 already taken'
                 result['checks'].append({
@@ -1020,7 +1036,7 @@ class ServiceWatchdog:
                     result['status'] = 'warning'
                 result['checks'].append({
                     'name': 'Restart loop', 'status': 'warning',
-                    'detail': f'{starts} restarts in the last hour',
+                    'detail': f'{starts} restarts since this process began',
                 })
 
             # --- Identity lock ------------------------------------------------
@@ -1034,7 +1050,7 @@ class ServiceWatchdog:
                 result['status'] = 'critical'
                 result['checks'].append({
                     'name': 'Identity lock', 'status': 'critical',
-                    'detail': f'{locked}x could not sign metrics in the last hour — '
+                    'detail': f'{locked}x could not sign metrics since startup — '
                               f'proposals go out with quality 0',
                 })
                 result['recommendations'].append(
@@ -1044,10 +1060,60 @@ class ServiceWatchdog:
         return result
 
     @staticmethod
+    def _node_outside_systemd_on_port():
+        """PID of a node holding 4050 that systemd did not start, else None.
+
+        The dangerous combination is exactly this one: the unit is inactive
+        because the node runs outside it, so "restart" has nothing to stop and
+        the new process dies on bind — after which systemd retries every five
+        seconds indefinitely. A Pi reached 2147 attempts over two days that way.
+        """
+        # Start from the socket, not from the process list. A process that only
+        # looks like a node — or one that vanishes mid-scan, which happened on
+        # the first attempt and produced a PID that no longer existed — cannot
+        # block anything. What blocks a restart is whoever holds 4050.
+        try:
+            for conn in psutil.net_connections(kind='tcp'):
+                if (not conn.laddr or conn.laddr.port != PortReachability.TEQUILAPI_PORT
+                        or conn.status != 'LISTEN' or not conn.pid):
+                    continue
+                try:
+                    proc = psutil.Process(conn.pid)
+                    cmd = ' '.join(proc.cmdline())
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    return None          # gone or unreadable: do not guess
+                if 'myst' not in cmd:
+                    return None          # something else entirely; not our call
+                try:
+                    cgroup = Path(f'/proc/{conn.pid}/cgroup').read_text()
+                except Exception:
+                    return None
+                return None if 'mysterium-node.service' in cgroup else conn.pid
+        except Exception as e:
+            logger.warning(f'Could not check who holds the TequilAPI port: {e}')
+        return None
+
+    @staticmethod
     def fix():
         actions = []
         rc, out, _ = _run(['systemctl', 'is-active', 'mysterium-node'])
         if out != 'active':
+            # Refuse rather than start a loop. The Restart button in the node
+            # card got this guard in v1.4.28; this one did not, so Fix & Lock
+            # and Optimize & Lock All could still do the damage the other button
+            # had stopped doing.
+            stray = ServiceWatchdog._node_outside_systemd_on_port()
+            if stray:
+                actions.append({
+                    'action': 'Restart mysterium-node',
+                    'success': False,
+                    'skipped': True,
+                    'error': (f'refused: a node systemd did not start (PID {stray}) is already '
+                              f'running. Restarting the unit would fail on every attempt and '
+                              f'leave systemd retrying every five seconds. Stop that process '
+                              f'first, or leave the unit disabled.'),
+                })
+                return {'name': 'service', 'actions': actions, 'success': False}
             rc, _, err = _run(['sudo', '-n', 'systemctl', 'restart', 'mysterium-node'])
             actions.append({
                 'action': 'Restart mysterium-node',

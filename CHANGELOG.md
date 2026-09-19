@@ -4,6 +4,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.31
+
+- fix: the service check reads the journal from the moment the current node process started, not a fixed hour back. A node restarted two minutes ago inherited the previous process's failures and was reported critical for a fault the restart had just fixed — telling the operator to apply a change they had already made. Seen on a laptop: three identity-lock errors at 19:19, 19:22 and 19:28 from a process that had ended, against a node running since 19:38.
+- fix: Fix & Lock on Mysterium Service refuses to restart when a node systemd did not start is holding port 4050. The Restart button in the node card got this guard in v1.4.28; this one did not, so Fix & Lock and Optimize & Lock All could still start the five-second retry loop the other button had stopped causing. The check reads who holds the port rather than scanning the process list — the first attempt did the latter and returned a PID that had already exited.
+
 ## v1.4.30
 
 - fix: the dashboard rendered as "ReferenceError: nodeIsBehind is not defined" and nothing else. The helper added in v1.4.29 lives inside the fleet branch, which closes before the node view; one of the two per-node update buttons sits below that line and called it anyway. The build was clean — Vite resolves no names — and the page went blank the moment that view rendered. Same shape as "toggleAutoUpdate is not defined" in v1.4.10, and this time the offending call sat two lines under a comment warning against it. The button now carries its own check.
