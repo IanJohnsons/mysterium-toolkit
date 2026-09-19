@@ -1047,15 +1047,73 @@ class ServiceWatchdog:
             # nothing reported it. The fix is one line in the env file.
             locked = out_j.count('authentication needed')
             if locked:
-                result['status'] = 'critical'
+                # Two things were wrong with the first version of this.
+                #
+                # It called any occurrence critical. A node that signs metrics
+                # every few minutes and misses one or two is not in the same
+                # state as one that missed 281 in a row — the first is a hiccup,
+                # the second is a node advertising itself as worthless. Treating
+                # them alike turned the health card red on machines that were
+                # working and buried the case that mattered.
+                #
+                # And it recommended adding --identity.passphrase= without
+                # checking whether that was already set. On a machine where it
+                # was, the advice was to do something the operator had already
+                # done — and the flag demonstrably does not stop the error
+                # recurring: one laptop running with it since 19:38 still logged
+                # this at 21:50 and 22:00. So the flag is offered only when it is
+                # genuinely absent, and otherwise the check says plainly that the
+                # cause is not the passphrase.
+                _passphrase_set = False
+                try:
+                    _env = Path('/etc/default/mysterium-node')
+                    if _env.exists():
+                        _passphrase_set = 'identity.passphrase' in _env.read_text()
+                except Exception:
+                    pass
+
+                # What this error actually is, read from the node source (1.39.6):
+                #
+                #   core/quality/morqa_transport.go:247
+                #     func sessionTokensToMetricsEvent(ctx sessionTokensContext)
+                #             (string, *metrics.Event) {
+                #         return ctx.Consumer, &metrics.Event{
+                #             IsProvider: false,
+                #
+                # Every other event in that file picks the signer with
+                # `if ctx.IsProvider { sender = ctx.Provider }`. This one returns
+                # the CONSUMER address unconditionally, so the node asks its own
+                # keystore to sign as the customer — a key it has never held.
+                # identity/keystore_filesystem.go:223 then returns ErrLocked, and
+                # that surfaces as "authentication needed: password or unlock".
+                #
+                # Consequences, stated precisely because the earlier wording was
+                # wrong: proposals are NOT affected. They go through
+                # proposalEventToMetricsEvent with IsProvider true and the node's
+                # own ProviderID, and are signed correctly. What is lost is the
+                # per-session token metric to the quality oracle.
+                #
+                # Nothing on the operator's machine can fix this, the passphrase
+                # least of all. It scales with traffic — one per session-token
+                # report — which is why a busy node logs more of them.
+                _detail = (f'{locked}x since startup — known node bug in 1.39.x, '
+                           f'not a fault on this machine')
+                if result['status'] == 'ok':
+                    result['status'] = 'warning'
                 result['checks'].append({
-                    'name': 'Identity lock', 'status': 'critical',
-                    'detail': f'{locked}x could not sign metrics since startup — '
-                              f'proposals go out with quality 0',
+                    'name': 'Identity lock', 'status': 'warning', 'detail': _detail,
                 })
                 result['recommendations'].append(
-                    'Add --identity.passphrase= to SERVICE_OPTS in /etc/default/mysterium-node '
-                    '(empty value = no passphrase), then restart the node')
+                    'No action needed. The node signs its session-token metric as the '
+                    'consumer instead of the provider '
+                    '(core/quality/morqa_transport.go:247, IsProvider hardcoded false), '
+                    'so it asks for a key it does not have. Proposals are signed '
+                    'correctly and earnings are unaffected; only that one metric is '
+                    'lost. Report upstream if you want it fixed.'
+                    + ('' if _passphrase_set else
+                       ' Separately, --identity.passphrase= is not set in '
+                       '/etc/default/mysterium-node; that is worth adding for the '
+                       'unlock at startup, but it will not stop this message.'))
 
         return result
 
@@ -2117,6 +2175,10 @@ class PortMapping:
             'status': 'ok',
             'checks': [],
             'recommendations': [],
+            # The node performs its own UPnP mapping and the toolkit has no way
+            # in. Offering a Fix & Lock here promised a repair that could never
+            # happen.
+            'fixable': False,
         }
 
         nat, sessions = PortMapping._nat_and_quality()
@@ -2945,6 +3007,9 @@ class CpuGovernorHealth:
             'status': 'ok',
             'checks': [],
             'recommendations': [],
+            # Adaptive by design: the watcher adjusts the governor as sessions
+            # come and go. There is nothing for a one-off fix to do.
+            'fixable': False,
         }
 
         profile = get_profile()
@@ -3576,6 +3641,11 @@ class NatChainHealth:
             'status': 'ok',
             'checks': [],
             'recommendations': [],
+            # No Fix & Lock button. Recovery means restarting the node, which
+            # drops every live session — the operator's call, not a button's.
+            # A button that deliberately does nothing is worse than no button:
+            # it teaches people the buttons do not work.
+            'fixable': False,
         }
 
         tunnels = NatChainHealth._tunnel_interfaces()

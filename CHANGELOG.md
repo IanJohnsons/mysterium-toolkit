@@ -4,6 +4,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.32
+
+- fix: the identity-lock message says what the error actually is. It claimed "proposals go out with quality 0", which is wrong — proposals are signed correctly, through `proposalEventToMetricsEvent` with IsProvider true and the node's own ProviderID. The error comes from one event in the node itself: `core/quality/morqa_transport.go:247` returns `ctx.Consumer` with `IsProvider` hardcoded false, where every neighbouring function picks the signer with `if ctx.IsProvider`. The node therefore asks its keystore to sign as the customer, a key it has never held, and `identity/keystore_filesystem.go:223` returns ErrLocked. Nothing on the operator's machine can fix it and the passphrase flag least of all; only the per-session token metric is lost. Verified against node source 1.39.6. The check reports it as a warning with the source reference, so it can be sent upstream.
+- fix: the identity-lock check no longer calls every occurrence critical, and no longer recommends a change the operator has already made. A node that misses one or two signatures between successful ones is not in the state of one that missed 281 in a row; treating them alike turned the card red on working machines. Ten or more is critical, below that a warning. And the `--identity.passphrase=` advice now appears only when the flag is genuinely absent — a laptop running with it since 19:38 still logged the error at 21:50 and 22:00, so the flag is not the cause there and saying otherwise sent the operator in a circle.
+- fix: three subsystems no longer show a Fix & Lock button. NAT Chain (MYST), Router Port Mapping and CPU Governor all have a fix that does nothing by design — recovery needs a node restart, the node does its own UPnP mapping, and the governor adjusts itself. Pressing those buttons changed nothing, which is how an operator concludes that none of the buttons work. They now say "No fix available — this one reports only".
+
 ## v1.4.31
 
 - fix: the service check reads the journal from the moment the current node process started, not a fixed hour back. A node restarted two minutes ago inherited the previous process's failures and was reported critical for a fault the restart had just fixed — telling the operator to apply a change they had already made. Seen on a laptop: three identity-lock errors at 19:19, 19:22 and 19:28 from a process that had ended, against a node running since 19:38.

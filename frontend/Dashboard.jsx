@@ -4401,6 +4401,19 @@ const MysteriumDashboard = () => {
                           sub.status === 'warning' ? 'bg-amber-500/10 text-amber-400' : 'bg-red-500/10 text-red-400'
                         }`}>{sub.status}</span>
                       </div>
+                      {/* Three subsystems report fixable:false — their fix is a
+                          no-op by design. NAT Chain needs a node restart, which
+                          is the operator's decision; Router Port Mapping is done
+                          by the node over UPnP and the toolkit has no way in;
+                          CPU Governor adjusts itself as sessions come and go.
+                          They showed a Fix & Lock button anyway, which did
+                          nothing when pressed — and that is how an operator
+                          concludes that none of these buttons work. */}
+                      {sub.fixable === false ? (
+                        <div className="text-[10px] text-slate-500 italic mb-2">
+                          No fix available — this one reports only.
+                        </div>
+                      ) : (
                       <div className="flex flex-wrap items-center gap-1.5 mb-2">
                         <button
                           onClick={async () => {
@@ -4471,7 +4484,7 @@ const MysteriumDashboard = () => {
                           className="px-2.5 py-1 text-xs bg-slate-600/15 text-slate-400 rounded hover:bg-slate-600/30 transition border border-slate-600/20"
                           title="Apply fix in memory only — reverts on reboot"
                         >Fix only</button>
-                      </div>
+                      </div>)}
                       <div className="space-y-1">
                         {(sub.checks || []).map((check, ci) => (
                           <div key={ci} className="flex items-start gap-2 text-xs">
