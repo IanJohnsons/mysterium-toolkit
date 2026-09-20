@@ -40,76 +40,67 @@ _VERSION_FILE = Path(__file__).parent.parent / 'VERSION'
 VERSION = _VERSION_FILE.read_text().strip() if _VERSION_FILE.exists() else 'unknown'
 
 # ============ PAYMENT CONFIG TUNER CONSTANTS ============
+# Fallback only: used when talking to a backend older than v1.4.27, where the
+# key metadata started being served by the backend instead of duplicated here.
+#
+# Five entries were removed — payments.unsettled-max-amount,
+# payments.settle.min-amount, payments.min_promise_amount,
+# pingpong.balance-check-interval and pingpong.promise-wait-timeout. None of
+# them are configuration keys the node has; checked against the 119 it registers
+# in config/flags_*.go at tag 1.39.6.
 CONFIG_KEYS_META = [
     {
         'key':   'payments.zero-stake-unsettled-amount',
         'label': 'Auto-Settle Threshold',
         'unit':  'MYST',
-        'group': 'settlement',
-        'desc':  'Unsettled MYST to trigger auto-settlement. Default:5. Higher=fewer TX, more MYST at risk.',
+        'desc':  'Unsettled MYST that triggers auto-settlement. Higher means fewer transactions and more MYST at risk between them.',
     },
     {
-        'key':   'payments.unsettled-max-amount',
+        'key':   'payments.unsettled.max-amount',
         'label': 'Max Unsettled',
         'unit':  'MYST',
-        'group': 'settlement',
-        'desc':  'Hard ceiling on unsettled balance. Default:~10. High-load recommended: 25.',
+        'desc':  'Hard ceiling on the unsettled balance. Above this the node always settles, whatever the fee.',
     },
     {
-        'key':   'payments.settle.min-amount',
-        'label': 'Manual Settle Min',
-        'unit':  'MYST',
-        'group': 'settlement',
-        'desc':  'Min balance for manual Settle button. Default:1. Set 0.01 to settle anytime.',
-    },
-    {
-        'key':   'payments.min_promise_amount',
-        'label': 'Min Promise Amount',
-        'unit':  'MYST',
-        'group': 'session',
-        'desc':  'Min MYST in consumer first promise. Lower=accepts micro-sessions.',
+        'key':   'payments.settle.max-fee-percentage',
+        'label': 'Max Settle Fee',
+        'unit':  'ratio',
+        'desc':  'Largest share of the settled amount acceptable as transaction fee. Not the Hermes cut, which is fixed at 20%.',
     },
     {
         'key':   'payments.provider.invoice-frequency',
         'label': 'Invoice Frequency',
         'unit':  'seconds',
-        'group': 'timing',
-        'desc':  'Invoice interval per session. Default:60s. 300s = ~5x fewer API calls.',
-    },
-    {
-        'key':   'pingpong.balance-check-interval',
-        'label': 'Balance Check Interval',
-        'unit':  'seconds',
-        'group': 'timing',
-        'desc':  'Consumer balance poll interval. Primary rate-limit fix. DO NOT exceed 300s.',
-    },
-    {
-        'key':   'pingpong.promise-wait-timeout',
-        'label': 'Promise Wait Timeout',
-        'unit':  'seconds',
-        'group': 'timing',
-        'desc':  'Patience for slow consumer promise. Default:180s. DO NOT exceed 600s.',
+        'desc':  'How often a session sends a payment invoice. 300s means roughly five times fewer API calls.',
     },
 ]
 
+# Five of the seven keys these presets used to write are not configuration keys
+# the node has: payments.unsettled-max-amount, payments.settle.min-amount,
+# payments.min_promise_amount, pingpong.balance-check-interval and
+# pingpong.promise-wait-timeout. Checked against the 119 keys the node registers
+# in config/flags_*.go at tag 1.39.6.
+#
+# Writing them was not harmless. The node keeps keys it does not recognise in
+# its config file and writes them back verbatim on every save, so they persist
+# and read like settings that are in effect. One operator carried six of them
+# across two machines, including a "balance check interval" believed to be
+# limiting API calls.
+#
+# The two keys that do matter and were missing — unsettled.max-amount and
+# settle.max-fee-percentage — are in now.
 CONFIG_PRESETS = {
     'defaults': {
         'payments.zero-stake-unsettled-amount': '5.0',
-        'payments.unsettled-max-amount':        '10.0',
-        'payments.settle.min-amount':           '1.0',
-        'payments.min_promise_amount':          '0.05',
+        'payments.unsettled.max-amount':        '20.0',
+        'payments.settle.max-fee-percentage':   '0.05',
         'payments.provider.invoice-frequency':  '60',
-        'pingpong.balance-check-interval':      '90',
-        'pingpong.promise-wait-timeout':        '180',
     },
     'high-traffic': {
-        'payments.zero-stake-unsettled-amount': '10',
-        'payments.unsettled-max-amount':        '25',
-        'payments.settle.min-amount':           '0.01',
-        'payments.min_promise_amount':          '0.01',
+        'payments.zero-stake-unsettled-amount': '12.5',
+        'payments.unsettled.max-amount':        '25.0',
+        'payments.settle.max-fee-percentage':   '0.05',
         'payments.provider.invoice-frequency':  '300',
-        'pingpong.balance-check-interval':      '300',
-        'pingpong.promise-wait-timeout':        '600',
     },
 }
 

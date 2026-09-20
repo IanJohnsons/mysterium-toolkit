@@ -4,6 +4,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.34
+
+- fix: the CLI payment presets write only keys the node actually has. Five of the seven they used — `payments.unsettled-max-amount`, `payments.settle.min-amount`, `payments.min_promise_amount`, `pingpong.balance-check-interval` and `pingpong.promise-wait-timeout` — are not configuration keys the node registers, checked against the 119 in `config/flags_*.go` at tag 1.39.6. The node keeps unrecognised keys in its config file and writes them back verbatim on every save, so they persist and read like settings that are in effect; nothing reports them as ignored. Both presets now also set `payments.unsettled.max-amount` and `payments.settle.max-fee-percentage`, which do matter and were absent.
+- fix: the CLI's local key list, used only when talking to a backend older than v1.4.27, drops the same five entries. The backend list was already correct.
+
 ## v1.4.33
 
 - fix: the identity-lock message no longer calls this a known bug or names a cause that was never established. No upstream report exists, and the node does not log which owner address failed — `mysterium_morqa.go:212` records the failure without it — so the event behind it cannot be identified from outside. What is certain is the mechanism: the node asked its keystore to sign as an address it does not hold, which no local setting affects. The card says that and nothing more.
