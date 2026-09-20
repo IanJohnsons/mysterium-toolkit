@@ -6702,7 +6702,7 @@ const NODE_CONFIG_KEYS_META = [
     label: 'Max Unsettled Amount',
     unit: 'MYST',
     group: 'settlement',
-    desc: 'Hard ceiling on unsettled MYST — above this the node always tries to settle, regardless of transaction fees. Node default: 20. High-load recommended: 25. (Fixed in v1.3.3: earlier versions wrote this under a key name the node never read.)',
+    desc: 'Hard ceiling on unsettled MYST — above this the node always tries to settle, regardless of transaction fees. Node default: 20. High-load recommended: 25.',
   },
   {
     key: 'payments.settle.max-fee-percentage',
@@ -6898,7 +6898,7 @@ const NodeConfigModal = ({ backendUrl, authHeaders, onClose }) => {
 
               <div className="space-y-1">
                 <p className="text-slate-300 font-semibold uppercase tracking-wider text-[10px]">How changes are applied</p>
-                <p>Written via <code className="bg-slate-800 px-1 rounded">myst config set</code> to <code className="bg-slate-800 px-1 rounded">{tomlPath}</code>. <strong className="text-amber-300">Requires a node restart to take effect</strong> — use the Restart button after applying. Upgraders: versions before v1.3.3/v1.3.6 wrote a few settings the node never reads; those inert keys may remain in your TOML file and are harmless.</p>
+                <p>Written via <code className="bg-slate-800 px-1 rounded">myst config set</code> to <code className="bg-slate-800 px-1 rounded">{tomlPath}</code>. <strong className="text-amber-300">Requires a node restart to take effect</strong> — use the Restart button after applying.</p>
               </div>
 
               {/* Scroll sentinel */}
