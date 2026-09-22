@@ -740,6 +740,63 @@ def _hash_password(plain: str) -> str:
     return 'scrypt$' + base64.b64encode(salt).decode() + '$' + base64.b64encode(dk).decode()
 
 
+def _migrate_plaintext_password(plain: str) -> str:
+    """Replace a plain-text dashboard password on disk with a salted hash.
+
+    v1.4.6 hashed new passwords, but only along the advanced setup path. The easy
+    path kept writing the password itself into config/setup.json and .env, so a
+    large share of installs still hold the credential in readable form — found on
+    an operator's machine where `grep DASHBOARD .env` printed his login. Nothing
+    here changes how anyone logs in: _verify_password() accepts both forms, and
+    the hash replaces the same value it was made from.
+
+    Returns what the caller should use as PASSWORD from now on: the hash when a
+    file was rewritten, the original value when there was nothing to migrate or
+    nothing could be written.
+    """
+    if not plain or plain.startswith('scrypt$'):
+        return plain
+    hashed = _hash_password(plain)
+    rewrote = []
+
+    cfg = Path('config/setup.json')
+    try:
+        if cfg.exists():
+            d = json.loads(cfg.read_text())
+            if d.get('dashboard_password') == plain:
+                d['dashboard_password'] = hashed
+                cfg.write_text(json.dumps(d, indent=2))
+                rewrote.append(str(cfg))
+    except Exception as e:
+        logger.warning(f"Could not hash the password in config/setup.json: {e}")
+
+    env = Path('.env')
+    try:
+        if env.exists():
+            lines = env.read_text().splitlines(keepends=True)
+            out, hit = [], False
+            for line in lines:
+                if line.strip().startswith('DASHBOARD_PASSWORD=') and line.split('=', 1)[1].strip() == plain:
+                    out.append(f'DASHBOARD_PASSWORD={hashed}\n')
+                    hit = True
+                else:
+                    out.append(line)
+            if hit:
+                env.write_text(''.join(out))
+                rewrote.append(str(env))
+    except Exception as e:
+        logger.warning(f"Could not hash the password in .env: {e}")
+
+    if rewrote:
+        logger.info("Dashboard password was stored in plain text and has been replaced "
+                    f"with a salted hash in {', '.join(rewrote)}. Your login is unchanged.")
+        return hashed
+    return plain
+
+
+PASSWORD = _migrate_plaintext_password(PASSWORD)
+
+
 def _verify_password(plain: str, stored: str) -> bool:
     """Check a password against either a hash or a legacy plain-text value.
 

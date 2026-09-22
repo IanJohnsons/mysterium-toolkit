@@ -370,7 +370,11 @@ def _run_easy_wizard() -> bool:
             dash_pass = _secrets.token_urlsafe(16)
 
         config['dashboard_username']   = 'admin'
-        config['dashboard_password']   = dash_pass
+        # v1.4.36: the advanced path has hashed this since v1.4.6; this one kept
+        # writing the password itself into setup.json and .env, which is where
+        # most installs got it from. The plain value is shown once, below, and
+        # then only the hash is stored.
+        config['dashboard_password']   = _hash_dashboard_password(dash_pass) if dash_pass else ''
         config['dashboard_auth_method'] = 'userpass'
 
         print_info("")
@@ -382,7 +386,8 @@ def _run_easy_wizard() -> bool:
         print_success(f"  Password : {dash_pass}")
         print_info("")
         print_info("  The login screen will ask for these credentials.")
-        print_info("  You can find them later in: .env  and  config/setup.json")
+        print_info("  Store the password now — it is saved as a hash, so it cannot")
+        print_info("  be read back from .env or config/setup.json later.")
         print_info("=" * 60)
         print_info("")
         input("  Press Enter to continue...")

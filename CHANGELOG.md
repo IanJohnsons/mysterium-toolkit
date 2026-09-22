@@ -4,6 +4,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.36
+
+- fix: the dashboard password is no longer stored in plain text. v1.4.6 hashed it, but only on the advanced setup path; the easy path — the one most installs use — kept writing the password itself into `config/setup.json` and `.env`. Found on an operator's machine, where `grep DASHBOARD .env` printed his login in full. The easy path now stores a salted scrypt hash like the advanced one, and shows the password once on screen instead of promising it can be looked up later.
+- fix: an install that already holds a plain-text password converts it to a hash at startup, in both `config/setup.json` and `.env`. Nothing changes about logging in — `_verify_password()` accepts both forms and the hash is made from the same value. A second start finds nothing left to convert and stays quiet.
+
 ## v1.4.35
 
 - fix: `bin/setup.sh` could never upgrade Node.js. The sed that reads the major version held a literal control byte where `\1` belongs, so `_NODE_MAJOR` was never a number, the `-lt 18` test failed into `2>/dev/null` and the upgrade was skipped without a word. Present since v1.2.27 — the release that added the fallback for exactly this case. Found on a Raspberry Pi stuck on Node 16, where Vite 5 cannot build (`crypto$2.getRandomValues is not a function`), so every update since had silently kept serving a months-old bundle.
