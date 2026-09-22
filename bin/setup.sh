@@ -107,7 +107,7 @@ TLS_PY_EOF
     if [ -f "$_TLS_CERT" ] && [ -f "$_TLS_KEY" ]; then
         chmod 600 "$_TLS_KEY"
         chmod 644 "$_TLS_CERT"
-        [ -n "$_REAL_USER" ] && chown -R "$_REAL_USER:$_REAL_USER" "$_TLS_DIR" 2>/dev/null || true
+        [ -n "$_REAL_USER" ] && chown -R "$_REAL_USER:" "$_TLS_DIR" 2>/dev/null || true
 
         # Fall back to the system interpreter: --tls-only can run before the venv
         # exists. Writing the config is what actually enables TLS, so its failure
@@ -832,7 +832,7 @@ _fix_npm_if_broken
 
 NODE_VERSION=$(node --version 2>&1)
 # Minimum version check — need v18+ (Vite requires crypto.getRandomValues)
-_NODE_MAJOR=$(echo "$NODE_VERSION" | sed 's/v\([0-9]*\).*//')
+_NODE_MAJOR=$(echo "$NODE_VERSION" | sed 's/v\([0-9]*\).*/\1/')
 if [ -n "$_NODE_MAJOR" ] && [ "$_NODE_MAJOR" -lt 18 ] 2>/dev/null; then
     echo -e "${YELLOW}⚠ Node.js ${NODE_VERSION} is too old — need v18 or higher. Upgrading...${NC}"
     _install_nodejs_binary || {
@@ -876,7 +876,7 @@ mkdir -p logs config
 # This prevents the systemd autostart service from failing with Permission denied
 _SETUP_REAL_USER="${SUDO_USER:-$USER}"
 if [ "$_SETUP_REAL_USER" != "root" ]; then
-    chown -R "$_SETUP_REAL_USER:$_SETUP_REAL_USER" logs/ 2>/dev/null || true
+    chown -R "$_SETUP_REAL_USER:" logs/ 2>/dev/null || true
 fi
 
 # Modus 3: lightweight backend — no frontend needed
@@ -1407,9 +1407,19 @@ else:
             _UDP_FROM=10000
             _UDP_TO=60000
             _NODE_CFG=""
-            for _c in /etc/mysterium-node/config.toml /var/lib/mysterium-node/config.toml; do
+            # config-mainnet.toml is the name the node actually writes: resolveLocation()
+            # in config/urfavecli/clicontext/user.go joins the config dir with that name.
+            # Only config.toml was checked here, so this never found anything and silently
+            # fell back to the default range — the exact assumption v1.4.2 set out to fix.
+            for _c in /etc/mysterium-node/config-mainnet.toml /var/lib/mysterium-node/config-mainnet.toml \
+                      /etc/mysterium-node/config.toml /var/lib/mysterium-node/config.toml; do
                 [ -r "$_c" ] && _NODE_CFG="$_c" && break
             done
+            # The config dir is commonly root-owned (0700), so a non-root setup run cannot
+            # read it. Say so instead of reporting the default range as if it were read.
+            if [ -z "$_NODE_CFG" ] && [ -d /etc/mysterium-node ] && [ ! -r /etc/mysterium-node ]; then
+                echo -e "  ${DIM}  Node config directory not readable as $(whoami) — using the node default range${NC}"
+            fi
             if [ -n "$_NODE_CFG" ]; then
                 _RANGE=$(grep -A5 '^\[udp\]' "$_NODE_CFG" 2>/dev/null \
                          | grep -m1 '^[[:space:]]*ports' \
@@ -1826,7 +1836,7 @@ if [ -f "$_SERVICE_FILE" ]; then
     _REAL_USER="${SUDO_USER:-$USER}"
     _REAL_HOME=$(getent passwd "$_REAL_USER" | cut -d: -f6)
     mkdir -p "$TOOLKIT_DIR/logs"
-    chown -R "$_REAL_USER:$_REAL_USER" "$TOOLKIT_DIR/logs" 2>/dev/null || true
+    chown -R "$_REAL_USER:" "$TOOLKIT_DIR/logs" 2>/dev/null || true
     # Detect Mysterium node service name.
     #
     # Two things were wrong here. The list did not contain mysterium-node, which

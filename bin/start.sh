@@ -351,10 +351,19 @@ _action_start_dashboard() {
     if is_backend_running; then
         _banner "Dashboard Running!" "$GREEN"
         echo
-        echo -e "  Open: ${CYAN}${BOLD}${DASHBOARD_URL}${NC}"
-        echo
-        echo -e "  ${DIM}Opening browser...${NC}"
-        open_browser
+        # Over SSH, localhost is the machine the browser runs on, not this one.
+        # Printing it as the main link sent people to a page that cannot load,
+        # and open_browser has nothing to open on a headless box anyway.
+        if [ -n "$SSH_CONNECTION" ] || [ -n "$SSH_CLIENT" ] || [ -n "$SSH_TTY" ]; then
+            echo -e "  Open: ${CYAN}${BOLD}${DASHBOARD_URL_NETWORK}${NC}"
+            echo -e "  ${DIM}      (connected over SSH — ${DASHBOARD_URL} only works in a browser on this machine)${NC}"
+        else
+            echo -e "  Open: ${CYAN}${BOLD}${DASHBOARD_URL}${NC}"
+            echo -e "  ${DIM}      Network: ${DASHBOARD_URL_NETWORK}${NC}"
+            echo
+            echo -e "  ${DIM}Opening browser...${NC}"
+            open_browser
+        fi
         echo
         echo -e "  ${DIM}Logs: logs/backend.log${NC}"
     fi
@@ -648,7 +657,7 @@ _action_autostart() {
                 _REAL_USER="${SUDO_USER:-$USER}"
                 _REAL_HOME=$(getent passwd "$_REAL_USER" | cut -d: -f6)
                 mkdir -p "$TOOLKIT_DIR/logs"
-                chown -R "$_REAL_USER:$_REAL_USER" "$TOOLKIT_DIR/logs" 2>/dev/null || true
+                chown -R "$_REAL_USER:" "$TOOLKIT_DIR/logs" 2>/dev/null || true
                 _MYST_SVC=""
                 for _svc in mysterium-node myst mysterium mysterium-node.service; do
                     if systemctl list-units --all --no-legend 2>/dev/null | grep -q "^.*${_svc}"; then

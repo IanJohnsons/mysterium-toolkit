@@ -60,10 +60,10 @@ if [ -d ".git" ] && [ -n "$_REAL_USER" ]; then
     if [ -n "$_GIT_FOREIGN" ]; then
         echo -e "  ${YELLOW}⚠ .git contains files not owned by $_REAL_USER — fixing ownership...${NC}"
         echo -e "  ${DIM}    first offender: $_GIT_FOREIGN${NC}"
-        $SUDO chown -R "$_REAL_USER:$_REAL_USER" ".git" 2>/dev/null || true
+        $SUDO chown -R "$_REAL_USER:" ".git" 2>/dev/null || true
         if [ -n "$(find .git ! -user "$_REAL_USER" -print -quit 2>/dev/null)" ]; then
             echo -e "  ${RED}✗ could not restore .git ownership — run:${NC}"
-            echo -e "  ${DIM}    sudo chown -R $_REAL_USER:$_REAL_USER $(pwd)${NC}"
+            echo -e "  ${DIM}    sudo chown -R $_REAL_USER: $(pwd)${NC}"
         else
             echo -e "  ${GREEN}✓ .git ownership restored to $_REAL_USER${NC}"
         fi
@@ -95,10 +95,10 @@ if [ $_PULL_RC -ne 0 ]; then
     if echo "$_PULL_OUT" | grep -qi "permission denied"; then
         echo -e "${RED}✗ git pull failed — permission denied inside .git${NC}"
         echo -e "  ${DIM}A sudo operation left files owned by another user. Fix with:${NC}"
-        echo -e "  ${DIM}    sudo chown -R $_REAL_USER:$_REAL_USER $(pwd)${NC}"
+        echo -e "  ${DIM}    sudo chown -R $_REAL_USER: $(pwd)${NC}"
     elif echo "$_PULL_OUT" | grep -qi "dubious ownership"; then
         echo -e "${RED}✗ git pull failed — git refuses this repository's ownership${NC}"
-        echo -e "  ${DIM}    sudo chown -R $_REAL_USER:$_REAL_USER $(pwd)${NC}"
+        echo -e "  ${DIM}    sudo chown -R $_REAL_USER: $(pwd)${NC}"
         echo -e "  ${DIM}    or: git config --global --add safe.directory $(pwd)${NC}"
     elif echo "$_PULL_OUT" | grep -qiE "local changes|would be overwritten|conflict"; then
         echo -e "${RED}✗ git pull failed — local changes block the update${NC}"
@@ -186,11 +186,11 @@ if [ "$_REAL_USER" != "root" ]; then
                 # swallowed its own errors, so a failed repair announced itself as a
                 # completed one — and the build then failed further down for a reason
                 # the operator had just been told was fixed.
-                if $SUDO chown -R "$_REAL_USER:$_REAL_USER" "$_d" 2>/dev/null; then
+                if $SUDO chown -R "$_REAL_USER:" "$_d" 2>/dev/null; then
                     echo -e "  ${GREEN}✓ $(basename "$_d")/ ownership corrected → $_REAL_USER${NC}"
                 else
                     echo -e "  ${YELLOW}⚠ $(basename "$_d")/ has root-owned files and could not be corrected${NC}"
-                    echo -e "  ${DIM}    sudo chown -R $_REAL_USER:$_REAL_USER $_d${NC}"
+                    echo -e "  ${DIM}    sudo chown -R $_REAL_USER: $_d${NC}"
                 fi
             fi
         fi
@@ -208,7 +208,7 @@ if [ "$_REAL_USER" != "root" ]; then
         if [ -n "$_unwritable" ]; then
             echo -e "  ${RED}✗ Not writable by $_REAL_USER:$_unwritable${NC}"
             echo -e "  ${DIM}    These databases will silently record nothing.${NC}"
-            echo -e "  ${DIM}    Fix with: sudo chown -R $_REAL_USER:$_REAL_USER $_DBDIR${NC}"
+            echo -e "  ${DIM}    Fix with: sudo chown -R $_REAL_USER: $_DBDIR${NC}"
         fi
     fi
 fi
@@ -297,13 +297,26 @@ elif command -v npm &>/dev/null && [ -d ".build" ]; then
     rm -rf dist_new/ 2>/dev/null || true
     # Disable set -e for npm — warnings produce non-zero exit but build can still succeed
     set +e
-    npm install --legacy-peer-deps > /dev/null 2>&1
+    # npm install output used to go to /dev/null. On one install the esbuild binary
+    # crashed with SIGSEGV during install, so vite was never unpacked and the build
+    # then failed with "Cannot find module .../vite.js". The six lines printed below
+    # described that missing module — the actual cause was in the discarded output.
+    mkdir -p logs
+    _NPM_LOG="logs/npm_install.log"
+    npm install --legacy-peer-deps > "$_NPM_LOG" 2>&1
+    _NPM_RC=$?
     BUILD_OUT=$(npm run build 2>&1)
     set -e
+    if [ "$_NPM_RC" -ne 0 ] && ! echo "$BUILD_OUT" | grep -q "built in"; then
+        echo -e "  ${YELLOW}⚠ npm install failed (exit $_NPM_RC) — the build below could not use fresh packages${NC}"
+        grep -iE "error|SIGSEGV|EACCES|ENOSPC" "$_NPM_LOG" | tail -8 || tail -8 "$_NPM_LOG"
+        echo -e "  ${DIM}    Full log: $TOOLKIT_DIR/$_NPM_LOG${NC}"
+    fi
     if [ -f "dist/index.html" ] && echo "$BUILD_OUT" | grep -q "built in"; then
         # Build succeeded into dist/ — rename to dist_new and swap
         mv dist dist_new 2>/dev/null && rm -rf dist/ 2>/dev/null || true
         mv dist_new dist 2>/dev/null || true
+        rm -f "$_NPM_LOG"
         echo -e "  ${GREEN}✓ Frontend rebuilt${NC}"
     else
         # v1.4.4: this used to report success whenever dist/index.html existed,
@@ -315,8 +328,9 @@ elif command -v npm &>/dev/null && [ -d ".build" ]; then
         echo "$BUILD_OUT" | tail -6
         if echo "$BUILD_OUT" | grep -q "EACCES"; then
             echo -e "  ${YELLOW}    Permission problem on dist/. Fix with:${NC}"
-            echo -e "  ${DIM}    sudo chown -R \$USER:\$USER $TOOLKIT_DIR/dist${NC}"
+            echo -e "  ${DIM}    sudo chown -R \$USER: $TOOLKIT_DIR/dist${NC}"
         fi
+        [ -s "$_NPM_LOG" ] && echo -e "  ${DIM}    npm install log: $TOOLKIT_DIR/$_NPM_LOG${NC}"
     fi
     rm -f vite.config.js postcss.config.js tailwind.config.js package.json package-lock.json index.html
 else
@@ -339,7 +353,7 @@ if [ -f "$_SERVICE_FILE" ]; then
     _REAL_HOME=$(getent passwd "$_REAL_USER" | cut -d: -f6)
     _VENV_PYTHON="$TOOLKIT_DIR/venv/bin/python"
     mkdir -p "$TOOLKIT_DIR/logs"
-[ "$(stat -c '%U' "$TOOLKIT_DIR/logs" 2>/dev/null)" = "root" ] && $SUDO chown -R "$_REAL_USER:$_REAL_USER" "$TOOLKIT_DIR/logs" 2>/dev/null || true
+[ "$(stat -c '%U' "$TOOLKIT_DIR/logs" 2>/dev/null)" = "root" ] && $SUDO chown -R "$_REAL_USER:" "$TOOLKIT_DIR/logs" 2>/dev/null || true
 
     _MYST_SVC=""
     # systemd needs the unit suffix here. Written without it, the dependency is
@@ -593,13 +607,46 @@ while ss -tlnp 2>/dev/null | grep -q ':5000 ' && [ $_port_wait -lt 15 ]; do
     sleep 1
     _port_wait=$((_port_wait + 1))
 done
-$SUDO systemctl reset-failed mysterium-toolkit 2>/dev/null || true
-$SUDO systemctl start mysterium-toolkit
-sleep 3
-if systemctl is-active --quiet mysterium-toolkit 2>/dev/null; then
-    echo -e "  ${GREEN}✓ Backend restarted via systemd${NC}"
+# An install without autostart has no unit. The stop above still killed the
+# backend that start.sh had launched, so starting only through systemd left the
+# dashboard down after every update, with nothing but "Unit not found" to show
+# for it — and after an unattended run of the auto-update timer, not even that.
+_HAS_UNIT=false
+if [ -f "/etc/systemd/system/mysterium-toolkit.service" ] \
+   || systemctl list-unit-files 2>/dev/null | grep -q '^mysterium-toolkit\.service'; then
+    _HAS_UNIT=true
+fi
+
+if [ "$_HAS_UNIT" = true ]; then
+    $SUDO systemctl reset-failed mysterium-toolkit 2>/dev/null || true
+    $SUDO systemctl start mysterium-toolkit
+    sleep 3
+    if systemctl is-active --quiet mysterium-toolkit 2>/dev/null; then
+        echo -e "  ${GREEN}✓ Backend restarted via systemd${NC}"
+    else
+        echo -e "  ${RED}✗ Backend failed to restart — check: journalctl -u mysterium-toolkit -n 20${NC}"
+    fi
 else
-    echo -e "  ${RED}✗ Backend failed to restart — check: journalctl -u mysterium-toolkit -n 20${NC}"
+    # Same launch start.sh uses, including its PID file, so the menu keeps
+    # recognising the process it did not start itself.
+    echo -e "  ${DIM}No systemd service on this install — starting the backend directly${NC}"
+    mkdir -p "$TOOLKIT_DIR/logs"
+    _PY_BIN="$TOOLKIT_DIR/venv/bin/python"
+    [ -x "$_PY_BIN" ] || _PY_BIN=$(command -v python3 || command -v python)
+    # No subshell around this: $! inside one reports the subshell's own child,
+    # not the backend, and start.sh then reads a PID file pointing at a process
+    # that is not the dashboard. update.sh already runs from TOOLKIT_DIR.
+    nohup "$_PY_BIN" backend/app.py > "$TOOLKIT_DIR/logs/backend.log" 2>&1 &
+    _NEW_PID=$!
+    echo "$_NEW_PID" > "$TOOLKIT_DIR/logs/.backend.pid"
+    sleep 5
+    if [ -n "$_NEW_PID" ] && kill -0 "$_NEW_PID" 2>/dev/null; then
+        echo -e "  ${GREEN}✓ Backend restarted (PID $_NEW_PID)${NC}"
+        echo -e "  ${DIM}    Enable autostart from ./start.sh so it also survives a reboot${NC}"
+    else
+        rm -f "$TOOLKIT_DIR/logs/.backend.pid"
+        echo -e "  ${RED}✗ Backend failed to start — check: tail -20 $TOOLKIT_DIR/logs/backend.log${NC}"
+    fi
 fi
 
 echo

@@ -622,12 +622,27 @@ def _load_nodes_json():
 
 
 def _check_nodes_json_changed():
-    """Hot-reload: check if nodes.json was modified since last load."""
+    """Hot-reload: check if nodes.json was modified, or appeared, since last load.
+
+    _nodes_json_path is only set once a file has been found, so an install that
+    started without nodes.json kept comparing against None and never noticed the
+    file being created — the first node added by hand stayed invisible until a
+    restart. The UI's Add Node route reloads the registry itself, which is why
+    this only ever showed up when the file was written directly.
+    """
     if _nodes_json_path and _nodes_json_path.exists():
         try:
             return _nodes_json_path.stat().st_mtime > _nodes_json_mtime
         except OSError:
             pass
+        return False
+    # No file seen yet — watch for one appearing.
+    for p in NODES_JSON_PATHS:
+        try:
+            if p.exists():
+                return True
+        except OSError:
+            continue
     return False
 
 
@@ -756,6 +771,18 @@ if API_KEY:
     logger.info(f"Auth: API Key loaded from {_api_key_src} (last 6: ...{API_KEY[-6:]})")
 elif USERNAME:
     logger.info(f"Auth: Username/Password loaded from {_pass_src} (user: {USERNAME})")
+
+# Credentials plus toolkit_mode 'local' reads like a protected dashboard and is not
+# one: require_auth lets every is_local_request() through, and in local mode that
+# covers the whole RFC1918 network. Deliberate — this is a LAN monitoring tool — but
+# invisible, so anyone who sets a password believes their dashboard is closed to the
+# other devices in the house. Said once at startup and repeated in the banner below.
+if (API_KEY or USERNAME) and str(setup_config.get('toolkit_mode', 'local')).lower() == 'local':
+    logger.warning(
+        "Auth is configured, but toolkit_mode is 'local', so any device on your local "
+        "network reaches the dashboard without logging in. Set toolkit_mode to 'remote' "
+        "in config/setup.json to require the credentials from everything except this machine."
+    )
 
 # If no auth configured at all, allow local-only access automatically
 if not API_KEY and not USERNAME and not PASSWORD and not ALLOW_NO_AUTH:
@@ -3270,6 +3297,7 @@ class EarningsDeltaTracker:
         if cls._snapshots:
             last_time = cls._snapshots[-1].get('time', '')
             last_lifetime = float(cls._snapshots[-1].get('lifetime', 0) or 0)
+            elapsed = 0.0   # stays 0 when last_time is unreadable — falls back to the 50 MYST floor below
             try:
                 last_dt = datetime.fromisoformat(last_time.replace('Z', '+00:00'))
                 if last_dt.tzinfo is None:
@@ -3287,20 +3315,29 @@ class EarningsDeltaTracker:
                 logger.warning(f"EarningsDeltaTracker: bad last_time format '{last_time}' — {e}")
                 last_lifetime = 0.0
 
-            # Sanity check: lifetime must be >= previous and must not jump by more
-            # than 50 MYST since the last snapshot. A jump larger than this means
-            # the data came from a different node (e.g. fleet peer returning laptop
-            # earnings) and must never enter the local snapshot history.
+            # Sanity check: lifetime must be >= previous and must not jump more than
+            # the elapsed time can account for. The cap used to be a flat 50 MYST
+            # regardless of the gap, which deadlocked any install whose toolkit had
+            # been down for weeks while the node kept earning: the real jump was
+            # legitimate, every snapshot was refused, the stored one never advanced,
+            # and earnings history never resumed. Seen on a node that had recorded
+            # nothing for a month and had genuinely earned 69.9 MYST in that time.
+            # 50 MYST per elapsed day, with 50 as the floor, keeps the original
+            # protection for the normal hourly case.
+            _gap_days = max(1.0, elapsed / 86400.0)
+            _max_jump = 50.0 * _gap_days
             if lifetime < last_lifetime:
                 logger.warning(
                     f"EarningsDeltaTracker: REJECTED snapshot — lifetime went backwards "
                     f"({last_lifetime:.4f} → {lifetime:.4f}). Corrupt or wrong-node data."
                 )
                 return
-            if last_lifetime > 0 and (lifetime - last_lifetime) > 50.0:
+            if last_lifetime > 0 and (lifetime - last_lifetime) > _max_jump:
                 logger.warning(
                     f"EarningsDeltaTracker: REJECTED snapshot — lifetime jumped {lifetime - last_lifetime:.4f} MYST "
-                    f"({last_lifetime:.4f} → {lifetime:.4f}). Likely wrong-node data from fleet peer."
+                    f"({last_lifetime:.4f} → {lifetime:.4f}) in {_gap_days:.1f} day(s), above the {_max_jump:.1f} MYST "
+                    f"allowed for that gap. Check whether this node's own earnings really moved that much; if they did, "
+                    f"the limit is too tight. Other causes: data from another node, or a rate-limited identity read."
                 )
                 return
         else:
@@ -13218,6 +13255,8 @@ if __name__ == '__main__':
             return resp
 
     auth_mode = 'API Key' if API_KEY else ('Basic Auth' if USERNAME else 'None (local only)')
+    if (API_KEY or USERNAME) and str(setup_config.get('toolkit_mode', 'local')).lower() == 'local':
+        auth_mode += ' — not required on your LAN (toolkit_mode: local)'
     mode_str  = 'PRODUCTION (dist/)' if _has_dist else 'DEV (use npm start for frontend)'
 
     print(f"""

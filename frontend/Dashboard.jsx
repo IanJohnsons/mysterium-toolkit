@@ -2309,8 +2309,12 @@ const MysteriumDashboard = () => {
           {theme !== 'emerald' && <style>{generateThemeCSS(theme)}</style>}
           <div className="max-w-4xl mx-auto px-4 py-10">
             {/* Header */}
-            <div className="flex items-center justify-between mb-8">
-              <div className="flex items-center gap-3">
+            {/* justify-between without wrapping squeezed the title column to a few
+                characters on a phone: "v1.4.34 — select a node to view its dashboard"
+                broke across five lines next to the buttons. Wrapping lets the button
+                group drop to its own line and gives the text the full width. */}
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-8">
+              <div className="flex items-center gap-3 min-w-0">
                 <div className="p-2 bg-violet-500/10 rounded-lg border border-violet-500/20">
                   <span className="text-violet-400 text-lg">⬡</span>
                 </div>
