@@ -237,11 +237,36 @@ if [ ! -f "config/setup.json" ]; then
 fi
 
 # ── Update Python packages ────────────────────────────────────────────────
-if [ -f "venv/bin/pip" ]; then
+# v1.4.39: pip runs as "venv/bin/python -m pip", never as venv/bin/pip. The pip
+# script carries the absolute path of the directory the venv was created in in
+# its shebang; after the install directory was moved or renamed it failed with
+# exit 127, its output in /dev/null, and set -e ended the whole update right
+# there — no frontend build, no service update, no restart, no error message.
+# The auto-update timer would have failed that way every hour. The python
+# binary holds no path and keeps working wherever the directory goes.
+_PIP_FAILED=0
+_VENV_PY="$TOOLKIT_DIR/venv/bin/python"
+if [ -x "$_VENV_PY" ]; then
     echo -e "  Updating Python packages..."
-    venv/bin/pip install --upgrade pip > /dev/null 2>&1
-    venv/bin/pip install -r requirements.txt > /dev/null 2>&1
-    echo -e "  ${GREEN}✓ Python packages updated${NC}"
+    mkdir -p logs
+    _PIP_LOG="logs/pip_install.log"
+    # A pip self-upgrade needs the network and is optional; its failure alone
+    # is not a failed update. The requirements install is what matters.
+    "$_VENV_PY" -m pip install --upgrade pip > "$_PIP_LOG" 2>&1 || true
+    if "$_VENV_PY" -m pip install -r requirements.txt >> "$_PIP_LOG" 2>&1; then
+        rm -f "$_PIP_LOG"
+        echo -e "  ${GREEN}✓ Python packages updated${NC}"
+    else
+        _PIP_FAILED=1
+        echo -e "  ${YELLOW}⚠ Python packages NOT updated — the backend keeps the packages it already had${NC}"
+        _PIP_PAT="error|denied|No space|bad interpreter|not found"
+        if grep -qiE "$_PIP_PAT" "$_PIP_LOG"; then
+            grep -iE "$_PIP_PAT" "$_PIP_LOG" | tail -6
+        else
+            tail -6 "$_PIP_LOG"
+        fi
+        echo -e "  ${DIM}    Full log: $TOOLKIT_DIR/$_PIP_LOG${NC}"
+    fi
 else
     echo -e "  ${YELLOW}⚠ venv not found — run sudo ./setup.sh first${NC}"
     exit 1
@@ -651,4 +676,7 @@ fi
 
 echo
 echo -e "${GREEN}✓ Update complete — v${NEW_VERSION}${NC}"
+if [ "${_PIP_FAILED:-0}" = "1" ]; then
+    echo -e "  ${YELLOW}⚠ except the Python packages — see $TOOLKIT_DIR/logs/pip_install.log${NC}"
+fi
 echo

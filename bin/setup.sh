@@ -99,7 +99,7 @@ TLS_PY_EOF
                 echo -e "  ${GREEN}✓ Certificate generated with Python${NC}"
             else
                 echo -e "  ${RED}✗ Could not generate a certificate.${NC}"
-                echo -e "  ${DIM}  Install openssl, or: venv/bin/pip install cryptography${NC}"
+                echo -e "  ${DIM}  Install openssl, or: venv/bin/python -m pip install cryptography${NC}"
             fi
         fi
     fi
@@ -590,10 +590,14 @@ if [ -d "venv" ] && [ -f ".env" ]; then
     case $choice in
         1)
             echo "Updating existing setup..."
-            source venv/bin/activate
-            pip install --upgrade pip > /dev/null 2>&1
-            pip install -r requirements.txt
-            echo -e "  ${GREEN}✓ Python packages updated${NC}"
+            # v1.4.39: no `source venv/bin/activate` + bare pip. activate exports the
+            # directory the venv was created in; after a move that PATH entry is
+            # gone and `pip` is the system pip, or nothing — reported as success.
+            if venv/bin/python -m pip install -r requirements.txt; then
+                echo -e "  ${GREEN}✓ Python packages updated${NC}"
+            else
+                echo -e "  ${YELLOW}⚠ Python packages NOT updated — the reason is in the output above${NC}"
+            fi
 
             # Rebuild frontend if not Type 3
             if [ "$SETUP_MODE" != "3" ] && command -v npm &>/dev/null && [ -d ".build" ]; then
@@ -853,18 +857,21 @@ echo
 
 # ============ STEP 6: INSTALL PYTHON PACKAGES ============
 echo "Step 6: Installing Python packages..."
-VENV_PIP="$TOOLKIT_DIR/venv/bin/pip"
+# v1.4.39: pip runs as "venv/bin/python -m pip". venv/bin/pip carries the
+# absolute path of the directory the venv was created in, so after the install
+# was moved it existed, passed a -f test, and failed on every call — reported
+# below as a network problem.
 VENV_PYTHON="$TOOLKIT_DIR/venv/bin/python"
-if [ ! -f "$VENV_PIP" ]; then
-    echo -e "  ${YELLOW}⚠ venv pip not found — recreating venv${NC}"
+if ! "$VENV_PYTHON" -m pip --version > /dev/null 2>&1; then
+    echo -e "  ${YELLOW}⚠ venv has no usable pip — recreating venv${NC}"
     rm -rf "$TOOLKIT_DIR/venv"
     python3 -m venv "$TOOLKIT_DIR/venv"
 fi
-"$VENV_PIP" install --upgrade pip setuptools wheel > /dev/null 2>&1
-if "$VENV_PIP" install -r requirements.txt; then
+"$VENV_PYTHON" -m pip install --upgrade pip setuptools wheel > /dev/null 2>&1 || true
+if "$VENV_PYTHON" -m pip install -r requirements.txt; then
     echo -e "${GREEN}✓ Python packages installed${NC}"
 else
-    echo -e "${RED}✗ pip install failed — check internet connection and try again${NC}"
+    echo -e "${RED}✗ pip install failed — the reason is in the output above${NC}"
     exit 1
 fi
 echo
