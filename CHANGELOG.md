@@ -4,6 +4,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.38
+
+- fix: sessions a node left open when it stopped no longer show as active on nodes whose binary is not named `myst`. The cutoff that separates those orphaned rows from live sessions came from a scan for a process named exactly `myst`, and when there was none it fell back to seven days ago without a word. A node running any other binary — a custom build started as `myst-dev` through a systemd drop-in — was never found, so every orphan younger than a week counted as live. Measured on two nodes: three rows from 19-20 September shown as active for 89 hours on a node that had been up 43 minutes, next to one real session on the one tunnel. The node's own `/healthcheck` now provides the answer: it is an unprotected TequilAPI route that returns the node's PID and uptime, and the PID's start time is used when it agrees with the uptime (a PID from a Docker namespace does not, and falls back to the uptime alone). The process-name scan stays as a fallback, and the seven-day fallback, when it is still reached, is logged. The sessions payload reports `node_started_at` and `node_start_source`, so a fallback is visible without reading the log. A match on part of the name would not have helped: psutil also lists kernel threads such as `kworker/…-wg-crypt-myst0`.
+- fix: `.gitignore` covers the files an install creates. It still listed the databases under `config/`, where they lived before v1.2.28, and not `backend/databases/`, nor `config/nodes.json` with every fleet node's API key, nor `config/tls/` with the TLS private key. A single `git add -A` inside an install directory would have committed all of it. Nothing tracked becomes ignored.
+
 ## v1.4.37
 
 - fix: the password migration reports through `log_result()` instead of `logger.info`. On a Pi, `pi_mode` drops the root logger to WARNING, so the one record that a credential on disk had been rewritten was invisible on exactly the machine where it ran — the operator grepped for it the same evening and got nothing back. Same class as the v1.4.5 backfill that silently claimed 24 snapshots on the same hardware.

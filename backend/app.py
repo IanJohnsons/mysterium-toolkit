@@ -2182,30 +2182,118 @@ class TrafficDB:
                 'oldest': None, 'newest': None, 'days': 0}
 
 
-def _node_process_start_iso():
-    """ISO-8601 start time of the oldest running myst node process (UTC).
+_node_start_state = {'pid': None, 'start': None, 'source': '', 'checked': 0.0,
+                     'logged_source': ''}
+_node_start_lock = Lock()
 
-    Used as the observed-active cutoff: a live session cannot predate the node
-    process that owns it, so sessions started before the node booted are the
-    node's permanent stale 'New' rows, not live consumers. Falls back to now-7d
-    when no myst process is visible (remote/containerised nodes) — generous
-    enough for multi-day consumers, strict enough to drop months-old zombies.
+
+def _parse_go_duration(text):
+    """Seconds in a Go time.Duration string such as '43m34.200713967s'."""
+    import re as _re
+    units = {'h': 3600.0, 'm': 60.0, 's': 1.0, 'ms': 1e-3,
+             'us': 1e-6, 'µs': 1e-6, 'ns': 1e-9}
+    parts = _re.findall(r'([\d.]+)(ms|us|µs|ns|h|m|s)', text or '')
+    if not parts:
+        raise ValueError(f'not a duration: {text!r}')
+    return sum(float(n) * units[u] for n, u in parts)
+
+
+def _node_process_start_iso():
+    """ISO-8601 start time (UTC) of the node process that owns the sessions.
+
+    This is the cutoff for orphaned session rows: a provider session lives in the
+    node's memory, so no live session can predate the process. Rows started
+    earlier are left behind by a node that stopped before they closed, and the
+    node reports them as 'New' forever.
+
+    v1.4.38. This used to scan for a process named exactly 'myst' and fall back
+    to now-7d, silently, when there was none. A node started from any other
+    binary name was never found — on 23 September 2026 the laptop and the VPS,
+    both running a custom build as `myst-dev`, were on the fallback, and three
+    orphans from 19-20 September showed as active sessions for 89 hours on a
+    node that had been up 43 minutes. A substring match is no better: psutil also
+    lists kernel threads such as `kworker/…-wg-crypt-myst0`.
+
+    The node now says which process it is. /healthcheck is an unprotected
+    TequilAPI route (tequilapi/tequil/routes.go) returning the PID and uptime:
+      1. PID start time, when that PID exists here and agrees with the uptime
+         (a node in Docker reports a PID from its own namespace; the check
+         keeps an unrelated host process from being taken for it)
+      2. now - uptime, when the PID cannot be used — TequilAPI starts a few
+         seconds after the process, which only makes the cutoff slightly later
+      3. the last good answer, while the node does not respond
+      4. a process named exactly 'myst'
+      5. now - 7 days, logged, because every orphan younger than that then
+         shows as a live session
+    The source is kept in _node_start_state and reported in the sessions payload.
     """
-    try:
-        starts = []
-        for _p in psutil.process_iter(['name', 'create_time']):
+    now = datetime.now(timezone.utc)
+    with _node_start_lock:
+        st = _node_start_state
+        # Two callers per collector cycle; one healthcheck serves both.
+        if st['start'] is not None and time.time() - st['checked'] < 30:
+            return st['start'].isoformat()
+
+        start, source, pid = None, '', None
+        hc_error = ''
+        try:
+            resp = requests.get(f'{NODE_API_URL}/healthcheck', timeout=3)
+            if resp.status_code == 200:
+                hc = resp.json()
+                pid = hc.get('process')
+                up_start = now - timedelta(seconds=_parse_go_duration(hc.get('uptime')))
+                start, source = up_start, 'healthcheck_uptime'
+                if pid:
+                    try:
+                        ct = datetime.fromtimestamp(psutil.Process(int(pid)).create_time(),
+                                                    tz=timezone.utc)
+                        # The process starts first, TequilAPI follows within
+                        # seconds. Allow five minutes for a slow bootstrap.
+                        if timedelta(seconds=-5) <= (up_start - ct) <= timedelta(minutes=5):
+                            start, source = ct, 'healthcheck_pid'
+                    except (psutil.Error, ValueError, TypeError, OverflowError):
+                        pass
+            else:
+                hc_error = f'HTTP {resp.status_code}'
+        except Exception as e:
+            hc_error = type(e).__name__
+
+        if start is None and st['start'] is not None and st['source'] != 'fallback_7d':
+            start = st['start']
+            source = st['source'].replace('_cached', '') + '_cached'
+            pid = st['pid']
+
+        if start is None:
             try:
-                if (_p.info.get('name') or '').lower() == 'myst':
-                    ct = _p.info.get('create_time') or 0
-                    if ct:
-                        starts.append(ct)
+                starts = [p.info['create_time'] for p in psutil.process_iter(['name', 'create_time'])
+                          if (p.info.get('name') or '').lower() == 'myst' and p.info.get('create_time')]
+                if starts:
+                    start = datetime.fromtimestamp(min(starts), tz=timezone.utc)
+                    source = 'process_name'
             except Exception:
-                continue
-        if starts:
-            return datetime.fromtimestamp(min(starts), tz=timezone.utc).isoformat()
-    except Exception:
-        pass
-    return (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+                pass
+
+        if start is None:
+            start, source = now - timedelta(days=7), 'fallback_7d'
+
+        if source != st['logged_source']:
+            if source == 'fallback_7d':
+                logger.warning(
+                    f'Node start time unknown (healthcheck: {hc_error or "no usable answer"}, '
+                    f'no process named myst) — sessions from the last 7 days that the node '
+                    f'left open count as active until this resolves')
+            else:
+                log_result(f'Node start time from {source}: {start.isoformat()}'
+                           + (f' (pid {pid})' if pid else ''))
+            st['logged_source'] = source
+
+        st.update({'pid': pid, 'start': start, 'source': source, 'checked': time.time()})
+        return start.isoformat()
+
+
+def _node_start_source():
+    """How the current node start time was determined — see _node_process_start_iso."""
+    return _node_start_state.get('source') or 'unknown'
 
 
 # Earnings below this threshold (in MYST) are treated as zero for consumer
@@ -4705,6 +4793,13 @@ class MetricsCollector:
                 # deleting them was not, and it lets the UI say the two numbers
                 # disagree instead of presenting the larger one as fact.
                 'sessions_without_tunnel': max(active_count - vpn_tunnel_count, 0),
+                # v1.4.38: the cutoff behind the orphaned-row filter above, and
+                # where it came from. 'fallback_7d' means the node's own start
+                # time could not be determined and orphans up to a week old are
+                # being shown as active — the state the laptop and VPS were in
+                # for as long as they ran a node binary not named 'myst'.
+                'node_started_at':   _boot_dt.isoformat() if _boot_dt else '',
+                'node_start_source': _node_start_source(),
                 'live_vpn_rx_mb': round(live_vpn_rx / (1024 * 1024), 2),
                 'live_vpn_tx_mb': round(live_vpn_tx / (1024 * 1024), 2),
                 'unique_consumers': unique_consumers,

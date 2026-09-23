@@ -3,11 +3,23 @@ config/setup.json
 config/.env
 config/.agreed
 .env
+.env.bak
+config/.env.bak
+# Fleet master: holds every node's toolkit_api_key
+config/nodes.json
+# TLS private key and pinned peer certificates, written by setup.sh --tls-only
+config/tls/
 
 # ── Databases ────────────────────────────────────────────────────────────────
 config/*.db
 config/*.db-shm
 config/*.db-wal
+# Since v1.2.28 the databases live here; the code in this folder stays tracked
+backend/databases/*.db
+backend/databases/*.db-shm
+backend/databases/*.db-wal
+backend/databases/*.db-journal
+backend/databases/*.jsonl
 config/earnings_history.json
 config/uptime_log.json
 config/node_identity.txt
