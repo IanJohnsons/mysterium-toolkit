@@ -4,6 +4,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.37
+
+- fix: the password migration reports through `log_result()` instead of `logger.info`. On a Pi, `pi_mode` drops the root logger to WARNING, so the one record that a credential on disk had been rewritten was invisible on exactly the machine where it ran — the operator grepped for it the same evening and got nothing back. Same class as the v1.4.5 backfill that silently claimed 24 snapshots on the same hardware.
+
 ## v1.4.36
 
 - fix: the dashboard password is no longer stored in plain text. v1.4.6 hashed it, but only on the advanced setup path; the easy path — the one most installs use — kept writing the password itself into `config/setup.json` and `.env`. Found on an operator's machine, where `grep DASHBOARD .env` printed his login in full. The easy path now stores a salted scrypt hash like the advanced one, and shows the password once on screen instead of promising it can be looked up later.

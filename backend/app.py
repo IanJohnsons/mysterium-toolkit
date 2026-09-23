@@ -788,8 +788,12 @@ def _migrate_plaintext_password(plain: str) -> str:
         logger.warning(f"Could not hash the password in .env: {e}")
 
     if rewrote:
-        logger.info("Dashboard password was stored in plain text and has been replaced "
-                    f"with a salted hash in {', '.join(rewrote)}. Your login is unchanged.")
+        # log_result, not logger.info: pi_mode drops the root logger to WARNING,
+        # so on a Pi the only record that a credential on disk was rewritten was
+        # invisible. Found the same evening the migration shipped — the operator
+        # grepped for it and got nothing, on the one machine where it had run.
+        log_result("Dashboard password was stored in plain text and has been replaced "
+                   f"with a salted hash in {', '.join(rewrote)}. Your login is unchanged.")
         return hashed
     return plain
 
