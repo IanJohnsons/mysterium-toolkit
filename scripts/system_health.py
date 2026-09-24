@@ -2956,8 +2956,8 @@ class CpuGovernorHealth:
         Writing scaling_governor changes how the whole machine clocks, for every
         workload on it, not just the node. A node spends its time waiting on
         packets, so there is little to win and the setting is the operator's to
-        make. Note that adjust_for_sessions() still runs from the background
-        loop; that is a separate, deliberate feature.
+        make. adjust_for_sessions() is opt-in since v1.4.41: the background loop
+        only calls it when manage_cpu_governor is true in config/setup.json.
         """
         return {'name': 'cpu_governor', 'actions': [{
             'action': 'Report only — the CPU governor is a system-wide setting. To set it '
@@ -3150,6 +3150,44 @@ class NicChecksumOffload:
                     pass
         return 0  # counter present but zero
 
+    # Last reading per interface: {iface: (errors, good, monotonic_seconds)}.
+    # v1.4.41: the scan judged a bare error count, so six errors from a cable
+    # event months ago read exactly like a card failing right now. Ian's eno1
+    # showed 6 errors against 31.5 million good ones, none of them new in five
+    # minutes of measuring, and the card was reported as "hardware checksum
+    # failing, packets dropped". A counter only means something next to its
+    # denominator and next to the previous reading.
+    _last_sample = {}
+
+    @staticmethod
+    def _get_csum_good(iface):
+        """Return rx_csum_offload_good from ethtool -S, or None."""
+        rc, out, _ = _run(['ethtool', '-S', iface])
+        if rc != 0:
+            return None
+        for line in out.splitlines():
+            if 'rx_csum_offload_good' in line:
+                try:
+                    return int(line.split(':')[1].strip())
+                except (ValueError, IndexError):
+                    pass
+        return None
+
+    @staticmethod
+    def _error_trend(iface, errors, good):
+        """Compare against the previous scan. Returns (new_errors, seconds, first_sample)."""
+        import time as _t
+        now = _t.monotonic()
+        prev = NicChecksumOffload._last_sample.get(iface)
+        NicChecksumOffload._last_sample[iface] = (errors, good, now)
+        if not prev:
+            return 0, 0.0, True
+        p_err, _p_good, p_ts = prev
+        # A counter that went down means the NIC or the machine was reset.
+        if errors < p_err:
+            return 0, now - p_ts, True
+        return errors - p_err, now - p_ts, False
+
     @staticmethod
     def _rx_csum_offload_enabled(iface):
         """Check if rx-checksumming is currently on."""
@@ -3214,16 +3252,40 @@ class NicChecksumOffload:
         rx_on = NicChecksumOffload._rx_csum_offload_enabled(iface)
         fix_already_applied = (rx_on is not None and not rx_on)
 
-        if errors > 0 and not fix_already_applied:
-            # Hardware checksumming active AND errors present — real problem
+        good = NicChecksumOffload._get_csum_good(iface)
+        new_errors, elapsed, first_sample = NicChecksumOffload._error_trend(iface, errors, good)
+        # A card that is failing now produces new errors between two scans, and its
+        # errors are a meaningful share of its good checksums. Ian's eno1: 6 errors
+        # against 31.5 million good, none new in five minutes — historical, and the
+        # card is fine. One in a hundred thousand is already far beyond any healthy
+        # NIC, so anything above that counts even without a second sample.
+        share = (errors / good) if (good and good > 0) else None
+        share_bad = share is not None and share > 1e-5
+        failing_now = new_errors > 0 or share_bad
+
+        if errors > 0 and not fix_already_applied and failing_now:
+            # Hardware checksumming active AND errors still accumulating
             result['status'] = 'warning'
+            if new_errors > 0:
+                why = f'{new_errors} new in the last {int(elapsed)}s'
+            else:
+                why = f'{share * 100:.4f}% of all received packets'
             result['checks'].append({
                 'name': 'rx_csum_errors',
                 'status': 'warning',
-                'detail': f'{errors} errors — hardware checksum failing, packets dropped',
+                'detail': f'{errors} errors, {why} — hardware checksum failing, packets dropped',
             })
             result['recommendations'].append(
                 f'Disable hardware RX checksum: ethtool -K {iface} rx off')
+        elif errors > 0 and not fix_already_applied:
+            # Counter is not empty but nothing is going wrong now.
+            good_txt = f' against {good:,} good' if good else ''
+            when = 'no new ones since the last scan' if not first_sample else 'measuring from now'
+            result['checks'].append({
+                'name': 'rx_csum_errors',
+                'status': 'ok',
+                'detail': f'{errors} historical errors{good_txt} — {when}',
+            })
         elif errors > 0 and fix_already_applied:
             # Historical errors remain in counter but fix is already active — OK
             # The counter cannot be cleared; these are pre-fix occurrences only.
@@ -3240,11 +3302,17 @@ class NicChecksumOffload:
             })
 
         if rx_on is not None:
-            if errors > 0 and rx_on:
+            if errors > 0 and rx_on and failing_now:
                 result['checks'].append({
                     'name': 'rx-checksumming',
                     'status': 'warning',
                     'detail': 'on — hardware is failing checksums, fix needed',
+                })
+            elif errors > 0 and rx_on:
+                result['checks'].append({
+                    'name': 'rx-checksumming',
+                    'status': 'ok',
+                    'detail': 'on — no checksum failures at the moment',
                 })
             elif not rx_on:
                 result['checks'].append({
@@ -3296,13 +3364,15 @@ class NicChecksumOffload:
 
         rx_on = NicChecksumOffload._rx_csum_offload_enabled(iface)
 
-        # `errors > 0 or rx_on` disabled the offload on every NIC where it was
-        # simply enabled — which is every healthy NIC. A Raspberry Pi's bcmgenet
-        # was turned off that way in September 2026 with a zero error count. The
-        # repair is for a card that is demonstrably miscomputing checksums, so
-        # the error counter has to be non-zero; rx_on only says there is still
-        # something to turn off.
-        if errors > 0 and rx_on:
+        # Same measure as the scan: a bare counter is not evidence. Six errors
+        # from a cable event months ago read exactly like a card failing now,
+        # and turning the offload off for those changes a healthy NIC.
+        good = NicChecksumOffload._get_csum_good(iface)
+        new_errors, elapsed, _first = NicChecksumOffload._error_trend(iface, errors, good)
+        share = (errors / good) if (good and good > 0) else None
+        failing_now = new_errors > 0 or (share is not None and share > 1e-5)
+
+        if errors > 0 and rx_on and failing_now:
             rc, _, err = _run(['sudo', '-n', 'ethtool', '-K', iface, 'rx', 'off'])
             if rc == 0:
                 actions.append({
@@ -3316,10 +3386,17 @@ class NicChecksumOffload:
                     'success': False,
                     'error': err[:80] if err else 'ethtool -K failed',
                 })
-        elif errors > 0:
+        elif errors > 0 and not rx_on:
             actions.append({
                 'action': f'{errors} checksum errors on {iface} but offload is already off — '
                           f'the errors predate this setting',
+                'success': True,
+            })
+        elif errors > 0:
+            good_txt = f' against {good:,} good' if good else ''
+            actions.append({
+                'action': f'{errors} historical checksum errors on {iface}{good_txt}, none new — '
+                          f'leaving the offload on. Run the scan again later if you suspect the card',
                 'success': True,
             })
         else:

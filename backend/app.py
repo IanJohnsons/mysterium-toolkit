@@ -6579,14 +6579,21 @@ class MetricsCollector:
                 except Exception as _log_e:
                     logger.warning(f"Integrity log skipped: {_log_e}")
 
-                # Dynamic CPU governor + conntrack — adjust based on active sessions
-                # Runs after cache is built so we have the latest session count
+                # Conntrack scales with the tunnel count; the CPU governor is only
+                # touched when the operator asked for it. v1.4.41: this loop wrote
+                # scaling_governor on every slow tier round, so the toolkit was
+                # re-clocking someone's whole machine — every workload on it, not
+                # just the node — without anyone pressing anything. That is the same
+                # objection that made four subsystems report-only in v1.4.40, and it
+                # applies harder to something that runs by itself. Off unless
+                # manage_cpu_governor is true in config/setup.json.
                 try:
                     if system_health:
                         _active = fast.get('live_connections', {}).get('active', 0) or 0
                         _tunnels = fast.get('live_connections', {}).get('peers', [])
                         _tunnel_count = len(_tunnels) if isinstance(_tunnels, list) else int(_active)
-                        system_health.CpuGovernorHealth.adjust_for_sessions(int(_active))
+                        if setup_config.get('manage_cpu_governor', False):
+                            system_health.CpuGovernorHealth.adjust_for_sessions(int(_active))
                         system_health.ConntrackHealth.fix(tunnel_count=int(_tunnel_count))
                 except Exception as _gov_e:
                     logger.debug(f'Governor/conntrack adjust error: {_gov_e}')

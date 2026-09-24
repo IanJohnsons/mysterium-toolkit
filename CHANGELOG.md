@@ -4,6 +4,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.41
+
+- fix: **NIC checksum errors are judged against their denominator and against the previous reading.** The scan warned on any non-zero `rx_csum_offload_errors`, so six errors from a cable event months ago read exactly like a card failing right now: "hardware checksum failing, packets dropped", with a fix that turns the offload off on a healthy NIC. Measured on an eno1 with 6 errors against 31.5 million good ones and no new errors in five minutes. It now needs either new errors since the last scan or a share above one in a hundred thousand, and says which of the two it saw. The fix uses the same measure, so the button no longer disables the offload for history. A card that is genuinely failing still trips it on the first pair of scans.
+- change: **the background loop only adjusts the CPU governor when asked.** It called `adjust_for_sessions()` on every slow-tier round, re-clocking the whole host for every workload on it, with nobody pressing anything. Set `manage_cpu_governor` to true in `config/setup.json` to keep that behaviour; it is off otherwise. Conntrack still scales with the tunnel count, as before — that is the node's own networking.
+
 ## v1.4.40
 
 - fix: **Fix All no longer runs repairs on healthy subsystems.** It called `fix()` on all fifteen regardless of status, so pressing it on a green machine still switched the system's iptables backend, disabled RX checksum offload and could restart the node. An operator did exactly that on a Raspberry Pi and ended up with `update-alternatives` in manual mode pointing at legacy and `rx-checksumming: off` on a bcmgenet NIC that had never reported a single checksum error. Each subsystem is now scanned first and skipped when it reports ok; a subsystem whose scan itself fails is still fixed, since unknown is not proof of health. Fixing one subsystem by name is unchanged — that is a deliberate act.
