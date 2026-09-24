@@ -1179,7 +1179,8 @@ class ServiceWatchdog:
                 return {'name': 'service', 'actions': actions, 'success': False}
             rc, _, err = _run(['sudo', '-n', 'systemctl', 'restart', 'mysterium-node'])
             actions.append({
-                'action': 'Restart mysterium-node',
+                'action': 'Restart mysterium-node — this ends any session in progress and the '
+                          'node rebuilds its quality score afterwards',
                 'success': rc == 0,
                 'error': err if rc != 0 else None,
             })
@@ -1673,6 +1674,11 @@ class FirewallBackend:
         result = {
             'name': 'firewall_backend',
             'title': 'Firewall Backend',
+            # v1.4.40: report only. Switching the system's iptables alternative
+            # is administration of someone's machine, not monitoring of a node,
+            # and it broke an operator's Pi in September 2026. Whatever the
+            # toolkit sees here, the operator decides and runs it themselves.
+            'fixable': False,
             'status': 'ok',
             'checks': [],
             'recommendations': [],
@@ -1713,7 +1719,19 @@ class FirewallBackend:
         })
 
         # Critical: symlink points to nft but rules are in legacy
-        if backend == 'nft' and legacy_rules > 0:
+        if backend == 'nft' and legacy_rules > 0 and nft_rules > 0:
+            result['status'] = 'warning'
+            result['checks'].append({
+                'name': 'Backend split',
+                'status': 'warning',
+                'detail': f'Rules in both backends (legacy: {legacy_rules}, nft: {nft_rules})',
+            })
+            result['recommendations'].append(
+                'Two tools are writing firewall rules through different backends. '
+                'Find out which owns each set (ufw, Docker, firewalld, CrowdSec) before '
+                'changing the iptables alternative — switching it does not merge them.'
+            )
+        elif backend == 'nft' and legacy_rules > 0:
             result['status'] = 'critical'
             result['checks'].append({
                 'name': 'Backend conflict',
@@ -1740,51 +1758,20 @@ class FirewallBackend:
 
     @staticmethod
     def fix():
-        actions = []
+        """Report only — see the class docstring and the v1.4.40 changelog.
 
-        backend, _ = FirewallBackend._get_iptables_backend()
-        has_legacy = _ensure_tool('iptables-legacy')
-        has_nft = _ensure_tool('iptables-nft')
+        A monitoring tool does not reconfigure the machine it is watching. What
+        this subsystem can change is system-wide and long-lived, so it belongs to
+        whoever administers the host: the scan says what it sees and gives the
+        command, and they decide. Pressing a button must never be the reason a
+        working system changes.
+        """
+        return {'name': 'firewall_backend', 'actions': [{
+            'action': 'Report only — the iptables backend is a system-wide setting. The scan shows which backend holds which rules; change it yourself if you decide to: sudo update-alternatives --config iptables (undo: --auto iptables)',
+            'success': True,
+            'skipped': True,
+        }], 'success': True}
 
-        if not has_legacy or not has_nft:
-            actions.append({'action': 'Single backend — no fix needed', 'success': True})
-            return {'name': 'firewall_backend', 'actions': actions, 'success': True}
-
-        legacy_rules = FirewallBackend._count_rules('iptables-legacy')
-
-        if backend == 'nft' and legacy_rules > 0:
-            # Switch to legacy
-            rc, _, err = _run([
-                'sudo', '-n', 'update-alternatives', '--set',
-                'iptables', '/usr/sbin/iptables-legacy'
-            ])
-            if rc == 0:
-                actions.append({
-                    'action': 'Switched iptables → iptables-legacy',
-                    'success': True,
-                })
-            else:
-                actions.append({
-                    'action': 'Switch iptables to legacy',
-                    'success': False,
-                    'error': (err or 'update-alternatives failed')[:80],
-                })
-        else:
-            actions.append({
-                'action': f'Backend OK ({backend}, {legacy_rules} legacy rules)',
-                'success': True,
-            })
-
-        if not actions:
-            actions.append({'action': 'Nothing to fix', 'success': True})
-
-        return {'name': 'firewall_backend', 'actions': actions,
-                'success': all(a.get('success', True) for a in actions)}
-
-
-# =============================================================================
-# 7. PORT REACHABILITY
-# =============================================================================
 
 class PortReachability:
     """Check if Mysterium's required ports are reachable.
@@ -2058,18 +2045,27 @@ class PortReachability:
     def fix():
         actions = []
 
-        # Fix 1: Fix firewall backend if needed
+        # This used to call FirewallBackend.fix() directly. A fix that silently
+        # runs another subsystem's fix hides what happened: the operator asked to
+        # repair port reachability and got the machine's iptables backend switched,
+        # with no mention of it under that subsystem. It also bypasses the
+        # already-healthy check in fix_all. Report it and let them choose.
         fw_scan = FirewallBackend.scan()
-        if fw_scan.get('status') == 'critical':
-            fw_fix = FirewallBackend.fix()
-            actions.extend(fw_fix.get('actions', []))
+        if fw_scan.get('status') in ('critical', 'warning'):
+            actions.append({
+                'action': 'Firewall backend needs attention — fix it from its own card '
+                          '(Firewall Backend), not from here',
+                'success': True,
+                'skipped': True,
+            })
 
-        # Fix 2: Restart node if API not listening
+        # Fix: restart node if API not listening
         api_listening = PortReachability._check_port_listening(PortReachability.TEQUILAPI_PORT)
         if not api_listening:
             rc, _, err = _run(['sudo', '-n', 'systemctl', 'restart', 'mysterium-node'])
             actions.append({
-                'action': 'Restart mysterium-node (API not listening)',
+                'action': 'Restart mysterium-node (API not listening) — this ends any session '
+                          'in progress and the node rebuilds its quality score afterwards',
                 'success': rc == 0,
                 'error': err[:80] if rc != 0 and err else None,
             })
@@ -2464,6 +2460,10 @@ class RpsWatcher:
         result = {
             'name': 'rps_watcher',
             'title': 'Auto-RPS Watcher',
+            # v1.4.40: report only. Installing a script plus systemd units is a
+            # lasting change to someone's machine, and RPS only pays off at packet
+            # rates a node does not reach.
+            'fixable': False,
             'status': 'ok',
             'checks': [],
             'recommendations': [],
@@ -2553,137 +2553,20 @@ class RpsWatcher:
 
     @staticmethod
     def fix():
-        actions = []
-        cpu_count = os.cpu_count() or 1
-        all_mask = format((1 << cpu_count) - 1, 'x')
-        primary = CpuLoadBalance._get_primary_iface() or 'eth0'
+        """Report only — see the class docstring and the v1.4.40 changelog.
 
-        # Get NIC coalescing value for boot script
-        nic_coal = NicCoalescing._get_coalesce(primary) if primary != 'eth0' else {}
-        coal_value = max(nic_coal.get('rx-usecs', 0) or 0, NicCoalescing.TARGET_RX_USECS)
+        A monitoring tool does not reconfigure the machine it is watching. What
+        this subsystem can change is system-wide and long-lived, so it belongs to
+        whoever administers the host: the scan says what it sees and gives the
+        command, and they decide. Pressing a button must never be the reason a
+        working system changes.
+        """
+        return {'name': 'rps_watcher', 'actions': [{
+            'action': 'Report only — this installs a script and systemd units on your machine. RPS spreads network interrupts across cores and only pays off at packet rates a node does not normally reach',
+            'success': True,
+            'skipped': True,
+        }], 'success': True}
 
-        # Step 1: Create the watcher script
-        watcher_script = f"""#!/bin/bash
-# Mysterium Node Toolkit — Auto-RPS Watcher
-# Applies RPS mask to all VPN interfaces every 30s
-# Handles dynamic tunnel creation/destruction
-# Generated by health fix
-
-MASK="{all_mask}"
-IFACE="{primary}"
-APPLIED=0
-
-# NIC coalescing (prevent e1000e IRQ storm)
-ethtool -C "$IFACE" rx-usecs {coal_value} 2>/dev/null
-
-# Primary NIC RPS
-# v1.4.6: skipped while an IDS is running. This timer fires every 30 seconds, so
-# before this check it rewrote the mask the health check had just cleared — the
-# warning came back within half a minute of every fix and no button could resolve
-# it. Evaluated per run, so installing or removing an IDS needs no regeneration.
-IDS_RUNNING=""
-for svc in suricata snort zeek; do
-    if systemctl is-active --quiet "$svc" 2>/dev/null; then
-        IDS_RUNNING="$svc"
-        break
-    fi
-done
-
-if [ -n "$IDS_RUNNING" ]; then
-    for q in /sys/class/net/$IFACE/queues/rx-*/rps_cpus; do
-        echo "0" > "$q" 2>/dev/null
-    done
-else
-    for q in /sys/class/net/$IFACE/queues/rx-*/rps_cpus; do
-        echo "$MASK" > "$q" 2>/dev/null
-    done
-fi
-
-# VPN interfaces — set RPS on any that have queue dirs
-for iface in /sys/class/net/myst* /sys/class/net/wg* /sys/class/net/tun*; do
-    [ -d "$iface" ] || continue
-    for q in "$iface"/queues/rx-*/rps_cpus; do
-        CURRENT=$(cat "$q" 2>/dev/null | tr -d ',' | sed 's/^0*//' )
-        [ "${{CURRENT:-0}}" = "0" ] && echo "$MASK" > "$q" 2>/dev/null && APPLIED=$((APPLIED+1))
-    done
-    # Set flow count for RPS hash consistency
-    for f in "$iface"/queues/rx-*/rps_flow_cnt; do
-        echo "32768" > "$f" 2>/dev/null
-    done
-done
-
-[ "$APPLIED" -gt 0 ] && logger -t mysterium-rps "Applied RPS mask $MASK to $APPLIED queue(s)"
-exit 0
-"""
-
-        try:
-            rc, _, err = _run(['sudo', '-n', 'tee', RPS_WATCHER_SCRIPT], input_data=watcher_script)
-            if rc == 0:
-                _run(['sudo', '-n', 'chmod', '+x', RPS_WATCHER_SCRIPT])
-            ok = rc == 0
-            actions.append({'action': f'Wrote {RPS_WATCHER_SCRIPT}', 'success': ok,
-                            'error': err if not ok else None})
-        except Exception as e:
-            actions.append({'action': f'Write {RPS_WATCHER_SCRIPT}', 'success': False, 'error': str(e)})
-
-        # Step 2: Create systemd service (oneshot, runs the script)
-        service_unit = f"""[Unit]
-Description=Mysterium Auto-RPS — Apply RPS to dynamic VPN interfaces
-After=network.target
-
-[Service]
-Type=oneshot
-ExecStart={RPS_WATCHER_SCRIPT}
-"""
-
-        timer_unit = f"""[Unit]
-Description=Mysterium Auto-RPS — 30s timer for dynamic VPN interfaces
-
-[Timer]
-OnBootSec=10
-OnUnitActiveSec=30
-AccuracySec=5
-
-[Install]
-WantedBy=timers.target
-"""
-
-        svc_path = f'/etc/systemd/system/{RPS_WATCHER_SERVICE}'
-        tmr_path = f'/etc/systemd/system/{RPS_WATCHER_TIMER}'
-
-        for path, content, label in [
-            (svc_path, service_unit, 'service unit'),
-            (tmr_path, timer_unit, 'timer unit'),
-        ]:
-            try:
-                rc, _, err = _run(['sudo', '-n', 'tee', path], input_data=content)
-                ok = rc == 0
-                actions.append({'action': f'Wrote {label}', 'success': ok,
-                                'error': err if not ok else None})
-            except Exception as e:
-                actions.append({'action': f'Write {label}', 'success': False, 'error': str(e)})
-
-        # Step 3: Enable and start the timer
-        _run(['sudo', '-n', 'systemctl', 'daemon-reload'])
-        rc, _, err = _run(['sudo', '-n', 'systemctl', 'enable', '--now', RPS_WATCHER_TIMER])
-        actions.append({
-            'action': f'Enable + start {RPS_WATCHER_TIMER}',
-            'success': rc == 0,
-            'error': err if rc != 0 else None,
-        })
-
-        # Step 4: Run the script once immediately
-        rc, _, _ = _run(['sudo', '-n', RPS_WATCHER_SCRIPT])
-        actions.append({'action': 'Apply RPS now (immediate run)', 'success': rc == 0})
-
-        return {'name': 'rps_watcher', 'actions': actions,
-                'success': all(a.get('success', True) for a in actions) if actions else True}
-
-
-
-# =============================================================================
-# 10. SWAP HEALTH
-# =============================================================================
 
 class SwapHealth:
     """Ensure the system has adequate swap space.
@@ -2739,6 +2622,10 @@ class SwapHealth:
         result = {
             'name': 'swap',
             'title': 'Swap / Memory Safety Net',
+            # v1.4.40: report only. Creating a swapfile and writing /etc/fstab is
+            # administration, and on a Pi it wears down the SD card for a node
+            # that uses a few hundred MB of RAM.
+            'fixable': False,
             'status': 'ok',
             'checks': [],
             'recommendations': [],
@@ -2829,60 +2716,20 @@ class SwapHealth:
 
     @staticmethod
     def fix():
-        """Create swapfile if missing, tune swappiness."""
-        actions = []
-        total_mb, _, _, has_file, has_part = SwapHealth._get_swap_info()
+        """Report only — see the class docstring and the v1.4.40 changelog.
 
-        if total_mb < SwapHealth.MIN_SWAP_MB and not has_part:
-            sf = SwapHealth.SWAPFILE_PATH
-            size_mb = SwapHealth.TARGET_SWAP_MB
+        A monitoring tool does not reconfigure the machine it is watching. What
+        this subsystem can change is system-wide and long-lived, so it belongs to
+        whoever administers the host: the scan says what it sees and gives the
+        command, and they decide. Pressing a button must never be the reason a
+        working system changes.
+        """
+        return {'name': 'swap', 'actions': [{
+            'action': 'Report only — swap is a system setting. If you want it: sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile, plus an /etc/fstab line to keep it. On an SD card, consider zram instead',
+            'success': True,
+            'skipped': True,
+        }], 'success': True}
 
-            # Check if swapfile already exists (maybe just not active)
-            if not Path(sf).exists():
-                # Try fallocate first (fast), fall back to dd (btrfs/zfs)
-                rc, _, _ = _run(['sudo', '-n', 'fallocate', '-l', f'{size_mb}M', sf])
-                if rc != 0:
-                    rc, _, err = _run([
-                        'sudo', '-n', 'dd', 'if=/dev/zero',
-                        f'of={sf}', 'bs=1M', f'count={size_mb}'
-                    ], timeout=120)
-                actions.append({
-                    'action': f'Created {sf} ({size_mb} MB)',
-                    'success': rc == 0,
-                })
-                if rc != 0:
-                    return {'name': 'swap', 'actions': actions, 'success': False}
-
-            # Secure permissions
-            rc, _, _ = _run(['sudo', '-n', 'chmod', '600', sf])
-            actions.append({'action': f'chmod 600 {sf}', 'success': rc == 0})
-
-            # Format as swap
-            rc, _, err = _run(['sudo', '-n', 'mkswap', sf])
-            actions.append({'action': f'mkswap {sf}', 'success': rc == 0,
-                            'error': err[:60] if rc != 0 else None})
-
-            # Enable
-            rc, _, err = _run(['sudo', '-n', 'swapon', sf])
-            actions.append({'action': f'swapon {sf}', 'success': rc == 0,
-                            'error': err[:60] if rc != 0 else None})
-        else:
-            actions.append({
-                'action': f'Swap already present ({total_mb:.0f} MB) — no change',
-                'success': True,
-            })
-
-        # Set swappiness in memory
-        ok = _sysctl_set('vm.swappiness', 60)
-        actions.append({'action': 'vm.swappiness = 60', 'success': ok})
-
-        return {'name': 'swap', 'actions': actions,
-                'success': all(a.get('success', True) for a in actions)}
-
-
-# =============================================================================
-# 11. CPU PERFORMANCE GOVERNOR
-# =============================================================================
 
 class CpuGovernorHealth:
     """Dynamic CPU frequency governor based on active VPN session load.
@@ -3104,62 +2951,22 @@ class CpuGovernorHealth:
 
     @staticmethod
     def fix():
-        """Apply schedutil (safe middle-ground) to all cores immediately."""
-        actions = []
-        governors = CpuGovernorHealth._get_governors()
+        """Report only — v1.4.40.
 
-        if not governors:
-            return {'name': 'cpu_governor', 'actions': [
-                {'action': 'cpufreq not available — nothing to do', 'success': True}
-            ], 'success': True}
+        Writing scaling_governor changes how the whole machine clocks, for every
+        workload on it, not just the node. A node spends its time waiting on
+        packets, so there is little to win and the setting is the operator's to
+        make. Note that adjust_for_sessions() still runs from the background
+        loop; that is a separate, deliberate feature.
+        """
+        return {'name': 'cpu_governor', 'actions': [{
+            'action': 'Report only — the CPU governor is a system-wide setting. To set it '
+                      'yourself: sudo cpupower frequency-set -g schedutil (or write '
+                      '/sys/devices/system/cpu/cpu*/cpufreq/scaling_governor)',
+            'success': True,
+            'skipped': True,
+        }], 'success': True}
 
-        avail = CpuGovernorHealth._get_available_governors()
-        target = CpuGovernorHealth._best_available('schedutil', avail)
-
-        changed = failed = 0
-        for i, current_gov in governors:
-            if current_gov == target:
-                continue
-            path = f'/sys/devices/system/cpu/cpu{i}/cpufreq/scaling_governor'
-            ok = _write_file(path, target)
-            if ok:
-                changed += 1
-            else:
-                failed += 1
-
-        if changed == 0 and failed > 0 and _is_installed('cpupower'):
-            rc, _, _ = _run(['sudo', '-n', 'cpupower', 'frequency-set', '-g', target])
-            if rc == 0:
-                changed = len(governors)
-                failed  = 0
-
-        if changed > 0:
-            actions.append({
-                'action': f'Set {changed} core(s) → {target}',
-                'success': True,
-            })
-        if failed > 0:
-            actions.append({
-                'action': f'{failed} core(s) could not be changed — sudoers may need update',
-                'success': False,
-            })
-        if changed == 0 and failed == 0:
-            actions.append({
-                'action': f'All {len(governors)} cores already on {target}',
-                'success': True,
-            })
-
-        return {'name': 'cpu_governor', 'actions': actions, 'success': failed == 0}
-
-
-
-
-
-
-
-# =============================================================================
-# 12. BBR CONGESTION CONTROL
-# =============================================================================
 
 class BbrCongestion:
     """Enable BBR TCP congestion control for better VPN throughput.
@@ -3489,11 +3296,18 @@ class NicChecksumOffload:
 
         rx_on = NicChecksumOffload._rx_csum_offload_enabled(iface)
 
-        if errors > 0 or rx_on:
+        # `errors > 0 or rx_on` disabled the offload on every NIC where it was
+        # simply enabled — which is every healthy NIC. A Raspberry Pi's bcmgenet
+        # was turned off that way in September 2026 with a zero error count. The
+        # repair is for a card that is demonstrably miscomputing checksums, so
+        # the error counter has to be non-zero; rx_on only says there is still
+        # something to turn off.
+        if errors > 0 and rx_on:
             rc, _, err = _run(['sudo', '-n', 'ethtool', '-K', iface, 'rx', 'off'])
             if rc == 0:
                 actions.append({
-                    'action': f'ethtool -K {iface} rx off — hardware csum disabled, CPU checksumming active',
+                    'action': f'ethtool -K {iface} rx off — {errors} hardware checksum errors, '
+                              f'CPU checksumming active. Undo with: sudo ethtool -K {iface} rx on',
                     'success': True,
                 })
             else:
@@ -3502,9 +3316,15 @@ class NicChecksumOffload:
                     'success': False,
                     'error': err[:80] if err else 'ethtool -K failed',
                 })
+        elif errors > 0:
+            actions.append({
+                'action': f'{errors} checksum errors on {iface} but offload is already off — '
+                          f'the errors predate this setting',
+                'success': True,
+            })
         else:
             actions.append({
-                'action': f'rx-checksumming already off or no errors — no change',
+                'action': f'No checksum errors on {iface} — leaving the offload alone',
                 'success': True,
             })
 
@@ -3791,7 +3611,20 @@ KERNEL_LEVEL_SUBSYSTEMS = {
 
 
 def fix_all():
-    """Fix all subsystems."""
+    """Fix every subsystem that is not already healthy.
+
+    It used to call fix() on all fifteen regardless of their status, so pressing
+    Fix All on a green machine still switched the system's iptables backend,
+    turned off RX checksum offload, created a swapfile and restarted the node
+    twice. An operator did exactly that on a Raspberry Pi in September 2026 and
+    ended up with `update-alternatives` in manual mode pointing at legacy and
+    `rx-checksumming: off` on a bcmgenet NIC, neither of which had anything wrong
+    with it. A fix is a repair, so there has to be something to repair: each
+    subsystem is scanned first and skipped when it reports ok.
+
+    fix_one() is unchanged — asking for one subsystem by name is a deliberate
+    act, and it stays possible to re-apply a fix on a machine that looks fine.
+    """
     results = []
     profile = get_profile()
     in_container = profile.get('is_container', False)
@@ -3806,6 +3639,23 @@ def fix_all():
                     'skipped': True,
                     'detail': f'skipped — {profile.get("virt_type", "container")} '
                               f'shares the host kernel',
+                }],
+                'success': True,
+            })
+            continue
+        try:
+            status = sub.scan().get('status', 'unknown')
+        except Exception as e:
+            logger.error(f"Health scan error before fixing {name}: {e}")
+            status = 'unknown'
+        if status == 'ok':
+            results.append({
+                'name': name,
+                'actions': [{
+                    'action': 'fix',
+                    'success': True,
+                    'skipped': True,
+                    'detail': 'skipped — already healthy',
                 }],
                 'success': True,
             })
@@ -3920,110 +3770,18 @@ def persist_all():
     except Exception as e:
         actions.append({'action': f'Write {SYSCTL_PERSIST_FILE}', 'success': False, 'error': str(e)})
 
-    # ===== 2. Create RPS setup script =====
-    cpu_count = os.cpu_count() or 1
-    all_mask = format((1 << cpu_count) - 1, 'x')
-
-    # Discover current VPN + primary interfaces
-    primary = CpuLoadBalance._get_primary_iface()
-    vpn_ifaces = [i for i in (psutil.net_io_counters(pernic=True) or {})
-                  if i.startswith(('myst', 'wg', 'tun'))]
-
-    iface_list = []
-    if primary:
-        iface_list.append(primary)
-
-    # Check current NIC coalescing to include in boot script
-    nic_coal = NicCoalescing._get_coalesce(primary) if primary else {}
-    nic_rx_usecs = nic_coal.get('rx-usecs')
-    # Use current value if already fixed, otherwise use target
-    coal_value = max(nic_rx_usecs or 0, NicCoalescing.TARGET_RX_USECS)
-
-    # VPN interfaces are dynamic, so the script handles them at boot
-    rps_script = f"""#!/bin/bash
-# Mysterium Node Toolkit — RPS + NIC tuning (runs at boot)
-# Distributes network packet processing across all {cpu_count} CPU cores
-# Sets NIC interrupt coalescing to prevent e1000e IRQ storm freeze
-# Generated by --health-persist
-
-MASK="{all_mask}"
-IFACE="{primary or 'eth0'}"
-
-# === NIC Interrupt Coalescing ===
-# Prevents freeze on e1000e (Intel 82579) under VPN tunnel load
-ethtool -C "$IFACE" rx-usecs {coal_value} 2>/dev/null
-
-# === RPS: Primary NIC ===
-# v1.4.6: skipped while an IDS is running. Suricata, Snort and Zeek balance flows
-# across their own workers in af-packet mode; RPS on the same interface distributes
-# a second time by a different key, which leaves workers unevenly loaded and can
-# reorder packets. This is decided at run time rather than when the script was
-# written, so installing or removing an IDS later needs no regeneration — otherwise
-# this timer would quietly undo the health check's fix every 30 seconds.
-IDS_RUNNING=""
-for svc in suricata snort zeek; do
-    if systemctl is-active --quiet "$svc" 2>/dev/null; then
-        IDS_RUNNING="$svc"
-        break
-    fi
-done
-
-if [ -n "$IDS_RUNNING" ]; then
-    for q in /sys/class/net/$IFACE/queues/rx-*/rps_cpus; do
-        echo "0" > "$q" 2>/dev/null
-    done
-else
-    for q in /sys/class/net/$IFACE/queues/rx-*/rps_cpus; do
-        echo "$MASK" > "$q" 2>/dev/null
-    done
-fi
-
-# VPN interfaces handled by mysterium-rps-watcher.timer (every 30s)
-# This boot script only covers the primary NIC
-exit 0
-"""
-
-    try:
-        rc, _, err = _run(['sudo', '-n', 'tee', RPS_SCRIPT_FILE], input_data=rps_script)
-        if rc == 0:
-            _run(['sudo', '-n', 'chmod', '+x', RPS_SCRIPT_FILE])
-        ok = rc == 0
-        actions.append({
-            'action': f'Wrote {RPS_SCRIPT_FILE}',
-            'success': ok,
-            'error': err if not ok else None,
-        })
-    except Exception as e:
-        actions.append({'action': f'Write {RPS_SCRIPT_FILE}', 'success': False, 'error': str(e)})
-
-    # ===== 3. Create systemd oneshot service =====
-    service_unit = f"""[Unit]
-Description=Mysterium Node NIC + RPS Tuning
-After=network-online.target mysterium-node.service
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart={RPS_SCRIPT_FILE}
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
-"""
-
-    try:
-        rc, _, err = _run(['sudo', '-n', 'tee', RPS_SERVICE_FILE], input_data=service_unit)
-        if rc == 0:
-            _run(['sudo', '-n', 'systemctl', 'daemon-reload'])
-            rc, _, err = _run(['sudo', '-n', 'systemctl', 'enable', RPS_SERVICE_NAME])
-        ok = rc == 0
-        actions.append({
-            'action': f'Created and enabled {RPS_SERVICE_NAME}.service',
-            'success': ok,
-            'error': err if not ok else None,
-        })
-    except Exception as e:
-        actions.append({'action': f'Create {RPS_SERVICE_NAME}.service', 'success': False, 'error': str(e)})
+    # ===== 2 & 3. RPS boot script and service — removed in v1.4.40 =====
+    # These wrote /usr/local/bin/mysterium-rps-setup.sh and a systemd unit onto
+    # the machine. RPS spreads network interrupts across cores and only pays off
+    # at packet rates a node does not reach, and installing units is a lasting
+    # change to someone's host. The subsystem reports and gives the command;
+    # unpersist still removes what older versions installed.
+    actions.append({
+        'action': 'RPS boot script and service not installed — reports only since v1.4.40. '
+                  'Existing ones can be removed with unpersist.',
+        'success': True,
+        'skipped': True,
+    })
 
     # ===== 4. Install auto-RPS watcher timer (handles dynamic VPN interfaces) =====
     try:
@@ -4263,96 +4021,29 @@ WantedBy=multi-user.target
 
     # ── swap ─────────────────────────────────────────────────────
     elif name == 'swap':
-        sf = SwapHealth.SWAPFILE_PATH
-        # Add to fstab if not already there
-        try:
-            with open('/etc/fstab') as f:
-                fstab = f.read()
-            if sf not in fstab:
-                rc, _, err = _run(['sudo', '-n', 'bash', '-c',
-                                   f"echo '{sf} none swap sw 0 0' >> /etc/fstab"])
-                actions.append({'action': f'Added {sf} to /etc/fstab',
-                                'success': rc == 0,
-                                'error': err if rc != 0 else None})
-            else:
-                actions.append({'action': f'{sf} already in /etc/fstab', 'success': True})
-        except Exception as e:
-            actions.append({'action': 'Update /etc/fstab', 'success': False, 'error': str(e)})
-        # Persist swappiness
-        ok, err = _write_sysctl_lines(['vm.swappiness = 60'])
-        actions.append({'action': f'Persisted vm.swappiness=60 → {SYSCTL_PERSIST_FILE}',
-                        'success': ok, 'error': err if not ok else None})
+        # v1.4.40: report only, like the fix. Writing /etc/fstab and vm.swappiness
+        # is administration of someone's machine; the scan says what it sees and
+        # gives the command.
+        actions.append({
+            'action': 'Report only — swap is yours to configure. To keep a swapfile across '
+                      'reboots, add a line like "/swapfile none swap sw 0 0" to /etc/fstab',
+            'success': True,
+            'skipped': True,
+        })
 
     # ── cpu_governor ──────────────────────────────────────────────
     elif name == 'cpu_governor':
-        cpu_count = os.cpu_count() or 1
-        # Strategy 1: cpupower service (Fedora/Arch/openSUSE)
-        if _is_installed('cpupower'):
-            # Write /etc/default/cpupower (Fedora/Arch)
-            rc, _, _ = _run(['sudo', '-n', 'bash', '-c',
-                             "echo 'GOVERNOR=performance' > /etc/default/cpupower"])
-            if rc == 0:
-                _run(['sudo', '-n', 'systemctl', 'enable', '--now', 'cpupower'])
-                actions.append({'action': 'cpupower: GOVERNOR=performance enabled', 'success': True})
-            else:
-                # Try cpufrequtils (Debian/Ubuntu)
-                rc2, _, _ = _run(['sudo', '-n', 'bash', '-c',
-                                  "echo 'GOVERNOR=\"performance\"' > /etc/default/cpufrequtils"])
-                actions.append({'action': 'cpufrequtils: GOVERNOR=performance',
-                                'success': rc2 == 0})
-        # Strategy 2: Alpine OpenRC — /etc/local.d approach (no systemd)
-        elif not _is_installed('systemctl') and (Path('/etc/local.d').exists() or _is_installed('rc-service')):
-            gov_line = r'for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo performance > "$g" 2>/dev/null; done'
-            rc, _, err = _run(['sudo', '-n', 'bash', '-c',
-                               f"mkdir -p /etc/local.d && "
-                               f"printf '#!/bin/sh\\n{gov_line}\\n' > /etc/local.d/myst-governor.start && "
-                               f"chmod +x /etc/local.d/myst-governor.start && "
-                               f"rc-update add local default 2>/dev/null || true"])
-            actions.append({'action': 'Alpine: wrote /etc/local.d/myst-governor.start',
-                            'success': rc == 0, 'error': err if rc != 0 else None})
-        # Strategy 3: systemd service that writes governors on boot
-        else:
-            gov_script = f"""#!/bin/bash
-# Mysterium Node Toolkit — CPU Performance Governor
-# Sets all {cpu_count} cores to performance on boot
-for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
-    echo performance > "$g" 2>/dev/null
-done
-"""
-            gov_script_path = '/usr/local/bin/mysterium-cpu-governor.sh'
-            gov_service = f"""[Unit]
-Description=Mysterium CPU Performance Governor
-# v1.4.6: previously only After=multi-user.target, which says nothing about the
-# other services that write the same value. cpupower.service and cpupower-gui
-# set scaling_governor too, and with no ordering between the units whichever ran
-# last won — on a Parrot laptop that meant schedutil survived while this script
-# reported success. Ordering after them makes the outcome deterministic.
-After=multi-user.target cpupower.service cpupower-gui.service cpufrequtils.service
-Wants=multi-user.target
+        # v1.4.40: report only. This used to write GOVERNOR=performance and enable a
+        # service for it — every core pinned high for a workload that spends its time
+        # waiting on packets, and on a Pi that means heat and throttling.
+        actions.append({
+            'action': 'Report only — the CPU governor is yours to set. Per boot: '
+                      'sudo cpupower frequency-set -g schedutil, or GOVERNOR="schedutil" in '
+                      '/etc/default/cpufrequtils on Debian',
+            'success': True,
+            'skipped': True,
+        })
 
-[Service]
-Type=oneshot
-ExecStart={gov_script_path}
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
-"""
-            svc_path = '/etc/systemd/system/mysterium-cpu-governor.service'
-            # Write script via stdin to avoid quote/backslash corruption
-            rc, _, err = _run(['sudo', '-n', 'tee', gov_script_path], input_data=gov_script)
-            if rc == 0:
-                _run(['sudo', '-n', 'chmod', '+x', gov_script_path])
-            actions.append({'action': f'Wrote {gov_script_path}',
-                            'success': rc == 0, 'error': err if rc != 0 else None})
-            rc2, _, err2 = _run(['sudo', '-n', 'tee', svc_path], input_data=gov_service)
-            if rc2 == 0:
-                _run(['sudo', '-n', 'systemctl', 'daemon-reload'])
-                rc2, _, err2 = _run(['sudo', '-n', 'systemctl', 'enable', '--now', 'mysterium-cpu-governor'])
-            actions.append({'action': 'Enabled mysterium-cpu-governor.service',
-                            'success': rc2 == 0, 'error': err2 if rc2 != 0 else None})
-
-    # ── bbr ───────────────────────────────────────────────────────
     elif name == 'bbr':
         # Persist via sysctl.d
         ok, err = _write_sysctl_lines([

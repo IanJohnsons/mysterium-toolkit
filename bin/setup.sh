@@ -1270,45 +1270,13 @@ SYSCTL_EOF
         echo tcp_bbr | sudo tee /etc/modules-load.d/tcp_bbr.conf >/dev/null 2>&1 || true
         sudo modprobe tcp_bbr 2>/dev/null || true
 
-        # 3. CPU performance governor — skip on VPS (no cpufreq available)
-        if [ "$IS_VIRTUAL" != "true" ]; then
-        CPU_COUNT=$(nproc 2>/dev/null || echo 4)
-        cat << 'GOV_SCRIPT_EOF' | sudo tee /usr/local/bin/mysterium-cpu-governor.sh >/dev/null
-#!/bin/bash
-# Mysterium Node Toolkit — CPU performance governor (runs at boot)
-for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
-    echo performance > "$g" 2>/dev/null
-done
-GOV_SCRIPT_EOF
-        sudo chmod +x /usr/local/bin/mysterium-cpu-governor.sh
-
-        cat << 'GOV_SVC_EOF' | sudo tee /etc/systemd/system/mysterium-cpu-governor.service >/dev/null
-[Unit]
-Description=Mysterium CPU Performance Governor
-# v1.4.6: ordered after the other services that write scaling_governor. Without
-# this the outcome depended on which unit systemd happened to run last.
-After=multi-user.target cpupower.service cpupower-gui.service cpufrequtils.service
-Wants=multi-user.target
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/mysterium-cpu-governor.sh
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
-GOV_SVC_EOF
-        sudo systemctl daemon-reload
-        sudo systemctl enable --now mysterium-cpu-governor 2>/dev/null || true
-        echo -e "  ${GREEN}✓ CPU governor service created and enabled${NC}"
-
-        # Apply governor live now
-        for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
-            echo performance | sudo tee "$g" >/dev/null 2>/dev/null || true
-        done
-        else
-            echo -e "  ${DIM}  CPU governor skipped (VPS — not applicable)${NC}"
-        fi
+        # 3. CPU governor — v1.4.40: not installed any more.
+        # This wrote a boot service that pinned every core to `performance` on
+        # every start. A node spends its time waiting on packets, so there is
+        # nothing measurable to win, and on a Raspberry Pi it means heat and
+        # throttling. Setting the governor is the operator's call; the toolkit
+        # says what it sees under System Health and gives the command.
+        echo -e "  ${DIM}  CPU governor left as the system has it — see System Health for the command${NC}"
     fi
     echo ""
 else
