@@ -4375,19 +4375,34 @@ const MysteriumDashboard = () => {
               <div className="flex items-center gap-3">
                 <Heart className={`w-5 h-5 ${
                   metrics.systemHealth.overall === 'ok' ? 'text-emerald-400' :
-                  metrics.systemHealth.overall === 'warning' ? 'text-amber-400' : 'text-red-400'
+                  metrics.systemHealth.overall === 'critical' ? 'text-red-400' : 'text-amber-400'
                 }`} />
                 <div className="flex-1">
                   <div className="flex items-center gap-2 mb-1">
                     <h3 className="text-xs font-semibold text-slate-300 tracking-wide">System Health</h3>
                     {(() => {
-                      const issues = (metrics.systemHealth.subsystems || []).filter(s => s.status !== 'ok').length;
-                      const cls = issues === 0 ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                        : issues <= 2 ? 'bg-yellow-500/20 text-yellow-300 border border-yellow-500/30'
-                        : issues <= 4 ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                        : 'bg-red-500/20 text-red-300 border border-red-500/30';
-                      const label = issues === 0 ? 'OK' : issues <= 2 ? 'ATTENTION' : issues <= 4 ? 'WARNING' : 'CRITICAL';
-                      return <span className={`text-xs px-2 py-0.5 rounded font-semibold ${cls}`}>{label}</span>;
+                      // v1.4.43: the badge used to be a headcount — five or more
+                      // non-ok subsystems read CRITICAL regardless of what was
+                      // wrong. An operator saw CRITICAL over five warnings that
+                      // were all things nobody can act on, while the API said
+                      // 'warning'. Severity comes from overall, which the backend
+                      // already computes; the count is detail, not the verdict.
+                      // Informational findings are not faults and are not counted.
+                      const subs = metrics.systemHealth.subsystems || [];
+                      const faults = subs.filter(s => s.status !== 'ok' && s.status !== 'info').length;
+                      const overall = metrics.systemHealth.overall || (faults ? 'warning' : 'ok');
+                      const cls = overall === 'ok' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                        : overall === 'critical' ? 'bg-red-500/20 text-red-300 border border-red-500/30'
+                        : faults <= 2 ? 'bg-yellow-500/20 text-yellow-300 border border-yellow-500/30'
+                        : 'bg-amber-500/20 text-amber-300 border border-amber-500/30';
+                      const label = overall === 'ok' ? 'OK'
+                        : overall === 'critical' ? 'CRITICAL'
+                        : faults <= 2 ? 'ATTENTION' : 'WARNING';
+                      return (
+                        <span className={`text-xs px-2 py-0.5 rounded font-semibold ${cls}`}>
+                          {label}{faults > 0 && overall !== 'ok' ? ` · ${faults}` : ''}
+                        </span>
+                      );
                     })()}
                   </div>
                   <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs">

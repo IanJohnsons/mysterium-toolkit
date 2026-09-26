@@ -4,6 +4,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.43
+
+- fix: **the System Health badge follows the actual severity instead of counting cards.** It read `CRITICAL` at five or more non-ok subsystems whatever they were, so an operator saw CRITICAL over five findings that were all things nobody can act on, while `/system-health` reported `warning` at the same moment. Severity now comes from `overall`, which the backend already computes, with the number of real faults shown next to it. Informational findings from report-only subsystems are not counted, which the toast already did since v1.4.42 and the badge did not. The heart icon beside it follows the same rule.
+
 ## v1.4.42
 
 - fix: **"Update in progress…" is no longer shown for any connection failure.** The screen appeared whenever the backend did not answer and the error mentioned "connect", so a backend that was merely slow told the operator an update was running. It now requires an update this browser actually started, and otherwise says plainly that the backend is not responding. One operator lost a day and a half to this, logging in again each time because a restart drops the session.
