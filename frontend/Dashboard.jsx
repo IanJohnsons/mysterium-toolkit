@@ -1212,6 +1212,14 @@ const MysteriumDashboard = () => {
   const [autoUpdateError, setAutoUpdateError] = useState('');
   const [nodeUpdateInfo, setNodeUpdateInfo] = useState(null);
   const [nodeUpdateStates, setNodeUpdateStates] = useState({}); // {nodeId: 'idle'|'updating'|'done'|'error'}
+  // v1.4.42: what the fleet update button actually did, per node. Declared here
+  // rather than inside the fleet branch — a const in that branch is invisible to
+  // the node dashboard JSX below it, which is how toggleAutoUpdate broke once.
+  const [fleetUpdateNote, setFleetUpdateNote] = useState('');
+  // v1.4.42: hermes causes the node did not recognise, and the sessions they cost.
+  // Hourly on the backend; fetched once per dashboard load.
+  const [paymentErrors, setPaymentErrors] = useState(null);
+  const [fleetUpdateResults, setFleetUpdateResults] = useState({}); // {nodeId: 'scheduled'|reason}
   const [fleetMystPrice, setFleetMystPrice] = useState(null); // {usd, eur} for fleet bar
   const [healthToast, setHealthToast] = useState(null);
   // Track which health level the user already dismissed — don't re-show
@@ -1480,6 +1488,10 @@ const MysteriumDashboard = () => {
   // is_local_request() does not treat as local.
   useEffect(() => {
     if (!isConnected) return;
+    fetch(`${backendUrlRef.current}/api/payment-errors`, { headers: authHeaderRef.current })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setPaymentErrors(d); })
+      .catch(e => console.warn('/api/payment-errors failed:', e?.message || e));
     fetch(`${backendUrlRef.current}/api/autoupdate`, { headers: authHeaderRef.current })
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d) setAutoUpdate(d); })
@@ -1689,13 +1701,17 @@ const MysteriumDashboard = () => {
           _node_toolkit_url: data._node_toolkit_url || null,
         }));
         setLastUpdate(new Date());
+        // Backend answered: whatever restart was expected is over.
+        try { localStorage.removeItem('myst-update-started'); } catch {}
         // Degraded-state toast: show once per level per session.
         // If user dismissed a warning, don't re-show on every refresh.
         // Only show again if the level changes (e.g. ok→warning, warning→critical).
         if (data.systemHealth && data.systemHealth.overall) {
           const level = data.systemHealth.overall;
           if (level !== 'ok') {
-            const issues = (data.systemHealth.subsystems || []).filter(s => s.status !== 'ok').length;
+            // 'info' is a report-only finding: visible, not a fault. Counting it
+            // turned five informational cards into "5 health issues detected".
+            const issues = (data.systemHealth.subsystems || []).filter(s => s.status !== 'ok' && s.status !== 'info').length;
             // Only show if this level hasn't been dismissed yet this session
             if (healthToastDismissedRef.current !== level) {
               setHealthToast({ msg: `${issues} health issue${issues !== 1 ? 's' : ''} detected`, level });
@@ -1841,6 +1857,15 @@ const MysteriumDashboard = () => {
     loadConfig();
   };
 
+  // An update this browser started, within the window a restart can take.
+  // localStorage, so it survives the reload the update itself causes.
+  const updateRecentlyStarted = () => {
+    try {
+      const at = parseInt(localStorage.getItem('myst-update-started') || '0', 10);
+      return at > 0 && (Date.now() - at) < 12 * 60 * 1000;
+    } catch { return false; }
+  };
+
   // ============ UI: LOADING ============
   if (setupMode === 'loading') {
     return (
@@ -1861,8 +1886,15 @@ const MysteriumDashboard = () => {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 text-white font-['SF_Mono',monospace] flex items-center justify-center p-6">
         <div className="max-w-md text-center">
-          {/* Detect if this looks like an update restart (backend was reachable before) */}
-          {connectionError && connectionError.includes('connect') ? (
+          {/* v1.4.42: this used to fire on any connection error containing the
+              word "connect", so a backend that was merely slow to answer told
+              the operator an update was running. One operator spent a day and a
+              half on that, re-logging in each time because a restart drops the
+              session. The screen now needs an update that this browser actually
+              started: updateStartedAt is set when the update button is pressed
+              and cleared once the backend answers again. Anything else says
+              plainly that the backend is not responding. */}
+          {connectionError && connectionError.includes('connect') && updateRecentlyStarted() ? (
             <>
               <div className="inline-block p-4 rounded-lg bg-amber-500/10 border border-amber-500/30 mb-6">
                 <svg className="w-8 h-8 text-amber-400 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -1883,7 +1915,7 @@ const MysteriumDashboard = () => {
                 <AlertCircle className="w-8 h-8 text-red-400" />
               </div>
               <h1 className="text-2xl font-bold mb-4">
-                {connectionError ? 'Cannot Connect to Backend' : 'Setup Required'}
+                {connectionError ? 'Backend not responding' : 'Setup Required'}
               </h1>
           {connectionError ? (
             <>
@@ -2349,6 +2381,12 @@ const MysteriumDashboard = () => {
                       // node already on the latest release restarts its backend
                       // for nothing and drops whoever is connected to it.
                       const ids = (behindNodes.length ? behindNodes : fleetNodes).map(n => n.id);
+                      // v1.4.42: say what pressing this does. The request only
+                      // schedules the update on each node; its own timer applies
+                      // it within the hour. Without a word about that the button
+                      // looks like it did nothing, and the operator presses it
+                      // again — or goes looking for a failure that is not there.
+                      setFleetUpdateNote(`Scheduled on ${ids.length} node${ids.length !== 1 ? 's' : ''} — each applies it within the hour`);
                       for (const id of ids) {
                         setNodeUpdateStates(s => ({ ...s, [id]: 'updating' }));
                       }
@@ -2358,8 +2396,10 @@ const MysteriumDashboard = () => {
                           const r = await fetch(url, { method: 'POST', headers: authHeaderRef.current || {} });
                           const d = await r.json();
                           setNodeUpdateStates(s => ({ ...s, [id]: d.success ? 'done' : 'error' }));
-                        } catch {
+                          setFleetUpdateResults(r => ({ ...r, [id]: d.success ? 'scheduled' : (d.error || 'refused') }));
+                        } catch (e) {
                           setNodeUpdateStates(s => ({ ...s, [id]: 'error' }));
+                          setFleetUpdateResults(r => ({ ...r, [id]: e?.message || 'unreachable' }));
                         }
                       }));
                     }}
@@ -2367,6 +2407,18 @@ const MysteriumDashboard = () => {
                   >
                     ↑ Update {behindNodes.length ? `${behindNodes.length} node${behindNodes.length !== 1 ? 's' : ''}` : 'All'} to v{updateInfo?.latest}
                   </button>
+                )}
+                {fleetUpdateNote && (
+                  <span className="text-[10px] text-slate-400 max-w-xs">
+                    {fleetUpdateNote}
+                    {Object.keys(fleetUpdateResults).length > 0 && (
+                      <span className="block text-slate-500">
+                        {Object.entries(fleetUpdateResults)
+                          .map(([id, r]) => `${id}: ${r}`)
+                          .join(' · ')}
+                      </span>
+                    )}
+                  </span>
                 )}
                 <>
                   {/* Add Node button */}
@@ -2837,6 +2889,9 @@ const MysteriumDashboard = () => {
                         onClick={async (e) => {
                           e.stopPropagation();
                           if (!confirm(`Update this node to v${updateInfo.latest}? The backend restarts and the dashboard reloads.`)) return;
+                          // Marks the restart as expected, so the waiting screen
+                          // may say "update in progress" instead of guessing.
+                          try { localStorage.setItem('myst-update-started', String(Date.now())); } catch {}
                           const key = selectedNodeId || '_local';
                           setNodeUpdateStates(s2 => ({ ...s2, [key]: 'updating' }));
                           try {
@@ -4287,6 +4342,28 @@ const MysteriumDashboard = () => {
           {/* System Metrics History Card */}
           <SystemMetricsHistoryCard key={`sysmetrics-${nodeKey}`} backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
 
+          {/* Payment errors — v1.4.42. Read-only: the node drops sessions when
+              hermes answers with a cause it does not know, and until now nothing
+              said so. Only shown when there is something to show. */}
+          {paymentErrors && paymentErrors.available && paymentErrors.sessions_lost > 0 && (
+            <div className="mb-6 p-4 bg-slate-800/30 border border-amber-500/20 rounded-lg backdrop-blur">
+              <div className="flex items-center gap-3">
+                <AlertCircle className="w-5 h-5 text-amber-400" />
+                <div className="flex-1">
+                  <h3 className="text-xs font-semibold text-slate-300 tracking-wide mb-1">Payment errors (last 24h)</h3>
+                  <p className="text-sm text-slate-300">
+                    <span className="text-amber-300 font-semibold">{paymentErrors.sessions_lost}</span> session{paymentErrors.sessions_lost !== 1 ? 's' : ''} ended early,
+                    after <span className="text-amber-300 font-semibold">{paymentErrors.unknown_cause}</span> hermes {paymentErrors.unknown_cause === 1 ? 'reply' : 'replies'} the node could not interpret.
+                  </p>
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    This happens inside the node's payment code, not in the toolkit — the toolkit only counts it.
+                    Check with: journalctl -u mysterium-node --since "24 hours ago" | grep "Payment engine error"
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* System Health Card — full width, inline expand */}
           <div className="mb-6">
             <button
@@ -4315,8 +4392,8 @@ const MysteriumDashboard = () => {
                   </div>
                   <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
                     {(metrics.systemHealth.subsystems || []).map((sub) => {
-                      const icon = sub.status === 'ok' ? '●' : sub.status === 'warning' ? '▲' : '✗';
-                      const color = sub.status === 'ok' ? 'text-emerald-400' : sub.status === 'warning' ? 'text-amber-400' : 'text-red-400';
+                      const icon = sub.status === 'ok' ? '●' : sub.status === 'info' ? 'ⓘ' : sub.status === 'warning' ? '▲' : '✗';
+                      const color = sub.status === 'ok' ? 'text-emerald-400' : sub.status === 'info' ? 'text-sky-400' : sub.status === 'warning' ? 'text-amber-400' : 'text-red-400';
                       return <span key={sub.name} className={color}>{icon} {sub.title || sub.name}</span>;
                     })}
                   </div>
@@ -4398,17 +4475,18 @@ const MysteriumDashboard = () => {
                   {(metrics.systemHealth.subsystems || []).map((sub) => (
                     <div key={sub.name} className={`p-3 rounded-lg border ${
                       sub.status === 'ok'      ? 'bg-emerald-500/5 border-emerald-500/20' :
+                      sub.status === 'info'    ? 'bg-sky-500/5    border-sky-500/20'     :
                       sub.status === 'warning' ? 'bg-amber-500/5  border-amber-500/20'   :
                                                  'bg-red-500/5    border-red-500/20'
                     }`}>
                       <div className="flex items-center gap-2 mb-2">
                         <span className={`text-sm font-semibold flex-shrink-0 ${
-                          sub.status === 'ok' ? 'text-emerald-400' : sub.status === 'warning' ? 'text-amber-400' : 'text-red-400'
-                        }`}>{sub.status === 'ok' ? '●' : sub.status === 'warning' ? '▲' : '✗'}</span>
+                          sub.status === 'ok' ? 'text-emerald-400' : sub.status === 'info' ? 'text-sky-400' : sub.status === 'warning' ? 'text-amber-400' : 'text-red-400'
+                        }`}>{sub.status === 'ok' ? '●' : sub.status === 'info' ? 'ⓘ' : sub.status === 'warning' ? '▲' : '✗'}</span>
                         <h4 className="text-xs font-semibold text-slate-200 flex-1 min-w-0 truncate">{sub.title || sub.name}</h4>
                         <span className={`text-xs px-1.5 py-0.5 rounded flex-shrink-0 ${
                           sub.status === 'ok' ? 'bg-emerald-500/10 text-emerald-400' :
-                          sub.status === 'warning' ? 'bg-amber-500/10 text-amber-400' : 'bg-red-500/10 text-red-400'
+                          sub.status === 'info' ? 'bg-sky-500/10 text-sky-400' : sub.status === 'warning' ? 'bg-amber-500/10 text-amber-400' : 'bg-red-500/10 text-red-400'
                         }`}>{sub.status}</span>
                       </div>
                       {/* Three subsystems report fixable:false — their fix is a
@@ -4846,7 +4924,7 @@ const MysteriumDashboard = () => {
 
                 <div>
                   <h4 className="text-emerald-400 font-semibold mb-1">System Health States</h4>
-                  <p className="text-slate-400"><strong className="text-emerald-400">OK</strong> — the subsystem matches the recommended setting. <strong className="text-amber-400">Warning</strong> — it works, but a value is below what an exit node wants; <strong className="text-slate-300">Fix &amp; Lock</strong> applies the change and writes it so it survives a reboot, <strong className="text-slate-300">Fix only</strong> applies it until the next reboot, and <strong className="text-slate-300">Unpersist</strong> removes what the toolkit wrote. Some subsystems have no buttons at all and say <strong className="text-slate-300">Reports only</strong>: firewall backend, swap, CPU governor, auto-RPS, router port mapping and the NAT chain change the machine rather than the node, so the toolkit shows what it sees and the command, and you run it if you agree. <strong className="text-red-400">Critical</strong> — something is actively degrading the node. Targets scale with load rather than being fixed: connection tracking, for instance, asks for 128K below five tunnels, 256K up to nineteen and 512K above that, so a quiet node is not told to reserve memory it will never use.</p>
+                  <p className="text-slate-400"><strong className="text-emerald-400">OK</strong> — the subsystem matches the recommended setting. <strong className="text-amber-400">Warning</strong> — it works, but a value is below what an exit node wants; <strong className="text-slate-300">Fix &amp; Lock</strong> applies the change and writes it so it survives a reboot, <strong className="text-slate-300">Fix only</strong> applies it until the next reboot, and <strong className="text-slate-300">Unpersist</strong> removes what the toolkit wrote. Some subsystems have no buttons at all and say <strong className="text-slate-300">Reports only</strong>, and their findings show in blue rather than amber because there is nothing to act on: firewall backend, swap, CPU governor, auto-RPS, router port mapping and the NAT chain change the machine rather than the node, so the toolkit shows what it sees and the command, and you run it if you agree. <strong className="text-red-400">Critical</strong> — something is actively degrading the node. Targets scale with load rather than being fixed: connection tracking, for instance, asks for 128K below five tunnels, 256K up to nineteen and 512K above that, so a quiet node is not told to reserve memory it will never use.</p>
                 </div>
 
                 <div>

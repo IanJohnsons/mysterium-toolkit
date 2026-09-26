@@ -1,6 +1,6 @@
 # Mysterium Node Toolkit
 
-![Version](https://img.shields.io/badge/version-1.4.41-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Version](https://img.shields.io/badge/version-1.4.42-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 
 A monitoring and management dashboard for [Mysterium Network](https://mysterium.network) VPN node operators. It runs on your own machine: no account, no cloud backend, no telemetry. Your session history, earnings and consumer data live in local SQLite files. A handful of public APIs are contacted for prices, node quality and update checks — every one of them is listed under [Privacy](#privacy).
 
@@ -129,7 +129,9 @@ journalctl -u mysterium-toolkit -f
 
 **System health** checks fifteen subsystems that affect how much a node earns: connection tracking, CPU load balancing across cores, kernel network tuning, NIC settings, firewall backend, port reachability, and more. Targets scale with load rather than being fixed — a quiet node is not told to reserve memory it will never use.
 
-Most subsystems can be fixed with one click and locked so the change survives a reboot, and **Fix All** only touches the ones reporting a problem. Six report only: the firewall backend, swap, the CPU governor, the auto-RPS watcher, router port mapping and the NAT chain. Those change the machine rather than the node — the iptables backend is shared with ufw, Docker and fail2ban, a swapfile wears down an SD card, and the governor clocks every workload on the host. The adaptive governor that follows the session count is opt-in too: set `manage_cpu_governor` to true in `config/setup.json` if you want the toolkit to manage it. For these the toolkit reports what it sees and gives the command, and you decide whether to run it.
+Most subsystems can be fixed with one click and locked so the change survives a reboot, and **Fix All** only touches the ones reporting a problem. Six report only: the firewall backend, swap, the CPU governor, the auto-RPS watcher, router port mapping and the NAT chain. Those change the machine rather than the node — the iptables backend is shared with ufw, Docker and fail2ban, a swapfile wears down an SD card, and the governor clocks every workload on the host. The adaptive governor that follows the session count is opt-in too: set `manage_cpu_governor` to true in `config/setup.json` if you want the toolkit to manage it. For these the toolkit reports what it sees and gives the command, and you decide whether to run it. Their findings are shown as information rather than warnings: a card you cannot act on is not a fault.
+
+**Payment errors** are counted separately. A node ends a session when the payment server answers with something its own code does not recognise; the dashboard shows how many sessions that cost in the last 24 hours, so a quiet earnings day can be told apart from a broken setup. This is read from the node's journal and happens inside the node, not in the toolkit.
 
 Also included: node control (restart, settle, payment config), an on-chain wallet view via Polygonscan, a data manager with retention settings, fail2ban integration, eleven themes, and a terminal CLI.
 

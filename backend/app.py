@@ -3829,7 +3829,14 @@ class MetricsCollector:
                     # Step 2: Get identity details with balance and earnings
                     resp = requests.get(
                         f'{node_url}/identities/{identity_address}',
-                        headers=headers, timeout=5
+                        # v1.4.42: 5s was too tight on a Raspberry Pi. An operator's
+                        # node timed out on this call three times in one day; the
+                        # collection then returns nothing, the dashboard reports a
+                        # connection failure, and until this release that read as
+                        # "Update in progress". A node that is not busy answers in
+                        # well under a second, so the higher ceiling only costs time
+                        # on the node that needs it.
+                        headers=headers, timeout=15
                     )
                     if resp.status_code != 200:
                         continue
@@ -6652,6 +6659,61 @@ class MetricsCollector:
             MetricsCollector._firewall_last_scan = now
         return MetricsCollector._firewall_cache
 
+    # Payment errors — journalctl, hourly. v1.4.42.
+    #
+    # The node tears a session down when hermes answers with a cause it does not
+    # recognise: hermes_caller.go reports it as "could not unmarshal error body:
+    # received unknown error:" even though the JSON parsed fine and only the
+    # `cause` was unknown, invoice_tracker.go retries ten times a second, and
+    # session_manager.go then kills the session. Measured over 24h on three
+    # nodes: 9.9% of promise requests on the busiest one, 17 sessions lost; 0%
+    # on the quietest. Nothing surfaced any of it — the operator saw a quiet
+    # earnings day and went looking for a broken toolkit.
+    #
+    # Read-only and bounded: --since 24h, --grep so journalctl filters instead of
+    # Python (a full read of a busy node's journal was 209 MB and 14s), a line
+    # cap, and an hourly cache. Falls back to a bounded plain read where
+    # journalctl was compiled without pattern matching.
+    _payment_errors_cache = None
+    _payment_errors_last_scan = 0
+    PAYMENT_ERRORS_INTERVAL = 3600
+
+    @staticmethod
+    def get_payment_errors():
+        result = {'available': False, 'window_hours': 24, 'unknown_cause': 0,
+                  'sessions_lost': 0, 'note': ''}
+        try:
+            import subprocess
+            base = ['journalctl', '-u', 'mysterium-node', '--since', '24 hours ago',
+                    '--no-pager', '-o', 'cat']
+            pattern = 'unknown hermes error encountered|Payment engine error'
+            rc_out = subprocess.run(base + ['--grep', pattern],
+                                    capture_output=True, text=True, timeout=20)
+            out = rc_out.stdout or ''
+            if rc_out.returncode != 0 and 'pattern matching' in (rc_out.stderr or ''):
+                # Older journalctl: read bounded and filter here.
+                rc_out = subprocess.run(base + ['-n', '200000'],
+                                        capture_output=True, text=True, timeout=20)
+                out = rc_out.stdout or ''
+            if rc_out.returncode != 0 and not out:
+                result['note'] = (rc_out.stderr or 'journal not readable').strip()[:120]
+                return result
+            result['available'] = True
+            result['unknown_cause'] = out.count('unknown hermes error encountered')
+            result['sessions_lost'] = out.count('Payment engine error')
+        except Exception as e:
+            result['note'] = str(e)[:120]
+        return result
+
+    @staticmethod
+    def get_payment_errors_cached():
+        now = time.time()
+        if (MetricsCollector._payment_errors_cache is None or
+                now - MetricsCollector._payment_errors_last_scan >= MetricsCollector.PAYMENT_ERRORS_INTERVAL):
+            MetricsCollector._payment_errors_cache = MetricsCollector.get_payment_errors()
+            MetricsCollector._payment_errors_last_scan = now
+        return MetricsCollector._payment_errors_cache
+
     # Cached logs — journalctl every 60s
     _logs_cache = []
     _logs_last_scan = 0
@@ -7613,6 +7675,19 @@ def database_health():
         'clamped_token_rows': clamped,
         'problem_count': problems + len(failures),
     }), 200
+
+
+@app.route('/api/payment-errors', methods=['GET'])
+@require_auth
+def get_payment_errors():
+    """Hermes causes the node did not recognise, and the sessions they cost.
+
+    v1.4.42. Read-only: it counts two lines in the node's own journal over the
+    last 24 hours. Nothing here can fix them — the cause is in the node's
+    payment code and the answers come from hermes — but an operator who sees
+    "17 sessions lost today" knows to look there instead of at the toolkit.
+    """
+    return jsonify(MetricsCollector.get_payment_errors_cached()), 200
 
 
 @app.route('/api/version', methods=['GET'])

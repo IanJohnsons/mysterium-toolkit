@@ -3649,6 +3649,17 @@ def scan_all():
                 'recommendations': [],
             })
 
+    # v1.4.42: a report-only subsystem cannot be repaired from here, so a warning
+    # from one is information, not a fault. Router port mapping without upnpc, a
+    # swapfile that exists, BBR that is active — all amber, none actionable. An
+    # operator reading five amber cards assumes five problems; one did, and spent
+    # a day looking for damage that was not there. Those become 'info', which
+    # keeps them visible and out of the fault count. Critical still stands:
+    # a report-only subsystem can still find something genuinely wrong.
+    for r in results:
+        if r.get('fixable') is False and r.get('status') == 'warning':
+            r['status'] = 'info'
+
     statuses = [r['status'] for r in results]
     overall = 'critical' if 'critical' in statuses else 'warning' if 'warning' in statuses else 'ok'
 
