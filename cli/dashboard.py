@@ -40,67 +40,31 @@ _VERSION_FILE = Path(__file__).parent.parent / 'VERSION'
 VERSION = _VERSION_FILE.read_text().strip() if _VERSION_FILE.exists() else 'unknown'
 
 # ============ PAYMENT CONFIG TUNER CONSTANTS ============
-# Fallback only: used when talking to a backend older than v1.4.27, where the
-# key metadata started being served by the backend instead of duplicated here.
+# Fallback only. The keys, their text and the presets come from the backend
+# (/node/config/current), so this screen and the web dashboard show the same
+# thing; these copies are used only when the backend sends none.
 #
-# Five entries were removed — payments.unsettled-max-amount,
-# payments.settle.min-amount, payments.min_promise_amount,
-# pingpong.balance-check-interval and pingpong.promise-wait-timeout. None of
-# them are configuration keys the node has; checked against the 119 it registers
-# in config/flags_*.go at tag 1.39.6.
+# v1.4.44: one key. payments.provider.invoice-frequency is gone — the node reads
+# it as a duration, so the bare "60" and "300" this screen wrote became 60 and
+# 300 nanoseconds. The High Load preset is gone with it; its values had no
+# source in the node or in anything Mysterium published.
 CONFIG_KEYS_META = [
     {
         'key':   'payments.zero-stake-unsettled-amount',
         'label': 'Auto-Settle Threshold',
         'unit':  'MYST',
-        'desc':  'Unsettled MYST that triggers auto-settlement. Higher means fewer transactions and more MYST at risk between them.',
-    },
-    {
-        'key':   'payments.unsettled.max-amount',
-        'label': 'Max Unsettled',
-        'unit':  'MYST',
-        'desc':  'Hard ceiling on the unsettled balance. Above this the node always settles, whatever the fee.',
-    },
-    {
-        'key':   'payments.settle.max-fee-percentage',
-        'label': 'Max Settle Fee',
-        'unit':  'ratio',
-        'desc':  'Largest share of the settled amount acceptable as transaction fee. Not the Hermes cut, which is fixed at 20%.',
-    },
-    {
-        'key':   'payments.provider.invoice-frequency',
-        'label': 'Invoice Frequency',
-        'unit':  'seconds',
-        'desc':  'How often a session sends a payment invoice. 300s means roughly five times fewer API calls.',
+        'desc':  ('Unsettled MYST at which the node settles automatically, once the blockchain fee '
+                  'is below 5% of the amount. Node default: 5. Supported: above 0 and below 20. '
+                  'From 20 MYST the node always settles regardless of fee, so a threshold of 20 '
+                  'or more has no effect. Hermes takes a fixed 20% at settlement: 12.5 arrives '
+                  'as about 10 MYST.'),
     },
 ]
 
-# Five of the seven keys these presets used to write are not configuration keys
-# the node has: payments.unsettled-max-amount, payments.settle.min-amount,
-# payments.min_promise_amount, pingpong.balance-check-interval and
-# pingpong.promise-wait-timeout. Checked against the 119 keys the node registers
-# in config/flags_*.go at tag 1.39.6.
-#
-# Writing them was not harmless. The node keeps keys it does not recognise in
-# its config file and writes them back verbatim on every save, so they persist
-# and read like settings that are in effect. One operator carried six of them
-# across two machines, including a "balance check interval" believed to be
-# limiting API calls.
-#
-# The two keys that do matter and were missing — unsettled.max-amount and
-# settle.max-fee-percentage — are in now.
 CONFIG_PRESETS = {
     'defaults': {
-        'payments.zero-stake-unsettled-amount': '5.0',
-        'payments.unsettled.max-amount':        '20.0',
-        'payments.settle.max-fee-percentage':   '0.05',
-        'payments.provider.invoice-frequency':  '60',
-    },
-    'high-traffic': {
-        'payments.zero-stake-unsettled-amount': '12.5',
-        'payments.unsettled.max-amount':        '25.0',
-        'payments.settle.max-fee-percentage':   '0.05',
-        'payments.provider.invoice-frequency':  '300',
+        'label':  'Standard · Node default',
+        'values': {'payments.zero-stake-unsettled-amount': '5.0'},
     },
 }
 
@@ -410,6 +374,7 @@ class CLIDashboard:
         self._config_edit_buf   = ''     # edit buffer
         self._config_current    = {}     # values from backend
         self._config_keys       = {}     # key metadata from backend (v1.4.27+)
+        self._config_presets    = {}     # presets from backend (v1.4.44)
         self._config_pending    = {}     # user-modified values
         self._config_results    = {}     # {key: 'ok'|error_str}
         self._config_applying   = set()  # keys currently being applied
@@ -815,7 +780,7 @@ class CLIDashboard:
                                 self._config_editing = False
                                 self._config_edit_buf = ''
                             elif key in (10, curses.KEY_ENTER):  # Enter — confirm
-                                meta = CONFIG_KEYS_META[self._config_cursor]
+                                meta = self._config_fields()[self._config_cursor]
                                 self._config_pending[meta['key']] = self._config_edit_buf
                                 self._config_editing = False
                                 self._config_edit_buf = ''
@@ -823,36 +788,31 @@ class CLIDashboard:
                                 self._config_edit_buf += chr(key)
                         else:
                             if key == curses.KEY_DOWN:
-                                self._config_cursor = min(len(CONFIG_KEYS_META) - 1, self._config_cursor + 1)
+                                self._config_cursor = min(len(self._config_fields()) - 1, self._config_cursor + 1)
                             elif key == curses.KEY_UP:
                                 self._config_cursor = max(0, self._config_cursor - 1)
                             elif key == ord('e'):
-                                meta = CONFIG_KEYS_META[self._config_cursor]
+                                meta = self._config_fields()[self._config_cursor]
                                 cur = self._config_pending.get(meta['key'],
                                       self._config_current.get(meta['key'], ''))
                                 self._config_edit_buf = str(cur)
                                 self._config_editing = True
                             elif key == ord('a'):
                                 # Apply focused setting
-                                meta = CONFIG_KEYS_META[self._config_cursor]
+                                meta = self._config_fields()[self._config_cursor]
                                 self._apply_config_key(meta['key'])
                             elif key == ord('z'):
                                 # Apply all pending
-                                for meta in CONFIG_KEYS_META:
+                                for meta in self._config_fields():
                                     self._apply_config_key(meta['key'])
                             elif key == ord('n'):
-                                # Load standard preset
-                                for meta in CONFIG_KEYS_META:
-                                    self._config_pending[meta['key']] = CONFIG_PRESETS['defaults'][meta['key']]
-                                self._config_results = {}
-                            elif key == ord('m'):
-                                # Load high-traffic preset
-                                for meta in CONFIG_KEYS_META:
-                                    self._config_pending[meta['key']] = CONFIG_PRESETS['high-traffic'][meta['key']]
+                                # Load the standard preset (node default)
+                                for k, v in self._config_preset_values('defaults').items():
+                                    self._config_pending[k] = v
                                 self._config_results = {}
                             elif key == ord('x'):
                                 # Reset focused key to default
-                                meta = CONFIG_KEYS_META[self._config_cursor]
+                                meta = self._config_fields()[self._config_cursor]
                                 self._apply_config_reset(meta['key'])
 
             except curses.error:
@@ -1267,7 +1227,6 @@ class CLIDashboard:
             ('item', 'a',              'Apply selected setting to node'),
             ('item', 'z',              'Apply all pending settings'),
             ('item', 'n',              'Load defaults preset'),
-            ('item', 'm',              'Load high-traffic preset (50+ sessions)'),
             ('item', 'x',              'Reset selected setting to node default'),
         ]
 
@@ -1300,6 +1259,19 @@ class CLIDashboard:
         self._safe_addstr(stdscr, py + ph - 1, px + 2,
                           f' ↑↓ scroll  {scroll + 1}/{len(lines)} ', DIM)
 
+    def _config_fields(self):
+        """Keys to show and edit: the backend's list, else the local fallback."""
+        if getattr(self, '_config_keys', None):
+            return [{'key': k, 'label': m.get('label', k), 'unit': m.get('unit', ''),
+                     'desc': m.get('description', '')}
+                    for k, m in self._config_keys.items()]
+        return CONFIG_KEYS_META
+
+    def _config_preset_values(self, name):
+        """Values of a preset: the backend's, else the local fallback."""
+        presets = getattr(self, '_config_presets', None) or CONFIG_PRESETS
+        return (presets.get(name) or {}).get('values', {})
+
     def _fetch_config_values(self):
         """Fetch current payment config values from backend /node/config/current.
         Populates self._config_current with key→value pairs.
@@ -1323,6 +1295,7 @@ class CLIDashboard:
                     # ask for five keys the backend dropped in v1.3.3 and print
                     # an em dash for each of them, release after release.
                     self._config_keys = data.get('keys', {})
+                    self._config_presets = data.get('presets', {})
                     self._config_results.pop('_load', None)
                 else:
                     self._config_results['_load'] = f'HTTP {resp.status_code}'
@@ -1398,7 +1371,7 @@ class CLIDashboard:
 
         Phase 1 — Read/scroll: shows current values, scroll to bottom to continue.
         Phase 2 — Edit:        arrow keys select setting, e=edit, a=apply,
-                                z=apply all, n=defaults preset, m=high-traffic preset,
+                                z=apply all, n=standard preset (node default),
                                 x=reset to node default, ESC=close.
 
         All backend calls are non-blocking (background threads).
@@ -1435,12 +1408,7 @@ class CLIDashboard:
             lines.append(('blank', ''))
             # Prefer what the backend reports it supports; fall back to the
             # local list only when talking to an older backend that sends none.
-            if getattr(self, '_config_keys', None):
-                _fields = [{'key': k, 'label': m.get('label', k),
-                            'unit': m.get('unit', ''), 'desc': m.get('description', '')}
-                           for k, m in self._config_keys.items()]
-            else:
-                _fields = CONFIG_KEYS_META
+            _fields = self._config_fields()
             for meta in _fields:
                 key   = meta['key']
                 val   = self._config_current.get(key, '—')
@@ -1489,7 +1457,7 @@ class CLIDashboard:
             # ── Phase 2: edit settings ───────────────────────────────────────
             self._safe_addstr(stdscr, y, px + 2,
                               '  ↑↓=select  e=edit  a=apply  z=apply all  '
-                              'n=defaults  m=high-traffic  x=reset  ESC=close',
+                              'n=standard  x=reset  ESC=close',
                               DIM)
             y += 1
             self._safe_addstr(stdscr, y, px + 2,
@@ -1500,7 +1468,7 @@ class CLIDashboard:
             visible_items = ph - 6
             start_idx = max(0, self._config_cursor - visible_items + 1)
 
-            for i, meta in enumerate(CONFIG_KEYS_META[start_idx:start_idx + visible_items]):
+            for i, meta in enumerate(self._config_fields()[start_idx:start_idx + visible_items]):
                 real_idx = i + start_idx
                 if y >= py + ph - 1:
                     break

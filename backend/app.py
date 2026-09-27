@@ -6639,7 +6639,7 @@ class MetricsCollector:
         now = time.time()
         if system_health and (now - MetricsCollector._health_last_scan > MetricsCollector.HEALTH_SCAN_INTERVAL):
             try:
-                MetricsCollector._health_cache = system_health.scan_all()
+                MetricsCollector._health_cache = _with_node_config_health(system_health.scan_all())
                 MetricsCollector._health_last_scan = now
             except Exception as e:
                 logger.warning(f"Health scan error: {e}")
@@ -9984,6 +9984,7 @@ def fleet_node_proxy(node_id, endpoint):
         'earnings/chart', 'settle/history',
         'node/restart', 'node/settle', 'node/test',
         'node/config/current', 'node/config/set', 'node/config/reset',
+        'node/config/restore-default',
         'firewall', 'firewall/cleanup',
         'firewall/fail2ban/unban', 'firewall/fail2ban/jails',
         'firewall/fail2ban/reload',
@@ -11983,7 +11984,7 @@ def force_health_scan():
     if not system_health:
         return jsonify({'error': 'System health module not available'}), 500
     try:
-        result = system_health.scan_all()
+        result = _with_node_config_health(system_health.scan_all())
         # Push directly into cache so next GET reflects it
         with metrics_lock:
             metrics_cache['systemHealth'] = result
@@ -12513,72 +12514,82 @@ def settle_earnings():
 # TOML config file path (same on all standard installs)
 NODE_CONFIG_TOML = Path('/etc/mysterium-node/config-mainnet.toml')
 
-# Canonical config keys and their metadata.
-# VERIFIED against the Mysterium node source at the exact running version (v1.38.3,
-# full-source grep): only keys that the node actually reads are listed here. Keys the
-# node accepts via TequilAPI SetUserConfig but never consumes ("phantom" keys —
-# payments.settle.min-amount, payments.min_promise_amount, pingpong.balance-check-interval,
-# session.pingpong.balance-check-interval, pingpong.promise-wait-timeout) were removed in
-# v1.3.3: the node stores any key it is given (tequilapi/endpoints/config.go SetUserConfig
-# loops req.Data without validation) but no code path ever reads those names, and the
-# provider-side promise wait is a hardcoded constant (PromiseWaitTimeout = 50s in
-# session/pingpong/factory.go).
+# The one payment key the toolkit sets. v1.4.44.
+#
+# Checked against the node source (mysteriumnetwork/node, tag 1.39.7). The node
+# settles a zero-stake channel in hermes_promise_settler.go needsSettling():
+# above payments.unsettled.max-amount it always settles, whatever the fee; from
+# payments.zero-stake-unsettled-amount upwards it settles once the blockchain
+# fee is below payments.settle.max-fee-percentage of the amount. The defaults
+# (5 / 20 / 0.05) come from Mysterium's commits e6a33f8e (2021) and 3ea092af
+# "smart settle" (2022).
+#
+# Only the threshold is offered. Mysterium pointed operators at this flag when
+# asked for a configurable payout (node issue #4583); for the other two there
+# is no source for any value but the default. The upper bound is derived, not
+# chosen: at or above max-amount's default of 20 the threshold is never the
+# deciding value, because the node already settles unconditionally there.
+#
+# payments.provider.invoice-frequency is gone. It is a duration; the node reads
+# it with cast.ToDuration, which appends "ns" to a bare number, so the "60" and
+# "300" this panel wrote since v1.0.0 became 60 and 300 nanoseconds. See
+# _node_config_inspect() for the cleanup.
 NODE_CONFIG_KEYS = {
     'payments.zero-stake-unsettled-amount': {
         'toml_section': 'payments', 'toml_key': 'zero-stake-unsettled-amount',
         'unit': 'MYST', 'type': 'float', 'node_default': '5.0',
+        'min_exclusive': 0.0, 'max_exclusive': 20.0,
         'label': 'Auto-Settle Threshold',
-        'description': 'Unsettled MYST that triggers auto-settlement. Higher means fewer transactions and more MYST at risk between them.',
-    },
-    'payments.unsettled.max-amount': {
-        # NOTE the dots: the node flag is payments.unsettled.max-amount
-        # (config/flags_payments.go). v1.3.2 and earlier wrote
-        # payments.unsettled-max-amount (dash), which the node never reads.
-        'toml_section': 'payments.unsettled', 'toml_key': 'max-amount',
-        'unit': 'MYST', 'type': 'float', 'node_default': '20.0',
-        'label': 'Max Unsettled',
-        'description': 'Hard ceiling on the unsettled balance. Above this the node always tries to settle, whatever the fee.',
-    },
-    'payments.settle.max-fee-percentage': {
-        # v1.3.6: added. Flag: config/flags_payments.go, node_default 0.05 (5%). This is
-        # NOT the Hermes cut (fixed ~20%, not configurable) — it only decides WHEN the
-        # node bothers to settle: it settles once the blockchain tx fee is below this
-        # fraction of the unsettled amount, so a low value delays settling on a small
-        # balance until gas is cheap relative to it.
-        'toml_section': 'payments.settle', 'toml_key': 'max-fee-percentage',
-        'unit': 'ratio', 'type': 'float', 'node_default': '0.05',
-        'label': 'Max Settle Fee',
-        'description': 'Largest share of the unsettled amount acceptable as transaction fee. Not the Hermes cut, which is fixed at 20% and not configurable.',
-    },
-    'payments.provider.invoice-frequency': {
-        'toml_section': 'payments.provider', 'toml_key': 'invoice-frequency',
-        'unit': 'seconds', 'type': 'int', 'node_default': '60',
-        'label': 'Invoice Frequency',
-        'description': 'How often a session sends a payment invoice. 300s means roughly five times fewer API calls.',
+        'description': ('Unsettled MYST at which the node settles automatically, once the '
+                        'blockchain fee is below 5% of the amount. Node default: 5. '
+                        'Supported: above 0 and below 20. From 20 MYST the node always '
+                        'settles regardless of fee, so a threshold of 20 or more has no effect. '
+                        'Hermes takes a fixed 20% at settlement: 12.5 arrives as about 10 MYST.'),
     },
 }
 
-# Presets — only real, node-consumed keys.
+# One preset: the node's own default.
 NODE_CONFIG_PRESETS = {
     'defaults': {
-        'label': 'Standard · Stable Node',
+        'label': 'Standard · Node default',
         'values': {
             'payments.zero-stake-unsettled-amount': '5.0',
-            'payments.unsettled.max-amount': '20.0',
-            'payments.settle.max-fee-percentage': '0.05',
-            'payments.provider.invoice-frequency': '60',
-        }
-    },
-    'high-traffic': {
-        'label': 'High Load · 50+ Sessions (rate limiting relief)',
-        'values': {
-            'payments.zero-stake-unsettled-amount': '10',
-            'payments.unsettled.max-amount': '25',
-            'payments.settle.max-fee-percentage': '0.05',
-            'payments.provider.invoice-frequency': '300',
         }
     },
 }
+
+# Payment keys the node reads but the toolkit does not set. A value other than
+# the node default is reported, never changed: it may be the operator's own
+# choice. The operator can restore the default from the Node Config panel.
+NODE_CONFIG_WATCHED = {
+    'payments.unsettled.max-amount': {
+        'label': 'Max Unsettled', 'node_default': 20.0, 'unit': 'MYST',
+        'advice': ('Supported: 20 MYST (node default). Above this amount the node always '
+                   'settles, whatever the fee. Mysterium advises settling as often as '
+                   'possible; Hermes can refuse new payments when the unsettled balance '
+                   'runs high, and the node then ends sessions until it has settled.'),
+    },
+    'payments.settle.max-fee-percentage': {
+        'label': 'Max Settle Fee', 'node_default': 0.05, 'unit': 'ratio',
+        'advice': ('Supported: 0.05 (node default) — the largest share of the unsettled '
+                   'amount the node accepts as blockchain fee when settling below Max Unsettled.'),
+    },
+}
+
+# Written by the toolkit itself and removed from the node config automatically.
+NODE_CONFIG_INVOICE_KEY = 'payments.provider.invoice-frequency'
+NODE_CONFIG_INVOICE_DEFAULT_SECS = 5.0   # config/flags_payments.go:174
+# Keys no node version has; the CLI presets wrote them until v1.4.34. The node
+# keeps unknown keys and writes them back on every save, so they read like
+# settings in effect. Removing them changes nothing the node does.
+NODE_CONFIG_OBSOLETE = (
+    'payments.unsettled-max-amount',
+    'payments.settle.min-amount',
+    'payments.min_promise_amount',
+    'pingpong.balance-check-interval',
+    'pingpong.promise-wait-timeout',
+    'port-mapping.enable-upnp',
+)
 
 
 def _parse_toml_simple(toml_path):
@@ -12667,11 +12678,344 @@ def _run_myst_config_set(key, value):
     return False, None, 'myst binary not found or sudo permission denied'
 
 
+# ── Node config hygiene — v1.4.44 ─────────────────────────────────────────────
+#
+# Reads and cleans the node's own user config through TequilAPI, never through
+# the TOML file: the node holds its config in memory and rewrites the file on
+# every save, so a hand edit while it runs is overwritten, and a null value is
+# the node's own way to drop a key (RemoveUser in tequilapi/endpoints/config.go).
+# One pass per configured node API, so a host running several nodes cleans each.
+#
+# What is removed automatically: a bare-number invoice-frequency (written by
+# this toolkit, read by the node as nanoseconds) and the six obsolete keys
+# (written by this toolkit, read by nothing). What is only reported: any other
+# deviation from the node default, because that may be the operator's choice.
+# The node is never restarted from here. A removal takes effect at the next
+# node start, whenever the operator chooses; until then it is shown as pending.
+
+NODE_CONFIG_CHANGES_FILE = Path('config/node_config_changes.json')
+_node_config_state = {}          # node url -> result of the last inspection
+_node_config_lock = Lock()
+NODE_CONFIG_RECHECK_SECS = 3600
+NODE_CONFIG_OBSOLETE_SHOWN_SECS = 86400
+
+
+def _flatten_user_config(data, prefix=''):
+    """Nested /config/user payload -> {'dotted.key': value}. Keys lowercased, as the node does."""
+    out = {}
+    if isinstance(data, dict):
+        for k, v in data.items():
+            full = f'{prefix}.{k}' if prefix else str(k)
+            if isinstance(v, dict):
+                out.update(_flatten_user_config(v, full))
+            else:
+                out[full.lower()] = v
+    return out
+
+
+def _is_bare_number(value):
+    """True for a duration value the node would read as nanoseconds: a number
+    without a unit, whether TOML stored it as an integer or as a string."""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        return True
+    import re as _re
+    return isinstance(value, str) and bool(_re.fullmatch(r'\s*-?\d+(\.\d+)?\s*', value))
+
+
+def _node_config_inspect(node_url):
+    """Read one node's user config. Read-only.
+
+    Returns {'ok', 'error', 'invoice_bare', 'obsolete', 'advisories', 'values'}.
+    'values' holds the flattened user config so callers need not fetch it again."""
+    result = {'ok': False, 'error': '', 'invoice_bare': None, 'obsolete': {},
+              'advisories': [], 'values': {}}
+    try:
+        resp = requests.get(f'{node_url}/config/user',
+                            headers=MetricsCollector.get_tequilapi_headers(), timeout=5)
+    except Exception as e:
+        result['error'] = f'node API not reachable ({type(e).__name__})'
+        return result
+    if resp.status_code != 200:
+        result['error'] = f'node API answered HTTP {resp.status_code}'
+        return result
+    try:
+        values = _flatten_user_config((resp.json() or {}).get('data') or {})
+    except Exception as e:
+        result['error'] = f'unreadable answer from node API ({type(e).__name__})'
+        return result
+
+    result['ok'] = True
+    result['values'] = values
+
+    inv = values.get(NODE_CONFIG_INVOICE_KEY)
+    if inv is not None:
+        if _is_bare_number(inv):
+            result['invoice_bare'] = inv
+        else:
+            try:
+                secs = _parse_go_duration(str(inv))
+            except ValueError:
+                secs = None
+            if secs != NODE_CONFIG_INVOICE_DEFAULT_SECS:
+                result['advisories'].append({
+                    'key': NODE_CONFIG_INVOICE_KEY, 'label': 'Invoice Frequency',
+                    'value': str(inv), 'restorable': True,
+                    'advice': ('Supported: not set. The node starts at 5 seconds and raises the '
+                               'interval itself during a session, up to 5 minutes.'),
+                })
+
+    for key in NODE_CONFIG_OBSOLETE:
+        if key in values:
+            result['obsolete'][key] = values[key]
+
+    for key, meta in NODE_CONFIG_WATCHED.items():
+        if key not in values:
+            continue
+        try:
+            differs = float(values[key]) != meta['node_default']
+        except (TypeError, ValueError):
+            differs = True
+        if differs:
+            result['advisories'].append({
+                'key': key, 'label': meta['label'], 'value': str(values[key]),
+                'restorable': True, 'advice': meta['advice'],
+            })
+
+    thr_key = 'payments.zero-stake-unsettled-amount'
+    if thr_key in values:
+        meta = NODE_CONFIG_KEYS[thr_key]
+        try:
+            thr = float(values[thr_key])
+            outside = not (meta['min_exclusive'] < thr < meta['max_exclusive'])
+        except (TypeError, ValueError):
+            outside = True
+        if outside:
+            result['advisories'].append({
+                'key': thr_key, 'label': meta['label'], 'value': str(values[thr_key]),
+                'restorable': False,
+                'advice': ('Supported: above 0 and below 20 MYST. From 20 MYST the node always '
+                           'settles regardless of fee, so a higher threshold has no effect. '
+                           'Set a value in the Node Config panel.'),
+            })
+    return result
+
+
+def _node_config_load_changes():
+    try:
+        if NODE_CONFIG_CHANGES_FILE.exists():
+            data = json.loads(NODE_CONFIG_CHANGES_FILE.read_text())
+            if isinstance(data, dict):
+                return data
+    except Exception as e:
+        logger.warning(f'Node config: could not read {NODE_CONFIG_CHANGES_FILE}: {e}')
+    return {}
+
+
+def _node_config_save_changes(changes):
+    """Returns True on success. A failure is logged: without this file a pending
+    restart is forgotten when the backend restarts before the node does."""
+    try:
+        NODE_CONFIG_CHANGES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        NODE_CONFIG_CHANGES_FILE.write_text(json.dumps(changes, indent=2))
+        return True
+    except Exception as e:
+        logger.warning(f'Node config: could not write {NODE_CONFIG_CHANGES_FILE}: {e} — '
+                       f'a pending node restart will not be remembered across a toolkit restart')
+        return False
+
+
+def _node_config_remove(node_url, keys):
+    """Remove keys from one node's user config via TequilAPI. Returns (ok, error)."""
+    try:
+        resp = requests.post(f'{node_url}/config/user',
+                             headers={**MetricsCollector.get_tequilapi_headers(),
+                                      'Content-Type': 'application/json'},
+                             json={'data': {k: None for k in keys}}, timeout=10)
+    except Exception as e:
+        return False, f'node API not reachable ({type(e).__name__})'
+    if resp.status_code != 200:
+        return False, f'node API answered HTTP {resp.status_code}: {resp.text[:120]}'
+    return True, ''
+
+
+def _node_start_utc(node_url):
+    """Start time of the node behind node_url, from /healthcheck uptime. None if unknown."""
+    try:
+        resp = requests.get(f'{node_url}/healthcheck', timeout=3)
+        if resp.status_code == 200:
+            up = _parse_go_duration((resp.json() or {}).get('uptime'))
+            return datetime.now(timezone.utc) - timedelta(seconds=up)
+    except Exception:
+        pass
+    return None
+
+
+def _node_config_run(cleanup=True):
+    """Inspect every configured node; with cleanup, remove what the toolkit wrote wrongly.
+
+    Every removal is verified by reading the config back — a 200 from the node
+    is not taken as proof — and recorded in NODE_CONFIG_CHANGES_FILE."""
+    with _node_config_lock:
+        changes = _node_config_load_changes()
+        changed = False
+        for url in NODE_API_URLS:
+            insp = _node_config_inspect(url)
+            if cleanup and insp['ok']:
+                to_remove = dict(insp['obsolete'])
+                if insp['invoice_bare'] is not None:
+                    to_remove[NODE_CONFIG_INVOICE_KEY] = insp['invoice_bare']
+                if to_remove:
+                    ok, err = _node_config_remove(url, list(to_remove))
+                    after = _node_config_inspect(url)
+                    still = [k for k in to_remove if after['ok'] and k in after['values']]
+                    if not ok or not after['ok'] or still:
+                        reason = err or after['error'] or f'still present after removal: {", ".join(still)}'
+                        logger.warning(f'Node config ({url}): could not remove '
+                                       f'{", ".join(to_remove)} — {reason}')
+                        insp['error'] = f'cleanup failed: {reason}'
+                    else:
+                        now = datetime.now(timezone.utc).isoformat()
+                        for k, v in to_remove.items():
+                            changes.setdefault(url, []).append({
+                                'key': k, 'value': str(v), 'removed_at': now,
+                                'restart_needed': k == NODE_CONFIG_INVOICE_KEY,
+                            })
+                            logger.warning(
+                                f'Node config ({url}): removed {k} = {v}'
+                                + (' (read by the node as nanoseconds) — takes effect at the next node start'
+                                   if k == NODE_CONFIG_INVOICE_KEY else ' (a key the node never reads)'))
+                        changed = True
+                        insp = after
+            insp['checked_at'] = datetime.now(timezone.utc).isoformat()
+            _node_config_state[url] = insp
+        if changed:
+            _node_config_save_changes(changes)
+
+
+def _node_config_hygiene_loop():
+    """First pass shortly after start, retried each minute until every node
+    answered, then hourly — so a key set again by hand is cleaned again."""
+    time.sleep(20)
+    while True:
+        try:
+            _node_config_run(cleanup=True)
+        except Exception as e:
+            logger.warning(f'Node config check failed: {e}')
+        all_ok = bool(_node_config_state) and all(v.get('ok') for v in _node_config_state.values())
+        time.sleep(NODE_CONFIG_RECHECK_SECS if all_ok else 60)
+
+
+def _node_config_health():
+    """System Health entry for the node config. Report-only: it changes nothing on
+    the node; it only forgets records of removals that have taken effect."""
+    with _node_config_lock:
+        return _node_config_health_locked()
+
+
+def _node_config_health_locked():
+    sub = {'name': 'NodeConfig', 'title': 'Node Payment Config', 'status': 'ok',
+           'checks': [], 'recommendations': [], 'fixable': False}
+    multi = len(NODE_API_URLS) > 1
+    changes = _node_config_load_changes()
+    changes_dirty = False
+    now = datetime.now(timezone.utc)
+    statuses = []
+
+    if not _node_config_state:
+        sub['checks'].append({'name': 'Node config', 'status': 'info',
+                              'detail': 'not checked yet — first check runs shortly after start'})
+        sub['status'] = 'info'
+        return sub
+
+    for url, insp in _node_config_state.items():
+        tag = f' ({MetricsCollector._node_label(url)})' if multi else ''
+        if not insp.get('ok') or insp.get('error'):
+            sub['checks'].append({'name': f'Node config{tag}', 'status': 'warning',
+                                  'detail': f'could not be checked: {insp.get("error") or "unknown error"}'})
+            statuses.append('warning')
+
+        node_start = None
+        kept = []
+        for rec in changes.get(url, []):
+            try:
+                removed_at = datetime.fromisoformat(rec['removed_at'])
+            except Exception:
+                continue
+            if rec.get('restart_needed'):
+                if node_start is None:
+                    node_start = _node_start_utc(url) or False
+                if node_start and node_start > removed_at:
+                    changes_dirty = True        # took effect — drop the record
+                    continue
+                kept.append(rec)
+                sub['checks'].append({
+                    'name': f'Invoice frequency{tag}', 'status': 'warning',
+                    'detail': (f'removed "{rec["value"]}" (read by the node as {rec["value"]} nanoseconds) — '
+                               f'takes effect at the next node start')})
+                statuses.append('warning')
+            else:
+                if (now - removed_at).total_seconds() > NODE_CONFIG_OBSOLETE_SHOWN_SECS:
+                    changes_dirty = True
+                    continue
+                kept.append(rec)
+                sub['checks'].append({
+                    'name': f'Obsolete key{tag}', 'status': 'info',
+                    'detail': f'removed {rec["key"]} — the node never read it, no restart needed'})
+                statuses.append('info')
+        if kept:
+            changes[url] = kept
+        elif url in changes:
+            del changes[url]
+
+        for adv in insp.get('advisories', []):
+            sub['checks'].append({'name': f'{adv["label"]}{tag}', 'status': 'info',
+                                  'detail': f'set to {adv["value"]}. {adv["advice"]}'})
+            statuses.append('info')
+
+    if any(r.get('restart_needed') for recs in changes.values() for r in recs):
+        sub['recommendations'].append(
+            'Restart the node when it suits you (Restart in Node Status, or your own systemctl stop/start) '
+            'for the removal to take effect. The toolkit does not restart the node.')
+    if any(insp.get('advisories') for insp in _node_config_state.values()):
+        sub['recommendations'].append(
+            'Values other than the node default can be restored in Node Config (Node Status → ⚙).')
+
+    if changes_dirty:
+        _node_config_save_changes(changes)
+
+    if not sub['checks']:
+        sub['checks'].append({'name': 'Node config', 'status': 'ok',
+                              'detail': 'only supported values are set'})
+    sub['status'] = 'warning' if 'warning' in statuses else 'info' if 'info' in statuses else 'ok'
+    return sub
+
+
+def _with_node_config_health(health):
+    """Append the NodeConfig entry to a system_health.scan_all() result and
+    recompute the overall status the same way scan_all() does."""
+    try:
+        entry = _node_config_health()
+    except Exception as e:
+        logger.warning(f'Node config health entry failed: {e}')
+        entry = {'name': 'NodeConfig', 'title': 'Node Payment Config', 'status': 'warning',
+                 'checks': [{'name': 'Node config', 'status': 'warning', 'detail': str(e)[:80]}],
+                 'recommendations': [], 'fixable': False}
+    subs = [s for s in (health.get('subsystems') or []) if s.get('name') != 'NodeConfig']
+    subs.append(entry)
+    health['subsystems'] = subs
+    statuses = [s.get('status') for s in subs]
+    health['overall'] = ('critical' if 'critical' in statuses
+                         else 'warning' if 'warning' in statuses else 'ok')
+    return health
+
+
 @app.route('/node/config/current', methods=['GET'])
 @require_auth
 def get_node_config():
-    """Read current payment config values from TOML file.
-    Returns live values for all 7 tunable keys plus preset definitions."""
+    """Read the current payment config value from the TOML file, plus the key
+    metadata, the presets and any advisories about other payment keys."""
     try:
         toml_data = _parse_toml_simple(NODE_CONFIG_TOML) if NODE_CONFIG_TOML.exists() else {}
 
@@ -12682,15 +13026,6 @@ def get_node_config():
             raw = toml_data.get(toml_lookup) or toml_data.get(meta['toml_key'])
 
             if raw is not None:
-                # Normalise Go duration strings to seconds for display
-                if meta['unit'] == 'seconds' and isinstance(raw, str):
-                    if raw.endswith('m'):
-                        try:
-                            raw = str(int(raw[:-1]) * 60)
-                        except ValueError:
-                            pass
-                    elif raw.endswith('s'):
-                        raw = raw[:-1]
                 current[key] = raw
             else:
                 current[key] = meta['node_default']
@@ -12710,14 +13045,21 @@ def get_node_config():
                 'type':         meta.get('type', 'str'),
                 'description':  meta.get('description', ''),
                 'node_default': meta.get('node_default', ''),
+                'min_exclusive': meta.get('min_exclusive'),
+                'max_exclusive': meta.get('max_exclusive'),
             }
             for key, meta in NODE_CONFIG_KEYS.items()
         }
+        # v1.4.44: what the node itself holds, beyond the key this panel sets.
+        # Read live so the panel reflects a restore the moment it is done.
+        insp = _node_config_inspect(NODE_API_URL)
         return jsonify({
             'success': True,
             'current': current,
             'keys': keys_meta,
             'presets': NODE_CONFIG_PRESETS,
+            'advisories': insp['advisories'],
+            'advisories_error': insp['error'],
             'toml_exists': NODE_CONFIG_TOML.exists(),
             'toml_path': str(NODE_CONFIG_TOML),
         }), 200
@@ -12751,13 +13093,20 @@ def set_node_config():
         # Validate type loosely — reject obviously bad input
         try:
             if meta['type'] == 'float':
-                float(value)
-            elif meta['type'] == 'int':
-                int(float(value))
-                value = str(int(float(value)))
+                num = float(value)
+            else:
+                num = None
         except ValueError:
             return jsonify({'success': False,
                             'error': f'Invalid value "{value}" for {key} (expected {meta["type"]})'}), 400
+
+        # v1.4.44: the supported range, derived from how the node uses the value.
+        lo, hi = meta.get('min_exclusive'), meta.get('max_exclusive')
+        if num is not None and (num != num or (lo is not None and num <= lo)
+                                or (hi is not None and num >= hi)):
+            return jsonify({'success': False,
+                            'error': f'Supported for {meta["label"]}: above {lo:g} and below {hi:g} {meta["unit"]}',
+                            }), 400
 
         results = []
 
@@ -12793,7 +13142,7 @@ def set_node_config():
 @require_auth
 def reset_node_config():
     """Reset one or all payment config keys to node defaults.
-    Body: {key} for single, or {key: 'all'} for all 7 keys."""
+    Body: {key} for single, or {key: 'all'} for every key in NODE_CONFIG_KEYS."""
     try:
         data = request.get_json() or {}
         key = data.get('key', '').strip()
@@ -12825,6 +13174,44 @@ def reset_node_config():
 
     except Exception as e:
         logger.error(f"Node config reset error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/node/config/restore-default', methods=['POST'])
+@require_auth
+def restore_node_config_default():
+    """Remove one payment key from the node's user config so the node falls back
+    to its own default. v1.4.44. Only for keys the toolkit reports on but does
+    not set (NODE_CONFIG_WATCHED, invoice-frequency). Body: {key}.
+
+    Goes through TequilAPI with a null value, the node's own removal path, and
+    reads the config back before reporting success. Does not restart the node."""
+    try:
+        data = request.get_json() or {}
+        key = str(data.get('key', '')).strip().lower()
+        allowed = set(NODE_CONFIG_WATCHED) | {NODE_CONFIG_INVOICE_KEY}
+        if key not in allowed:
+            return jsonify({'success': False,
+                            'error': f'Unknown key: {key}. Allowed: {sorted(allowed)}'}), 400
+
+        ok, err = _node_config_remove(NODE_API_URL, [key])
+        after = _node_config_inspect(NODE_API_URL)
+        if ok and after['ok'] and key in after['values']:
+            ok, err = False, 'the node still reports the key after removal'
+        elif ok and not after['ok']:
+            ok, err = False, f'removal sent, but the result could not be verified: {after["error"]}'
+        with _node_config_lock:
+            after['checked_at'] = datetime.now(timezone.utc).isoformat()
+            _node_config_state[NODE_API_URL] = after
+        MetricsCollector._health_last_scan = 0
+        if not ok:
+            logger.warning(f'Node config: restore default for {key} failed — {err}')
+            return jsonify({'success': False, 'error': err}), 500
+        logger.info(f'Node config: {key} removed, node default applies from the next node start')
+        return jsonify({'success': True, 'key': key, 'restart_required': True,
+                        'advisories': after['advisories']}), 200
+    except Exception as e:
+        logger.error(f"Node config restore-default error: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -13451,6 +13838,10 @@ if __name__ == '__main__':
             pass
 
     start_collector()
+
+    # v1.4.44: check the node's payment config and remove what the toolkit
+    # itself wrote wrongly (see _node_config_run). Never restarts the node.
+    Thread(target=_node_config_hygiene_loop, daemon=True, name='node-config-hygiene').start()
 
     # ── SPA catch-all: serve index.html for all non-API routes ──────────────
     # This makes React Router work correctly in production.

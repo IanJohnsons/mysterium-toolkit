@@ -5049,7 +5049,7 @@ const MysteriumDashboard = () => {
 
                 <div>
                   <h4 className="text-emerald-400 font-semibold mb-1">Node Control &amp; Config</h4>
-                  <p className="text-slate-400"><strong className="text-slate-300">Restart</strong> — tries systemd → service → Docker → docker-compose → TequilAPI stop. <strong className="text-slate-300">Settle</strong> — fetches hermes_id from identity endpoint, calls /transactor/settle/sync. 20% Hermes fee deducted automatically. Hermes rate-limits settlements: if you settle too often in a short window you'll see a "limit reached" notice — your earnings are safe and the node settles automatically once the window clears, so there's no need to keep clicking. <strong className="text-slate-300">⚙ Config</strong> — payment interval tuning. <span className="text-amber-400">Only works when the toolkit runs on the same machine as the node</span> — requires <code className="bg-slate-800 px-1 rounded">myst</code> binary in PATH and passwordless sudo. High Load preset for 50+ sessions. Node restart required after applying.</p>
+                  <p className="text-slate-400"><strong className="text-slate-300">Restart</strong> — tries systemd → service → Docker → docker-compose → TequilAPI stop. <strong className="text-slate-300">Settle</strong> — fetches hermes_id from identity endpoint, calls /transactor/settle/sync. 20% Hermes fee deducted automatically. Hermes rate-limits settlements: if you settle too often in a short window you'll see a "limit reached" notice — your earnings are safe and the node settles automatically once the window clears, so there's no need to keep clicking. <strong className="text-slate-300">⚙ Config</strong> — the auto-settle threshold, supported above 0 and below 20 MYST, and a restore button for any other payment key the node holds at a non-default value. <span className="text-amber-400">Only works when the toolkit runs on the same machine as the node</span> — requires <code className="bg-slate-800 px-1 rounded">myst</code> binary in PATH and passwordless sudo. Node restart required after applying.</p>
                 </div>
 
                 <div>
@@ -6793,56 +6793,29 @@ const NodeQualityCard = ({ nodeQuality: q, nodeStatus, backendUrl, authHeaders, 
 };
 
 // ─── Node Payment Config Modal ─────────────────────────────────────────────
+// v1.4.44: one key. Same text and range as NODE_CONFIG_KEYS in backend/app.py,
+// which is what the CLI reads. Kept local here rather than taken from the
+// backend so a fleet master never offers a key an older fleet node would
+// still accept. invoice-frequency is gone: the node reads it as a duration and
+// the bare "60" / "300" this panel wrote became 60 and 300 nanoseconds.
 const NODE_CONFIG_KEYS_META = [
   {
     key: 'payments.zero-stake-unsettled-amount',
     label: 'Auto-Settle Threshold',
     unit: 'MYST',
     group: 'settlement',
-    desc: 'Unsettled MYST at which the node starts trying to settle automatically. Node default: 5. Hermes always takes a fixed 20% cut at settlement — separate from and unaffected by this setting (e.g. 12.5 gross → ~10 MYST received).',
-  },
-  {
-    key: 'payments.unsettled.max-amount',
-    label: 'Max Unsettled Amount',
-    unit: 'MYST',
-    group: 'settlement',
-    desc: 'Hard ceiling on unsettled MYST — above this the node always tries to settle, regardless of transaction fees. Node default: 20. High-load recommended: 25.',
-  },
-  {
-    key: 'payments.settle.max-fee-percentage',
-    label: 'Max Settle Fee %',
-    unit: 'ratio',
-    group: 'settlement',
-    desc: 'Below the Max Unsettled ceiling, the node only bothers settling once the blockchain transaction fee is under this fraction of the unsettled amount — a gas-efficiency check, NOT the Hermes cut. Node default: 0.05 (5%). This is why settlement timing varies slightly on small balances; it has no effect on how much you receive.',
-  },
-  {
-    key: 'payments.provider.invoice-frequency',
-    label: 'Invoice Frequency',
-    unit: 'seconds',
-    group: 'timing',
-    desc: 'How often the node sends payment invoices to the consumer during a session. Node default: 60s. Higher = fewer payment exchanges per session. At 300s with 50+ sessions: ~5× less payment traffic.',
+    min: 0,
+    max: 20,
+    desc: 'Unsettled MYST at which the node settles automatically, once the blockchain fee is below 5% of the amount. Node default: 5. Supported: above 0 and below 20. From 20 MYST the node always settles regardless of fee, so a threshold of 20 or more has no effect. Hermes takes a fixed 20% at settlement: 12.5 arrives as about 10 MYST.',
   },
 ];
 
 const PRESETS = {
   defaults: {
-    label: 'Standard · Stable Node',
+    label: 'Standard · Node default',
     color: 'slate',
     values: {
       'payments.zero-stake-unsettled-amount': '5.0',
-      'payments.unsettled.max-amount': '20.0',
-      'payments.settle.max-fee-percentage': '0.05',
-      'payments.provider.invoice-frequency': '60',
-    }
-  },
-  'high-traffic': {
-    label: 'High Load · 50+ Sessions',
-    color: 'emerald',
-    values: {
-      'payments.zero-stake-unsettled-amount': '10',
-      'payments.unsettled.max-amount': '25',
-      'payments.settle.max-fee-percentage': '0.05',
-      'payments.provider.invoice-frequency': '300',
     }
   },
 };
@@ -6859,6 +6832,10 @@ const NodeConfigModal = ({ backendUrl, authHeaders, onClose }) => {
   const [applying, setApplying] = useState({});
   const [results, setResults] = useState({});
   const [tomlPath, setTomlPath] = useState('/etc/mysterium-node/config-mainnet.toml');
+  // v1.4.44: payment keys the node holds that this panel does not set.
+  const [advisories, setAdvisories] = useState([]);
+  const [advisoriesError, setAdvisoriesError] = useState('');
+  const [restoreResults, setRestoreResults] = useState({});
   const scrollRef = useRef(null);
 
   useEffect(() => {
@@ -6871,6 +6848,8 @@ const NodeConfigModal = ({ backendUrl, authHeaders, onClose }) => {
           setCurrentValues(data.current || {});
           setPendingValues({ ...data.current });
           if (data.toml_path) setTomlPath(data.toml_path);
+          setAdvisories(Array.isArray(data.advisories) ? data.advisories : []);
+          setAdvisoriesError(data.advisories_error || '');
         }
       } catch (e) {
         console.error('Config fetch failed:', e);
@@ -6945,9 +6924,31 @@ const NodeConfigModal = ({ backendUrl, authHeaders, onClose }) => {
     }
   };
 
+  // v1.4.44: remove a key the node holds with a non-default value, so the node
+  // falls back to its own default at the next start. The backend reads the
+  // config back before it reports success.
+  const restoreDefault = async (key) => {
+    setRestoreResults(p => ({ ...p, [key]: 'busy' }));
+    try {
+      const resp = await fetch(`${backendUrl}/node/config/restore-default`, {
+        method: 'POST',
+        headers: { ...(authHeaders || {}), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key }),
+      });
+      const data = await resp.json();
+      if (data.success) {
+        setAdvisories(Array.isArray(data.advisories) ? data.advisories : []);
+        setRestoreResults(p => ({ ...p, [key]: 'ok' }));
+      } else {
+        setRestoreResults(p => ({ ...p, [key]: data.error || ('HTTP ' + resp.status) }));
+      }
+    } catch (e) {
+      setRestoreResults(p => ({ ...p, [key]: e.message }));
+    }
+  };
+
   const groups = {
-    settlement: { label: 'Settlement Thresholds', keys: NODE_CONFIG_KEYS_META.filter(m => m.group === 'settlement') },
-    timing: { label: 'Payment Engine Timing', keys: NODE_CONFIG_KEYS_META.filter(m => m.group === 'timing') },
+    settlement: { label: 'Settlement Threshold', keys: NODE_CONFIG_KEYS_META.filter(m => m.group === 'settlement') },
   };
 
   return (
@@ -6986,18 +6987,13 @@ const NodeConfigModal = ({ backendUrl, authHeaders, onClose }) => {
               </div>
 
               <div className="space-y-1">
-                <p className="text-slate-300 font-semibold uppercase tracking-wider text-[10px]">Settlement Thresholds</p>
-                <p>The node settles once unsettled MYST reaches the Auto-Settle Threshold <em>and</em> the blockchain transaction fee is under Max Settle Fee % of that amount — a separate gas-efficiency check, unrelated to the 20% above. Above the Max Unsettled ceiling it settles regardless of fees. This is why the exact settle moment shifts slightly. Raising thresholds means fewer settlements but more MYST sitting as unconfirmed promises on the node; these are stored locally and should survive a daemon restart, but there's no guarantee during a Hermes outage. A small Polygon fee (a few cents) applies separately when withdrawing your Balance to an external wallet.</p>
+                <p className="text-slate-300 font-semibold uppercase tracking-wider text-[10px]">How the node settles</p>
+                <p>Once the unsettled amount reaches the Auto-Settle Threshold, the node settles as soon as the blockchain fee is below 5% of that amount — a gas-efficiency check, unrelated to the 20% above. From 20 MYST it settles regardless of fee. Both of those limits are node defaults and are not offered here. The threshold is the one setting supported: above 0 and below 20 MYST. A higher threshold means fewer settlements and more MYST held unsettled; Mysterium advises settling as often as possible, and Hermes can refuse new payments when the unsettled balance runs high. A small Polygon fee (a few cents) applies separately when withdrawing your Balance to an external wallet.</p>
               </div>
 
               <div className="space-y-1">
-                <p className="text-slate-300 font-semibold uppercase tracking-wider text-[10px]">Payment Engine Timing</p>
-                <p>Invoice Frequency controls how often the node exchanges payment invoices with each consumer during a session. At the 60s default, a node with 50+ concurrent sessions generates a large volume of payment traffic to Hermes; raising it to 300s reduces that by ~5×. This is the only timing knob the node exposes on the provider side — the wait for a consumer's payment promise is fixed in the node itself (50 seconds) and cannot be configured.</p>
-              </div>
-
-              <div className="space-y-1">
-                <p className="text-slate-300 font-semibold uppercase tracking-wider text-[10px]">About the High Load Preset</p>
-                <p>Raises the settlement thresholds and sets Invoice Frequency to 300s, for nodes handling 50+ concurrent sessions where the default rate causes rate limiting. <strong className="text-amber-300">Only apply if you're actually experiencing rate limiting</strong> — on a low-traffic node the defaults are better.</p>
+                <p className="text-slate-300 font-semibold uppercase tracking-wider text-[10px]">Other payment keys on this node</p>
+                <p>If the node holds Max Unsettled, Max Settle Fee or Invoice Frequency at a value other than its default, it is listed under the setting with a button to restore the node default. The toolkit does not change those values on its own.</p>
               </div>
 
               <div className="space-y-1">
@@ -7036,11 +7032,7 @@ const NodeConfigModal = ({ backendUrl, authHeaders, onClose }) => {
               <span className="text-xs text-slate-500 mr-1">Load preset:</span>
               {Object.entries(PRESETS).map(([pk, pv]) => (
                 <button key={pk} onClick={() => loadPreset(pk)}
-                  className={`px-3 py-1 text-xs border rounded transition ${
-                    pk === 'high-traffic'
-                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/30'
-                      : 'bg-slate-600/30 text-slate-300 border-slate-500/30 hover:bg-slate-600/50'
-                  }`}>
+                  className="px-3 py-1 text-xs border rounded transition bg-slate-600/30 text-slate-300 border-slate-500/30 hover:bg-slate-600/50">
                   {pv.label}
                 </button>
               ))}
@@ -7088,6 +7080,8 @@ const NodeConfigModal = ({ backendUrl, authHeaders, onClose }) => {
                             <input
                               type="number"
                               step={meta.unit === 'MYST' ? '0.01' : '1'}
+                              min={meta.min}
+                              max={meta.max}
                               value={pending}
                               onChange={e => setPendingValues(p => ({ ...p, [meta.key]: e.target.value }))}
                               className="flex-1 min-w-0 px-2 py-1 text-xs font-mono bg-slate-900 border border-slate-600/50 rounded text-slate-200 focus:outline-none focus:border-emerald-500/60"
@@ -7106,6 +7100,40 @@ const NodeConfigModal = ({ backendUrl, authHeaders, onClose }) => {
                   </div>
                 </div>
               ))}
+              {!loading && advisoriesError && (
+                <p className="text-[10px] text-amber-400">Other payment keys on this node could not be checked: {advisoriesError}</p>
+              )}
+              {!loading && advisories.length > 0 && (
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500 mb-2">Other payment keys on this node</p>
+                  <div className="space-y-2">
+                    {advisories.map(adv => {
+                      const rr = restoreResults[adv.key];
+                      return (
+                        <div key={adv.key} className="p-3 rounded-lg border border-sky-500/20 bg-sky-500/5">
+                          <div className="flex items-start justify-between gap-2 mb-1">
+                            <span className="text-xs font-semibold text-slate-200">{adv.label}</span>
+                            <span className="text-[10px] text-slate-500 shrink-0">set to: <span className="text-slate-300 font-mono">{adv.value}</span></span>
+                          </div>
+                          <p className="text-[10px] text-slate-500 mb-2 leading-relaxed">{adv.advice}</p>
+                          {adv.restorable && (
+                            <div className="flex items-center gap-2">
+                              <button onClick={() => restoreDefault(adv.key)} disabled={rr === 'busy'}
+                                className="px-3 py-1 text-xs bg-slate-600/30 text-slate-300 border border-slate-500/30 rounded hover:bg-slate-600/50 transition disabled:opacity-40">
+                                {rr === 'busy' ? '…' : 'Restore node default'}
+                              </button>
+                              {rr && rr !== 'busy' && rr !== 'ok' && <span className="text-[10px] text-red-400">✗ {rr}</span>}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              {Object.values(restoreResults).includes('ok') && (
+                <p className="text-[10px] text-emerald-400">✓ Node default restored — takes effect at the next node start.</p>
+              )}
             </div>
 
             {/* Footer actions */}
