@@ -1,6 +1,6 @@
 # Mysterium Node Toolkit
 
-![Version](https://img.shields.io/badge/version-1.4.45-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Version](https://img.shields.io/badge/version-1.4.46-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 
 A monitoring and management dashboard for [Mysterium Network](https://mysterium.network) VPN node operators. It runs on your own machine: no account, no cloud backend, no telemetry. Your session history, earnings and consumer data live in local SQLite files. A handful of public APIs are contacted for prices, node quality and update checks — every one of them is listed under [Privacy](#privacy).
 
@@ -161,7 +161,7 @@ UPnP or a manual port forward usually improves a restricted or symmetric result.
 
 **Lifetime totals and the service split** are read from a daily rollup, not from the session list. Sessions are pruned after 90 days by default; the rollup is never pruned, which is what keeps a day's earnings after its sessions are gone. If the two ever disagree, the rollup is the one that survived.
 
-**Payment config** (⚙ in Node Status) offers one setting: the auto-settle threshold, the unsettled amount at which the node pays out. Supported: above 0 and below 20 MYST; the node default is 5. Hermes takes a fixed 20% at settlement, so a threshold of 12.5 arrives as about 10 MYST. The other two payment limits, Max Unsettled (20 MYST) and Max Settle Fee (0.05), are kept at the node's defaults by the toolkit itself: if your node holds either at another value, the toolkit removes it from the node config and shows that under System Health. Like every node config change, it takes effect at the next node start.
+**Payment config** (⚙ in Node Status) offers one setting: the auto-settle threshold, the unsettled amount at which the node pays out. Supported: above 0 and below 20 MYST; the node default is 5. Hermes takes a fixed 20% at settlement, so a threshold of 12.5 arrives as about 10 MYST. The other two payment limits, Max Unsettled (20 MYST) and Max Settle Fee (0.05), are kept at the node's defaults by the toolkit itself: if your node holds either at another value, the toolkit removes it from the node config and shows that under System Health. Like every node config change, it takes effect at the next node start; until then a notice at the top of that node's dashboard says so, with a restart button, and it disappears by itself once the node has started again.
 
 Toolkit versions before 1.4.44 wrote `payments.provider.invoice-frequency` as a bare number such as `60`. The node reads that as 60 nanoseconds, not seconds: it invoiced every consumer far too often at the start of a session and never ended a session for a consumer who stopped paying. From 1.4.44 the toolkit removes that value from the node's own config, together with six keys the node never reads, and shows it under System Health → Node Payment Config. It does not restart the node. The removal takes effect at the next node start, whenever you choose.
 

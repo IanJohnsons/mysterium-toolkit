@@ -4,6 +4,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.46
+
+- feat: **a notice on the node dashboard when a payment setting was set back and the node has not restarted yet.** v1.4.44 and v1.4.45 remove a bare-number invoice frequency and a Max Unsettled or Max Settle Fee other than the node default, and the node only reads its config at start — so until the next start the old value is still in effect. That was visible only under System Health. A bar at the top of the affected node's dashboard now names what was set back and offers a restart button. It appears only on a node where the toolkit actually removed something, goes away by itself once the backend sees the node has started after the removal, and can be dismissed; a later removal shows it again. The toolkit still never restarts the node itself. The health entry carries the pending removals as data (`pending_restart`), so the dashboard does not read them out of the check texts.
+
 ## v1.4.45
 
 - security: **`X-Forwarded-For` no longer decides who is local.** `is_local_request()` took the client address from that header whenever it was present, from anyone, and it runs before authentication. A request with a wrong password and `X-Forwarded-For: 127.0.0.1` was answered 200 — reproduced against a running backend — in every `toolkit_mode`, and for API keys as well as passwords. The same header chose the address written to the auth-failure log that fail2ban reads, so a client could have any address banned, including a fleet master, while staying unbanned itself. The header is now believed only when the connection comes from this machine, i.e. from a proxy here, which is what it exists for. Anyone who exposes port 5000 beyond their own network should update.

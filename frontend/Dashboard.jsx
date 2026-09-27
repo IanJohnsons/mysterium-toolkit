@@ -3095,6 +3095,7 @@ const MysteriumDashboard = () => {
             </div>
           )}
 
+          <NodeConfigRestartBanner systemHealth={metrics.systemHealth} backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
             <StatusCard nodeStatus={metrics.nodeStatus} resources={metrics.resources} earnings={metrics.earnings} clients={metrics.clients} activeSessions={metrics.sessions?.active_unique_consumers ?? metrics.sessions?.active ?? 0} backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} fleetNode={metrics._fleet_node} nodeLabel={metrics._node_label} nodeUpdateInfo={nodeUpdateInfo} onNodeUpdated={refreshNodeUpdateInfo} />
             <EarningsCard earnings={metrics.earnings} backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
@@ -6788,6 +6789,62 @@ const NodeQualityCard = ({ nodeQuality: q, nodeStatus, backendUrl, authHeaders, 
 
       {/* Quality History Sparkline */}
       <QualityHistorySparkline backendUrl={backendUrl} authHeaders={authHeaders} />
+    </div>
+  );
+};
+
+// ─── Node config restart banner (v1.4.46) ──────────────────────────────────
+// Shown only on a node where the toolkit removed a payment setting that takes
+// effect at the next node start (invoice-frequency, or a max-amount / max-fee
+// other than the node default). It goes away on its own once the backend sees
+// the node has started after the removal, or when dismissed with ✕ — then it
+// stays away in this browser for that removal. A later removal shows it again.
+const NodeConfigRestartBanner = ({ systemHealth, backendUrl, authHeaders }) => {
+  const sub = (systemHealth?.subsystems || []).find(s => s.name === 'NodeConfig');
+  const pending = Array.isArray(sub?.pending_restart) ? sub.pending_restart : [];
+  const [dismissed, setDismissed] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('myst-nodecfg-dismissed') || '[]'); } catch { return []; }
+  });
+  const [restartStatus, setRestartStatus] = useState(null);
+  const idOf = (p) => (p.node || '') + '|' + p.key + '|' + p.removed_at;
+  const visible = pending.filter(p => !dismissed.includes(idOf(p)));
+  if (visible.length === 0) return null;
+
+  const dismiss = () => {
+    const next = [...dismissed, ...visible.map(idOf)].slice(-50);
+    setDismissed(next);
+    try { localStorage.setItem('myst-nodecfg-dismissed', JSON.stringify(next)); } catch { /* private mode: dismissal lasts this page only */ }
+  };
+  const restart = async () => {
+    if (!backendUrl || !confirm('Restart the Mysterium node now? All active sessions will be dropped.')) return;
+    setRestartStatus('restarting…');
+    try {
+      const resp = await fetch(backendUrl + '/node/restart', { method: 'POST', headers: authHeaders || {} });
+      const data = await resp.json();
+      setRestartStatus(data.success ? '✓ Restarting…' : '✗ ' + (data.message || data.error || ('HTTP ' + resp.status)));
+    } catch (e) { setRestartStatus('✗ ' + e.message); }
+  };
+  const hasInvoice = visible.some(p => p.costs_payments);
+  const was = visible.map(p => (p.node ? p.node + ': ' : '') + p.label + ' ' + p.value + ' → ' + p.node_default).join(', ');
+
+  return (
+    <div className="mb-4 px-4 py-3 rounded-lg border border-sky-500/30 bg-sky-500/10 flex flex-wrap items-start gap-3 text-xs">
+      <span className="text-sky-400 flex-shrink-0">ⓘ</span>
+      <div className="flex-1 min-w-0 text-slate-300 leading-relaxed">
+        Payment settings on this node were set back to the node defaults ({was}). They take effect at the next node start — restart when it suits you.
+        {hasInvoice && <span className="text-slate-400"> The old invoice frequency was read by the node as nanoseconds and cost payments, so this restart is worth doing soon.</span>}
+        {restartStatus && <span className="ml-2 text-slate-400">{restartStatus}</span>}
+      </div>
+      <div className="flex items-center gap-2 flex-shrink-0">
+        <button onClick={restart}
+          className="px-3 py-1 text-xs bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded hover:bg-amber-500/30 transition">
+          Restart node
+        </button>
+        <button onClick={dismiss} title="Hide this notice"
+          className="px-2 py-1 text-xs bg-slate-600/30 text-slate-400 border border-slate-600/30 rounded hover:bg-slate-600/50 transition">
+          ✕
+        </button>
+      </div>
     </div>
   );
 };

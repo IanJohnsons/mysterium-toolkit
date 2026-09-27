@@ -12980,7 +12980,11 @@ def _node_config_health_locked():
            # v1.4.45: shown instead of the generic report-only line, which speaks of
            # a command to run — there is none here.
            'report_note': ('Reports only — the toolkit keeps the payment defaults itself; '
-                           'when to restart the node is your call.')}
+                           'when to restart the node is your call.'),
+           # v1.4.46: the removals still waiting for a node start, as data, so the
+           # dashboard can show a banner without parsing check texts. Empty once
+           # the node has started after each removal.
+           'pending_restart': []}
     multi = len(NODE_API_URLS) > 1
     changes = _node_config_load_changes()
     changes_dirty = False
@@ -13014,6 +13018,17 @@ def _node_config_health_locked():
                     changes_dirty = True        # took effect — drop the record
                     continue
                 kept.append(rec)
+                sub['pending_restart'].append({
+                    'key': rec['key'], 'value': rec['value'], 'removed_at': rec['removed_at'],
+                    'label': ('Invoice Frequency' if rec['key'] == NODE_CONFIG_INVOICE_KEY
+                              else NODE_CONFIG_ENFORCED.get(rec['key'], {}).get('label', rec['key'])),
+                    'node_default': ('5s' if rec['key'] == NODE_CONFIG_INVOICE_KEY
+                                     else f'{NODE_CONFIG_ENFORCED.get(rec["key"], {}).get("node_default", 0):g}'),
+                    'node': MetricsCollector._node_label(url) if multi else '',
+                    # The old value is still active and it costs payments: the
+                    # banner says the restart is worth doing soon.
+                    'costs_payments': rec['key'] == NODE_CONFIG_INVOICE_KEY,
+                })
                 if rec['key'] == NODE_CONFIG_INVOICE_KEY:
                     # The bad value is still active in the running node and it costs
                     # payments, hence a warning rather than information.
