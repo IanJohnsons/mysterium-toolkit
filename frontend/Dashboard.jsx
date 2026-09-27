@@ -4521,7 +4521,7 @@ const MysteriumDashboard = () => {
                           the command; running it stays the operator's call. */}
                       {sub.fixable === false ? (
                         <div className="text-[10px] text-slate-500 italic mb-2">
-                          Reports only — this changes your system, so the command is yours to run.
+                          {sub.report_note || 'Reports only — this changes your system, so the command is yours to run.'}
                         </div>
                       ) : (
                       <div className="flex flex-wrap items-center gap-1.5 mb-2">
@@ -4599,7 +4599,7 @@ const MysteriumDashboard = () => {
                         {(sub.checks || []).map((check, ci) => (
                           <div key={ci} className="flex items-start gap-2 text-xs">
                             <span className={`w-2 h-2 rounded-full flex-shrink-0 mt-1 ${
-                              check.status === 'ok' ? 'bg-emerald-400' : check.status === 'warning' ? 'bg-amber-400' : 'bg-red-400'
+                              check.status === 'ok' ? 'bg-emerald-400' : check.status === 'info' ? 'bg-sky-400' : check.status === 'warning' ? 'bg-amber-400' : 'bg-red-400'
                             }`} />
                             <span className="text-slate-400 w-36 flex-shrink-0 leading-relaxed">{check.name}</span>
                             <span className="text-slate-500 flex-1 leading-relaxed break-words">{check.detail}</span>
@@ -5049,7 +5049,7 @@ const MysteriumDashboard = () => {
 
                 <div>
                   <h4 className="text-emerald-400 font-semibold mb-1">Node Control &amp; Config</h4>
-                  <p className="text-slate-400"><strong className="text-slate-300">Restart</strong> — tries systemd → service → Docker → docker-compose → TequilAPI stop. <strong className="text-slate-300">Settle</strong> — fetches hermes_id from identity endpoint, calls /transactor/settle/sync. 20% Hermes fee deducted automatically. Hermes rate-limits settlements: if you settle too often in a short window you'll see a "limit reached" notice — your earnings are safe and the node settles automatically once the window clears, so there's no need to keep clicking. <strong className="text-slate-300">⚙ Config</strong> — the auto-settle threshold, supported above 0 and below 20 MYST, and a restore button for any other payment key the node holds at a non-default value. <span className="text-amber-400">Only works when the toolkit runs on the same machine as the node</span> — requires <code className="bg-slate-800 px-1 rounded">myst</code> binary in PATH and passwordless sudo. Node restart required after applying.</p>
+                  <p className="text-slate-400"><strong className="text-slate-300">Restart</strong> — tries systemd → service → Docker → docker-compose → TequilAPI stop. <strong className="text-slate-300">Settle</strong> — fetches hermes_id from identity endpoint, calls /transactor/settle/sync. 20% Hermes fee deducted automatically. Hermes rate-limits settlements: if you settle too often in a short window you'll see a "limit reached" notice — your earnings are safe and the node settles automatically once the window clears, so there's no need to keep clicking. <strong className="text-slate-300">⚙ Config</strong> — the auto-settle threshold, supported above 0 and below 20 MYST. Max Unsettled and Max Settle Fee are kept at the node defaults (20 and 0.05) by the toolkit itself. <span className="text-amber-400">Only works when the toolkit runs on the same machine as the node</span> — requires <code className="bg-slate-800 px-1 rounded">myst</code> binary in PATH and passwordless sudo. Node restart required after applying.</p>
                 </div>
 
                 <div>
@@ -6993,7 +6993,7 @@ const NodeConfigModal = ({ backendUrl, authHeaders, onClose }) => {
 
               <div className="space-y-1">
                 <p className="text-slate-300 font-semibold uppercase tracking-wider text-[10px]">Other payment keys on this node</p>
-                <p>If the node holds Max Unsettled, Max Settle Fee or Invoice Frequency at a value other than its default, it is listed under the setting with a button to restore the node default. The toolkit does not change those values on its own.</p>
+                <p>Max Unsettled and Max Settle Fee are kept at the node defaults (20 MYST and 0.05) by the toolkit itself: a different value is removed from the node config and shown under System Health, and it takes effect at the next node start. An Invoice Frequency written with a unit is listed under the setting with a button to restore the node default.</p>
               </div>
 
               <div className="space-y-1">

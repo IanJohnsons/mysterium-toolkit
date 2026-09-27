@@ -823,6 +823,43 @@ def _verify_password(plain: str, stored: str) -> bool:
             logger.warning(f"Password hash could not be read: {e}")
             return False
     return hmac.compare_digest(plain.encode(), stored.encode())
+# v1.4.45: scrypt once per credential, not once per request.
+#
+# The dashboard sends Basic credentials with every fetch and a fleet master polls
+# every few seconds, so with a hashed password each request ran scrypt
+# (n=16384, r=8: 16 MB and ~45 ms on one x86 core, several times that on a Pi).
+# Measured in a container: one request 51 ms, the 41st of 40 concurrent ones
+# 1.78 s, against 1.6 ms for the same load without the hash. On a Pi in pi_mode
+# (10 server threads) the pool fills with hashing and the login page hangs.
+#
+# A credential that verified once is remembered as an HMAC under a key that
+# exists only in this process's memory, so the cache holds nothing that can be
+# turned back into the password or checked offline. The stored hash is part of
+# the HMAC input, so a password change invalidates every entry. Only successes
+# are cached; a wrong password still pays for scrypt every time.
+_AUTH_CACHE_KEY = os.urandom(32)
+_auth_ok_cache = set()
+_auth_ok_cache_lock = Lock()
+_AUTH_CACHE_MAX = 64
+
+
+def _basic_auth_ok(user, pwd):
+    if user != USERNAME:
+        return False
+    tag = hmac.new(_AUTH_CACHE_KEY,
+                   '\0'.join((user, pwd, PASSWORD or '')).encode(), hashlib.sha256).digest()
+    with _auth_ok_cache_lock:
+        if tag in _auth_ok_cache:
+            return True
+    if not _verify_password(pwd, PASSWORD):
+        return False
+    with _auth_ok_cache_lock:
+        if len(_auth_ok_cache) >= _AUTH_CACHE_MAX:
+            _auth_ok_cache.clear()
+        _auth_ok_cache.add(tag)
+    return True
+
+
 ALLOW_NO_AUTH = os.getenv('ALLOW_NO_AUTH', 'false').lower() == 'true'
 
 # Log auth source for debugging
@@ -1395,9 +1432,18 @@ def _client_ip():
     front — so an authentication failure logged from behind a proxy read 127.0.0.1
     and fail2ban had nothing usable to ban. X-Forwarded-For carries the original
     address in that case.
+
+    v1.4.45: the header is only believed when the connection comes from this
+    machine, i.e. from a proxy here. Taken from anyone it let a client choose the
+    address that fail2ban bans — someone else's, the fleet master's — and, in
+    is_local_request(), pass as 127.0.0.1 and skip authentication altogether.
     """
-    fwd = request.headers.get('X-Forwarded-For', '').split(',')[0].strip()
-    return fwd or request.remote_addr or 'unknown'
+    peer = request.remote_addr or ''
+    if peer in ('127.0.0.1', '::1'):
+        fwd = request.headers.get('X-Forwarded-For', '').split(',')[0].strip()
+        if fwd:
+            return fwd
+    return peer or 'unknown'
 
 
 def _log_auth_failure(reason):
@@ -1440,7 +1486,7 @@ def require_auth(f):
             try:
                 credentials = base64.b64decode(auth.split(' ', 1)[1]).decode('utf-8')
                 user, pwd = credentials.split(':', 1)
-                if user == USERNAME and _verify_password(pwd, PASSWORD):
+                if _basic_auth_ok(user, pwd):
                     return f(*args, **kwargs)
             except Exception as e:
                 logger.warning(f"Basic auth error: {e}")
@@ -1468,12 +1514,12 @@ def is_local_request():
     On local installs (toolkit_mode = 'local', default) RFC1918 is trusted as before.
     """
     # Real client IP from Vite proxy (set by vite.config.js configure hook)
-    forwarded_for = request.headers.get('X-Forwarded-For', '').split(',')[0].strip()
-    # Direct connection address
-    remote_addr = request.remote_addr or ''
-
-    # If proxy forwarded a real remote IP, use that for the check
-    check_addr = forwarded_for if forwarded_for else remote_addr
+    # v1.4.45: X-Forwarded-For is only believed from a proxy on this machine
+    # (see _client_ip). It used to be taken from anyone: a request with a wrong
+    # password and 'X-Forwarded-For: 127.0.0.1' was answered 200, in every
+    # toolkit_mode and for API keys as well, because this check runs before
+    # authentication.
+    check_addr = _client_ip()
 
     # Remote/VPS mode: only loopback is trusted — RFC1918 requires auth
     _toolkit_mode = setup_config.get('toolkit_mode', 'local')
@@ -12558,21 +12604,25 @@ NODE_CONFIG_PRESETS = {
     },
 }
 
-# Payment keys the node reads but the toolkit does not set. A value other than
-# the node default is reported, never changed: it may be the operator's own
-# choice. The operator can restore the default from the Node Config panel.
-NODE_CONFIG_WATCHED = {
+# Payment keys held at the node default for every operator. v1.4.45.
+#
+# v1.4.44 only reported a different value, on the grounds that it might be the
+# operator's own choice. Ian's three nodes then turned out to hold max-amount
+# 15.0 that nobody had chosen, and the decision became: these stay at the node
+# default, everywhere. A value that differs is removed through the node's own
+# removal path, so the node falls back to its default at its next start. A value
+# equal to the default is left alone — there is nothing to correct.
+NODE_CONFIG_ENFORCED = {
     'payments.unsettled.max-amount': {
         'label': 'Max Unsettled', 'node_default': 20.0, 'unit': 'MYST',
-        'advice': ('Supported: 20 MYST (node default). Above this amount the node always '
-                   'settles, whatever the fee. Mysterium advises settling as often as '
-                   'possible; Hermes can refuse new payments when the unsettled balance '
-                   'runs high, and the node then ends sessions until it has settled.'),
+        'reason': ('above this amount the node always settles, whatever the fee. Mysterium '
+                   'advises settling as often as possible, and Hermes can refuse new payments '
+                   'when the unsettled balance runs high'),
     },
     'payments.settle.max-fee-percentage': {
         'label': 'Max Settle Fee', 'node_default': 0.05, 'unit': 'ratio',
-        'advice': ('Supported: 0.05 (node default) — the largest share of the unsettled '
-                   'amount the node accepts as blockchain fee when settling below Max Unsettled.'),
+        'reason': ('the largest share of the unsettled amount the node accepts as blockchain '
+                   'fee when settling below Max Unsettled'),
     },
 }
 
@@ -12727,10 +12777,12 @@ def _is_bare_number(value):
 def _node_config_inspect(node_url):
     """Read one node's user config. Read-only.
 
-    Returns {'ok', 'error', 'invoice_bare', 'obsolete', 'advisories', 'values'}.
-    'values' holds the flattened user config so callers need not fetch it again."""
+    Returns {'ok', 'error', 'invoice_bare', 'obsolete', 'enforced', 'advisories', 'values'}.
+    'enforced' maps a NODE_CONFIG_ENFORCED key to its value when that differs
+    from the node default. 'values' holds the flattened user config so callers
+    need not fetch it again."""
     result = {'ok': False, 'error': '', 'invoice_bare': None, 'obsolete': {},
-              'advisories': [], 'values': {}}
+              'enforced': {}, 'advisories': [], 'values': {}}
     try:
         resp = requests.get(f'{node_url}/config/user',
                             headers=MetricsCollector.get_tequilapi_headers(), timeout=5)
@@ -12770,7 +12822,7 @@ def _node_config_inspect(node_url):
         if key in values:
             result['obsolete'][key] = values[key]
 
-    for key, meta in NODE_CONFIG_WATCHED.items():
+    for key, meta in NODE_CONFIG_ENFORCED.items():
         if key not in values:
             continue
         try:
@@ -12778,10 +12830,7 @@ def _node_config_inspect(node_url):
         except (TypeError, ValueError):
             differs = True
         if differs:
-            result['advisories'].append({
-                'key': key, 'label': meta['label'], 'value': str(values[key]),
-                'restorable': True, 'advice': meta['advice'],
-            })
+            result['enforced'][key] = values[key]
 
     thr_key = 'payments.zero-stake-unsettled-amount'
     if thr_key in values:
@@ -12864,6 +12913,7 @@ def _node_config_run(cleanup=True):
             insp = _node_config_inspect(url)
             if cleanup and insp['ok']:
                 to_remove = dict(insp['obsolete'])
+                to_remove.update(insp['enforced'])
                 if insp['invoice_bare'] is not None:
                     to_remove[NODE_CONFIG_INVOICE_KEY] = insp['invoice_bare']
                 if to_remove:
@@ -12878,14 +12928,20 @@ def _node_config_run(cleanup=True):
                     else:
                         now = datetime.now(timezone.utc).isoformat()
                         for k, v in to_remove.items():
+                            takes_effect = k not in NODE_CONFIG_OBSOLETE
                             changes.setdefault(url, []).append({
                                 'key': k, 'value': str(v), 'removed_at': now,
-                                'restart_needed': k == NODE_CONFIG_INVOICE_KEY,
+                                'restart_needed': takes_effect,
                             })
-                            logger.warning(
-                                f'Node config ({url}): removed {k} = {v}'
-                                + (' (read by the node as nanoseconds) — takes effect at the next node start'
-                                   if k == NODE_CONFIG_INVOICE_KEY else ' (a key the node never reads)'))
+                            if k == NODE_CONFIG_INVOICE_KEY:
+                                why = ' (read by the node as nanoseconds)'
+                            elif k in NODE_CONFIG_ENFORCED:
+                                why = f' (node default {NODE_CONFIG_ENFORCED[k]["node_default"]:g} applies)'
+                            else:
+                                why = ' (a key the node never reads)'
+                            logger.warning(f'Node config ({url}): removed {k} = {v}{why}'
+                                           + (' — takes effect at the next node start'
+                                              if takes_effect else ''))
                         changed = True
                         insp = after
             insp['checked_at'] = datetime.now(timezone.utc).isoformat()
@@ -12903,6 +12959,10 @@ def _node_config_hygiene_loop():
             _node_config_run(cleanup=True)
         except Exception as e:
             logger.warning(f'Node config check failed: {e}')
+        try:
+            _refresh_node_config_health()
+        except Exception as e:
+            logger.warning(f'Node config health refresh failed: {e}')
         all_ok = bool(_node_config_state) and all(v.get('ok') for v in _node_config_state.values())
         time.sleep(NODE_CONFIG_RECHECK_SECS if all_ok else 60)
 
@@ -12916,7 +12976,11 @@ def _node_config_health():
 
 def _node_config_health_locked():
     sub = {'name': 'NodeConfig', 'title': 'Node Payment Config', 'status': 'ok',
-           'checks': [], 'recommendations': [], 'fixable': False}
+           'checks': [], 'recommendations': [], 'fixable': False,
+           # v1.4.45: shown instead of the generic report-only line, which speaks of
+           # a command to run — there is none here.
+           'report_note': ('Reports only — the toolkit keeps the payment defaults itself; '
+                           'when to restart the node is your call.')}
     multi = len(NODE_API_URLS) > 1
     changes = _node_config_load_changes()
     changes_dirty = False
@@ -12950,11 +13014,22 @@ def _node_config_health_locked():
                     changes_dirty = True        # took effect — drop the record
                     continue
                 kept.append(rec)
-                sub['checks'].append({
-                    'name': f'Invoice frequency{tag}', 'status': 'warning',
-                    'detail': (f'removed "{rec["value"]}" (read by the node as {rec["value"]} nanoseconds) — '
-                               f'takes effect at the next node start')})
-                statuses.append('warning')
+                if rec['key'] == NODE_CONFIG_INVOICE_KEY:
+                    # The bad value is still active in the running node and it costs
+                    # payments, hence a warning rather than information.
+                    sub['checks'].append({
+                        'name': f'Invoice frequency{tag}', 'status': 'warning',
+                        'detail': (f'removed "{rec["value"]}" (read by the node as {rec["value"]} nanoseconds) — '
+                                   f'takes effect at the next node start')})
+                    statuses.append('warning')
+                else:
+                    meta = NODE_CONFIG_ENFORCED.get(rec['key'], {})
+                    sub['checks'].append({
+                        'name': f'{meta.get("label", rec["key"])}{tag}', 'status': 'info',
+                        'detail': (f'was {rec["value"]}, set back to the node default '
+                                   f'{meta.get("node_default", 0):g} — {meta.get("reason", "")}. '
+                                   f'Takes effect at the next node start')})
+                    statuses.append('info')
             else:
                 if (now - removed_at).total_seconds() > NODE_CONFIG_OBSOLETE_SHOWN_SECS:
                     changes_dirty = True
@@ -12980,7 +13055,7 @@ def _node_config_health_locked():
             'for the removal to take effect. The toolkit does not restart the node.')
     if any(insp.get('advisories') for insp in _node_config_state.values()):
         sub['recommendations'].append(
-            'Values other than the node default can be restored in Node Config (Node Status → ⚙).')
+            'Details and a restore button are in Node Config (Node Status → ⚙).')
 
     if changes_dirty:
         _node_config_save_changes(changes)
@@ -12992,16 +13067,19 @@ def _node_config_health_locked():
     return sub
 
 
-def _with_node_config_health(health):
-    """Append the NodeConfig entry to a system_health.scan_all() result and
-    recompute the overall status the same way scan_all() does."""
+def _node_config_entry():
     try:
-        entry = _node_config_health()
+        return _node_config_health()
     except Exception as e:
         logger.warning(f'Node config health entry failed: {e}')
-        entry = {'name': 'NodeConfig', 'title': 'Node Payment Config', 'status': 'warning',
-                 'checks': [{'name': 'Node config', 'status': 'warning', 'detail': str(e)[:80]}],
-                 'recommendations': [], 'fixable': False}
+        return {'name': 'NodeConfig', 'title': 'Node Payment Config', 'status': 'warning',
+                'checks': [{'name': 'Node config', 'status': 'warning', 'detail': str(e)[:80]}],
+                'recommendations': [], 'fixable': False}
+
+
+def _apply_node_config_entry(health, entry):
+    """Put entry into a health result in place and recompute the overall status
+    the same way scan_all() does."""
     subs = [s for s in (health.get('subsystems') or []) if s.get('name') != 'NodeConfig']
     subs.append(entry)
     health['subsystems'] = subs
@@ -13009,6 +13087,29 @@ def _with_node_config_health(health):
     health['overall'] = ('critical' if 'critical' in statuses
                          else 'warning' if 'warning' in statuses else 'ok')
     return health
+
+
+def _with_node_config_health(health):
+    """Append the NodeConfig entry to a system_health.scan_all() result."""
+    return _apply_node_config_entry(health, _node_config_entry())
+
+
+def _refresh_node_config_health():
+    """Update the NodeConfig entry in the health already on screen. v1.4.45.
+
+    The full health scan runs on the slow tier, every ten minutes, and the first
+    one at startup comes before the first config check — so the card read "not
+    checked yet" for up to ten minutes after every toolkit start. The entry is
+    cheap to rebuild, so it is refreshed after each check instead of waiting."""
+    entry = _node_config_entry()
+    with metrics_lock:
+        targets = {}
+        for h in (MetricsCollector._health_cache, _tier_slow_cache.get('systemHealth'),
+                  metrics_cache.get('systemHealth')):
+            if isinstance(h, dict) and 'subsystems' in h:
+                targets[id(h)] = h
+        for h in targets.values():
+            _apply_node_config_entry(h, entry)
 
 
 @app.route('/node/config/current', methods=['GET'])
@@ -13182,14 +13283,14 @@ def reset_node_config():
 def restore_node_config_default():
     """Remove one payment key from the node's user config so the node falls back
     to its own default. v1.4.44. Only for keys the toolkit reports on but does
-    not set (NODE_CONFIG_WATCHED, invoice-frequency). Body: {key}.
+    not set (NODE_CONFIG_ENFORCED, invoice-frequency). Body: {key}.
 
     Goes through TequilAPI with a null value, the node's own removal path, and
     reads the config back before reporting success. Does not restart the node."""
     try:
         data = request.get_json() or {}
         key = str(data.get('key', '')).strip().lower()
-        allowed = set(NODE_CONFIG_WATCHED) | {NODE_CONFIG_INVOICE_KEY}
+        allowed = set(NODE_CONFIG_ENFORCED) | {NODE_CONFIG_INVOICE_KEY}
         if key not in allowed:
             return jsonify({'success': False,
                             'error': f'Unknown key: {key}. Allowed: {sorted(allowed)}'}), 400
@@ -13203,7 +13304,10 @@ def restore_node_config_default():
         with _node_config_lock:
             after['checked_at'] = datetime.now(timezone.utc).isoformat()
             _node_config_state[NODE_API_URL] = after
-        MetricsCollector._health_last_scan = 0
+        try:
+            _refresh_node_config_health()
+        except Exception as e:
+            logger.warning(f'Node config health refresh failed: {e}')
         if not ok:
             logger.warning(f'Node config: restore default for {key} failed — {err}')
             return jsonify({'success': False, 'error': err}), 500
