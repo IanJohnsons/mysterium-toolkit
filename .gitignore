@@ -51,9 +51,3 @@ Thumbs.db
 # ── Keep config/ dir but not its contents ───────────────────────────────────
 !config/.gitkeep
 !config/nodes.json.example
-
-# ── Local working files — never in the repo ───────────────────────────────────
-START.md
-CONTEXT.md
-CLAUDE.md
-PROTOCOL.md
