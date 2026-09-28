@@ -1009,10 +1009,32 @@ class ServiceWatchdog:
             parts = out_t.strip().split()
             if len(parts) >= 3:
                 _since = f'{parts[1]} {parts[2]}'
-        rc_j, out_j, _ = _run(
-            ['journalctl', '-u', 'mysterium-node', '--since', _since, '--no-pager'],
+        # v1.4.47: let journalctl filter. The node logs at debug level, so the
+        # journal since start was 670,494 lines / 209 MB on a laptop after two
+        # days and took 14.45 s to read — past the 15 s timeout once Python had
+        # to take it in as well. _run then returned a timeout, the condition
+        # below was false, and both this check and the restart-loop check showed
+        # green on a node with 53 identity-lock errors. With --grep the same
+        # read was 55 lines in 4.6 s. A journalctl built without pattern
+        # matching says so and gets the unfiltered read; a read that still
+        # fails is reported instead of passing as ok.
+        _jcmd = ['journalctl', '-u', 'mysterium-node', '--since', _since, '--no-pager']
+        rc_j, out_j, err_j = _run(
+            _jcmd + ['--grep', 'authentication needed|Starting Mysterium Node|address already in use'],
             timeout=15)
-        if rc_j == 0 and out_j:
+        if rc_j != 0 and 'pattern matching' in (err_j or '').lower():
+            rc_j, out_j, err_j = _run(_jcmd, timeout=15)
+        # journalctl --grep exits 1 with nothing on stderr when no line matched.
+        _journal_ok = rc_j == 0 or (rc_j == 1 and not (err_j or '').strip())
+        if not _journal_ok:
+            if result['status'] == 'ok':
+                result['status'] = 'warning'
+            result['checks'].append({
+                'name': 'Node journal', 'status': 'warning',
+                'detail': ('could not be read (' + ('timeout' if rc_j == -2 else (err_j or f'exit {rc_j}'))[:60]
+                           + ') — restart-loop and identity-lock checks skipped'),
+            })
+        if _journal_ok and out_j:
             starts = out_j.count('Starting Mysterium Node')
             in_use = 'address already in use' in out_j
             if starts >= 10:
@@ -1072,30 +1094,21 @@ class ServiceWatchdog:
                 except Exception:
                     pass
 
-                # What this error actually is, read from the node source (1.39.6):
-                #
-                #   core/quality/morqa_transport.go:247
-                #     func sessionTokensToMetricsEvent(ctx sessionTokensContext)
-                #             (string, *metrics.Event) {
-                #         return ctx.Consumer, &metrics.Event{
-                #             IsProvider: false,
-                #
-                # Every other event in that file picks the signer with
-                # `if ctx.IsProvider { sender = ctx.Provider }`. This one returns
-                # the CONSUMER address unconditionally, so the node asks its own
-                # keystore to sign as the customer — a key it has never held.
-                # identity/keystore_filesystem.go:223 then returns ErrLocked, and
-                # that surfaces as "authentication needed: password or unlock".
-                #
-                # Consequences, stated precisely because the earlier wording was
-                # wrong: proposals are NOT affected. They go through
-                # proposalEventToMetricsEvent with IsProvider true and the node's
-                # own ProviderID, and are signed correctly. What is lost is the
-                # per-session token metric to the quality oracle.
+                # Where this error comes from — mysteriumnetwork/node issue #6220,
+                # with the fix proposed in PR #6221 (both from Ian, September 2026):
+                # the provider-side trace stage "Session validation" in
+                # core/service/session_manager.go lacks the "Provider" prefix, so
+                # its metrics event is attributed to the consumer, and
+                # handleNATStatusForPublicIP in cmd/di.go publishes an event with an
+                # empty identity at start. In both cases the node asks its keystore
+                # to sign as an address it does not hold, identity/keystore returns
+                # ErrLocked, and that surfaces as "authentication needed: password
+                # or unlock". Earlier comments here named
+                # sessionTokensToMetricsEvent; that path cannot fire on a provider.
                 #
                 # Nothing on the operator's machine can fix this, the passphrase
-                # least of all. It scales with traffic — one per session-token
-                # report — which is why a busy node logs more of them.
+                # least of all. It scales with traffic, which is why a busy node
+                # logs more of them.
                 _detail = (f'{locked}x since startup — originates in the node, '
                            f'not in this machine\'s configuration')
                 if result['status'] == 'ok':
@@ -1103,13 +1116,8 @@ class ServiceWatchdog:
                 result['checks'].append({
                     'name': 'Identity lock', 'status': 'warning', 'detail': _detail,
                 })
-                # Earlier wording called this a "known bug" and named a specific
-                # line as the cause. Neither was established: no upstream report
-                # exists, and the node does not log which owner address failed,
-                # so the event behind it cannot be identified from the outside.
-                # What is certain is the mechanism — the node asked its keystore
-                # to sign as an address it does not hold — and that no local
-                # setting affects it.
+                # The dashboard wording below is deliberately unchanged: it states
+                # the mechanism and that no local setting affects it, which holds.
                 result['recommendations'].append(
                     'No action needed on this machine. The node asked its keystore to '
                     'sign metrics as an address it does not hold; a passphrase or '

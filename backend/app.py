@@ -1082,7 +1082,12 @@ CORS(app)
 # Metrics storage
 metrics_cache = {}
 metrics_lock = Lock()
-metrics_history = deque(maxlen=200)  # Reduced from 1000 — less memory
+# v1.4.47: a small summary per cycle, not a deep copy of everything. The full
+# copies (200 of them, one every UPDATE_INTERVAL, made while holding
+# metrics_lock) were read by nothing but /history, which no client calls, and on
+# a busy Pi held 2.0 GB and stalled every request waiting on the lock.
+metrics_history = deque(maxlen=200)
+SESSION_ITEMS_IN_POLL = 200
 last_update_time = time.time()
 node_status = {'connected': False, 'error': None}
 peak_clients = 0  # Persistent peak tracker — highest connected count seen
@@ -6660,6 +6665,21 @@ class MetricsCollector:
         result.update(fast)
         result.update(_tier_medium_cache)
         result.update(_tier_slow_cache)
+        # v1.4.47: nodeStatus comes from the slow tier (every ten minutes), so its
+        # uptime was a string up to ten minutes old — the fleet showed "Uptime 2m"
+        # for a node up seven. The node's start time is kept fresh by
+        # _node_process_start_iso() (healthcheck, 30 s cache), so the uptime is
+        # recomputed from it on every cycle. Only from a live healthcheck answer:
+        # a cached or fallback start time is not good enough to overwrite with.
+        try:
+            _ns = result.get('nodeStatus')
+            _st = _node_start_state.get('start')
+            if (isinstance(_ns, dict) and _ns.get('status') == 'online' and _st is not None
+                    and str(_node_start_state.get('source', '')) in ('healthcheck_pid', 'healthcheck_uptime')):
+                _up = max(0, int((datetime.now(timezone.utc) - _st).total_seconds()))
+                result['nodeStatus'] = {**_ns, 'uptime': f'{_up // 3600}h{(_up % 3600) // 60}m{_up % 60}s'}
+        except Exception as _up_e:
+            logger.debug(f'Uptime refresh skipped: {_up_e}')
         # Ensure nodeQuality always present with safe defaults
         if 'nodeQuality' not in result:
             result['nodeQuality'] = {
@@ -6671,6 +6691,27 @@ class MetricsCollector:
                 'packet_loss_net': None,
                 'services': [], 'error': 'Not yet fetched',
             }
+        # v1.4.47: the poll carries recent sessions, not the node's whole history.
+        # sessions.items held every session the node still reports — on one Pi
+        # 13.9 MB of JSON in a 14 MB payload, sent on every dashboard poll,
+        # rendered row by row in History, and deep-copied every three seconds into
+        # a 200-deep history under the lock every request waits on: 2.0 GB of
+        # memory and a login page that hung until the service was restarted.
+        # Active and just-closed sessions are always kept; of the rest the newest
+        # SESSION_ITEMS_IN_POLL. Everything older is in the archive below History,
+        # which pages through SessionDB and shows what is not in this list.
+        try:
+            _ss = result.get('sessions')
+            _items = _ss.get('items') if isinstance(_ss, dict) else None
+            if isinstance(_items, list) and len(_items) > SESSION_ITEMS_IN_POLL:
+                _keep = [x for x in _items if x.get('is_active') or x.get('recently_closed')]
+                _rest = [x for x in _items if not (x.get('is_active') or x.get('recently_closed'))]
+                _rest.sort(key=lambda x: str(x.get('started') or x.get('created_at') or ''), reverse=True)
+                _keep += _rest[:SESSION_ITEMS_IN_POLL]
+                result['sessions'] = {**_ss, 'items': _keep, 'items_in_store': len(_items),
+                                      'items_truncated': len(_items) - len(_keep)}
+        except Exception as _cap_e:
+            logger.warning(f'Session list cap skipped: {_cap_e}')
         result['logs'] = MetricsCollector._get_logs_cached()
         result['nodeConnected'] = node_status['connected']
         return result
@@ -7058,6 +7099,15 @@ def _collect_single_node(node_entry):
         result['error'] = str(e)[:60]
         return result
 
+    # Start of the node process, for the orphan rule below. Unknown means no
+    # session is marked orphaned — hiding a live session is the worse mistake.
+    _fb_node_start = None
+    try:
+        _fb_node_start = datetime.now(timezone.utc) - timedelta(
+            seconds=_parse_go_duration(result.get('uptime')))
+    except (ValueError, TypeError):
+        pass
+
     # Identity + Earnings
     earnings = {'balance': 0, 'unsettled': 0, 'lifetime': 0, 'wallet_address': ''}
     try:
@@ -7107,16 +7157,22 @@ def _collect_single_node(node_entry):
                     b_in      = int(s.get('bytes_received', 0))
                     b_out     = int(s.get('bytes_sent', 0))
                     data_mb   = (b_in + b_out) / (1024 * 1024)
-                    # Ghost filter: session marked running but 0 bytes + 0 tokens + >4h old
-                    if is_active and b_in == 0 and b_out == 0 and tokens == 0:
+                    # v1.4.47: orphan rule, the same one the local path uses since
+                    # v1.4.38. A session is left behind only when it started before
+                    # the node process did — a provider session lives in the node's
+                    # memory and cannot outlive it. The earlier rule here ("New, 0
+                    # bytes, 0 tokens, older than 4 hours") is the v1.3.12 rule that
+                    # decisions.md rejects: the node writes bytes and tokens only at
+                    # session close, so live multi-day B2B sessions look exactly like
+                    # that and were hidden.
+                    if is_active and _fb_node_start is not None:
                         started_raw = s.get('created_at', s.get('started_at', ''))
                         if started_raw:
                             try:
-                                from datetime import timezone as _tz
                                 st = datetime.fromisoformat(started_raw.replace('Z', '+00:00'))
                                 if st.tzinfo is None:
-                                    st = st.replace(tzinfo=_tz.utc)
-                                if (datetime.now(_tz.utc) - st).total_seconds() > 14400:
+                                    st = st.replace(tzinfo=timezone.utc)
+                                if st < _fb_node_start:
                                     is_active = False
                             except (ValueError, TypeError):
                                 pass
@@ -7334,10 +7390,20 @@ def background_collector():
 
         try:
             metrics = MetricsCollector.collect_all()
+            _ss = metrics.get('sessions') if isinstance(metrics.get('sessions'), dict) else {}
+            _summary = copy.deepcopy({
+                'timestamp':   metrics.get('timestamp'),
+                'resources':   metrics.get('resources'),
+                'performance': metrics.get('performance'),
+                'sessions_active': _ss.get('active'),
+                'clients':     metrics.get('clients'),
+                'nodeStatus':  {k: (metrics.get('nodeStatus') or {}).get(k)
+                                for k in ('status', 'uptime', 'version')},
+            })
             with metrics_lock:
                 metrics_cache.clear()
                 metrics_cache.update(metrics)
-                metrics_history.append(copy.deepcopy(metrics))
+                metrics_history.append(_summary)
             logger.debug(f"Metrics collected at {metrics['timestamp']}")
         except Exception as e:
             logger.error(f"Collection error: {e}")
@@ -7808,6 +7874,50 @@ def check_for_update():
     return jsonify(result), 200
 
 
+_node_exec_cache = {'t': 0.0, 'val': None}
+
+
+def _node_custom_build():
+    """The node binary systemd starts, when it is not the packaged one. v1.4.47.
+
+    Returns {'binary': path} for a unit whose ExecStart points anywhere but
+    /usr/bin/myst (a drop-in with a self-built binary, as on Ian's laptop and
+    VPS), else None — also when there is no systemd unit to ask (Docker, a node
+    started by hand), since then nothing is known either way. Installing the
+    official .deb on such a node replaces /usr/bin/myst, which is not what runs:
+    the node restarts on the same custom binary and the update notice never
+    clears. Cached five minutes."""
+    now = time.time()
+    if now - _node_exec_cache['t'] < 300:
+        return _node_exec_cache['val']
+    val = None
+    try:
+        r = subprocess.run(['systemctl', 'show', 'mysterium-node', '-p', 'ExecStart', '--value'],
+                           capture_output=True, text=True, timeout=5)
+        import re as _re
+        m = _re.search(r'path=([^ ;]+)', r.stdout or '')
+        if r.returncode == 0 and m and m.group(1) not in ('/usr/bin/myst',):
+            val = {'binary': m.group(1)}
+    except Exception as e:
+        logger.debug(f'Node ExecStart not readable: {e}')
+    _node_exec_cache.update(t=now, val=val)
+    return val
+
+
+def _with_custom_build(result):
+    """Mark an update-check result for a node running a custom binary."""
+    cb = _node_custom_build()
+    result['custom_build'] = cb
+    if cb:
+        result['update_available'] = False
+        result['pending_release'] = False
+        result['custom_build_note'] = (
+            f'This node runs {cb["binary"]}, not the packaged /usr/bin/myst. Installing the '
+            f'official release would replace /usr/bin/myst only; the node would restart on the '
+            f'same binary. Update that build the way it was installed.')
+    return result
+
+
 @app.route('/api/node-update-check', methods=['GET'])
 def check_node_update():
     """Check if a newer Mysterium node version is available on GitHub.
@@ -7843,7 +7953,7 @@ def check_node_update():
             differs = latest_c != live_n
             fresh['update_available'] = differs and fresh.get('_assets_ready') is not False
             fresh['pending_release'] = differs and fresh.get('_assets_ready') is False
-        return jsonify(fresh), 200
+        return jsonify(_with_custom_build(fresh)), 200
 
     latest = None
     try:
@@ -7941,7 +8051,7 @@ def check_node_update():
 
     check_node_update._cache      = result
     check_node_update._cache_time = now
-    return jsonify(result), 200
+    return jsonify(_with_custom_build(dict(result))), 200
 
 
 @app.route('/api/node-update', methods=['POST'])
@@ -7979,6 +8089,16 @@ def node_update():
     import re as _re
     if not _re.match(r'^\d+\.\d+\.\d+$', version):
         return jsonify({'ok': False, 'error': 'Invalid version'}), 400
+
+    # v1.4.47: never overwrite around a custom build. The .deb replaces
+    # /usr/bin/myst; a unit that starts another binary keeps running that one, so
+    # the install would only restart the node and change nothing it runs.
+    cb = _node_custom_build()
+    if cb:
+        return jsonify({'ok': False, 'custom_build': cb,
+                        'error': (f'This node runs {cb["binary"]}, not the packaged /usr/bin/myst — '
+                                  f'installing the official release would not change what runs. '
+                                  f'Nothing was installed.')}), 409
 
     script = Path(__file__).parent.parent / 'bin' / 'node_update.sh'
     if not script.exists():
@@ -10193,7 +10313,7 @@ def get_myst_price():
 @app.route('/history', methods=['GET'])
 @require_auth
 def get_history():
-    """Historical metrics"""
+    """Recent per-cycle summaries (v1.4.47: summaries, not full metrics copies)."""
     limit = request.args.get('limit', 100, type=int)
     limit = min(max(limit, 1), 1000)  # Clamp between 1-1000
     with metrics_lock:
@@ -13093,9 +13213,9 @@ def _node_config_entry():
 
 
 def _apply_node_config_entry(health, entry):
-    """Put entry into a health result in place and recompute the overall status
-    the same way scan_all() does."""
-    subs = [s for s in (health.get('subsystems') or []) if s.get('name') != 'NodeConfig']
+    """Put entry into a health result in place (replacing any entry with the same
+    name) and recompute the overall status the same way scan_all() does."""
+    subs = [s for s in (health.get('subsystems') or []) if s.get('name') != entry.get('name')]
     subs.append(entry)
     health['subsystems'] = subs
     statuses = [s.get('status') for s in subs]
@@ -13104,8 +13224,72 @@ def _apply_node_config_entry(health, entry):
     return health
 
 
+def _toolkit_health():
+    """System Health entry for the toolkit itself. v1.4.47. Report-only.
+
+    Frontend build: a dist/ older than VERSION means the last update pulled new
+    code and did not finish building it. One operator's Pi served an August
+    bundle against a September backend for a month; the only trace was a file
+    date nobody looks at. This card is rendered by any bundle, old ones included,
+    because System Health lists subsystems generically.
+
+    Data retention: off by default since v1.3.3, deliberately, and invisible —
+    a Pi that never opens the Data Manager keeps everything, and one SD card
+    had filled before anyone knew. Shown as information with the database size."""
+    sub = {'name': 'Toolkit', 'title': 'Toolkit', 'status': 'ok', 'checks': [],
+           'recommendations': [], 'fixable': False,
+           'report_note': 'Reports only — about the toolkit itself, not the machine.'}
+    statuses = []
+    try:
+        ver = _toolkit_root / 'VERSION'
+        idx = _dist_dir / 'index.html'
+        if setup_config.get('setup_mode') == 'lightweight':
+            pass
+        elif not idx.exists():
+            sub['checks'].append({'name': 'Frontend build', 'status': 'warning',
+                                  'detail': 'no dist/ — the dashboard has no built frontend'})
+            sub['recommendations'].append('Run ./update.sh and read its "Rebuilding frontend" output.')
+            statuses.append('warning')
+        elif ver.exists() and idx.stat().st_mtime < ver.stat().st_mtime - 120:
+            built = datetime.fromtimestamp(idx.stat().st_mtime).strftime('%Y-%m-%d %H:%M')
+            sub['checks'].append({'name': 'Frontend build', 'status': 'warning',
+                                  'detail': (f'dist/ built {built}, older than v{APP_VERSION} — the last '
+                                             f'update did not finish building the dashboard')})
+            sub['recommendations'].append('Run ./update.sh and read its "Rebuilding frontend" output; '
+                                          'the npm log is in logs/npm_install.log.')
+            statuses.append('warning')
+        else:
+            sub['checks'].append({'name': 'Frontend build', 'status': 'ok',
+                                  'detail': f'current with v{APP_VERSION}'})
+    except Exception as e:
+        sub['checks'].append({'name': 'Frontend build', 'status': 'warning',
+                              'detail': f'could not be checked: {str(e)[:60]}'})
+        statuses.append('warning')
+
+    try:
+        if not _get_user_retention_config():
+            db_dir = _toolkit_root / 'backend' / 'databases'
+            size_mb = sum(f.stat().st_size for f in db_dir.glob('*.db*') if f.is_file()) / 1e6 \
+                if db_dir.exists() else 0.0
+            sub['checks'].append({'name': 'Data retention', 'status': 'info',
+                                  'detail': (f'off — all history is kept ({size_mb:.0f} MB so far). '
+                                             f'Set it in Data Manager if storage is limited.')})
+            statuses.append('info')
+        else:
+            sub['checks'].append({'name': 'Data retention', 'status': 'ok', 'detail': 'set'})
+    except Exception as e:
+        logger.debug(f'Retention check skipped: {e}')
+
+    sub['status'] = 'warning' if 'warning' in statuses else 'info' if 'info' in statuses else 'ok'
+    return sub
+
+
 def _with_node_config_health(health):
-    """Append the NodeConfig entry to a system_health.scan_all() result."""
+    """Append the NodeConfig and Toolkit entries to a system_health.scan_all() result."""
+    try:
+        _apply_node_config_entry(health, _toolkit_health())
+    except Exception as e:
+        logger.warning(f'Toolkit health entry failed: {e}')
     return _apply_node_config_entry(health, _node_config_entry())
 
 
@@ -13130,22 +13314,43 @@ def _refresh_node_config_health():
 @app.route('/node/config/current', methods=['GET'])
 @require_auth
 def get_node_config():
-    """Read the current payment config value from the TOML file, plus the key
-    metadata, the presets and any advisories about other payment keys."""
+    """Read the current payment config value, plus the key metadata, the presets
+    and any advisories about other payment keys.
+
+    v1.4.47: the value comes from the node itself (TequilAPI /config/user) and
+    only falls back to the TOML file when the node does not answer. The TOML
+    path is written by the node with mode 0700, so the toolkit user often cannot
+    read it — the parser then returned nothing, and the panel showed the node
+    default (5.0) on a node set to 12.5, with nothing to say it was guessing.
+    Where neither source answers, 'current_error' says so."""
     try:
-        toml_data = _parse_toml_simple(NODE_CONFIG_TOML) if NODE_CONFIG_TOML.exists() else {}
+        insp = _node_config_inspect(NODE_API_URL)
+        toml_data = {}
+        source = 'node'
+        if not insp['ok']:
+            source = 'toml'
+            toml_data = _parse_toml_simple(NODE_CONFIG_TOML) if NODE_CONFIG_TOML.exists() else {}
 
         current = {}
         for key, meta in NODE_CONFIG_KEYS.items():
-            # Try section.key first, then bare key
-            toml_lookup = f"{meta['toml_section']}.{meta['toml_key']}"
-            raw = toml_data.get(toml_lookup) or toml_data.get(meta['toml_key'])
+            if insp['ok']:
+                raw = insp['values'].get(key)
+            else:
+                toml_lookup = f"{meta['toml_section']}.{meta['toml_key']}"
+                raw = toml_data.get(toml_lookup) or toml_data.get(meta['toml_key'])
 
             if raw is not None:
-                current[key] = raw
+                current[key] = str(raw)
             else:
                 current[key] = meta['node_default']
                 current[f'{key}.__source'] = 'default'
+
+        current_error = ''
+        if not insp['ok'] and not toml_data:
+            current_error = (f'node API: {insp["error"]}; config file '
+                             + ('not readable' if NODE_CONFIG_TOML.exists() else 'not found')
+                             + ' — values shown are the node defaults, not what the node holds')
+            logger.warning(f'Node config: {current_error}')
 
         # Ship the key metadata with the values. Every client kept its own copy
         # of this list, and the CLI's predates v1.3.3: it still asked for
@@ -13166,9 +13371,6 @@ def get_node_config():
             }
             for key, meta in NODE_CONFIG_KEYS.items()
         }
-        # v1.4.44: what the node itself holds, beyond the key this panel sets.
-        # Read live so the panel reflects a restore the moment it is done.
-        insp = _node_config_inspect(NODE_API_URL)
         return jsonify({
             'success': True,
             'current': current,
@@ -13176,6 +13378,8 @@ def get_node_config():
             'presets': NODE_CONFIG_PRESETS,
             'advisories': insp['advisories'],
             'advisories_error': insp['error'],
+            'current_source': source,
+            'current_error': current_error,
             'toml_exists': NODE_CONFIG_TOML.exists(),
             'toml_path': str(NODE_CONFIG_TOML),
         }), 200

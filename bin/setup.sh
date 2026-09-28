@@ -221,7 +221,7 @@ NC='\033[0m'
 # --tls-only: run just the TLS step (used by start.sh → Security & Upgrades)
 if [ "${1:-}" = "--tls-only" ]; then
     cd "$TOOLKIT_DIR" || exit 1
-    _REAL_USER="${SUDO_USER:-$USER}"
+    _REAL_USER="${SUDO_USER:-${USER:-$(id -un)}}"
     DASHBOARD_PORT=$(grep -oP '(?<=DASHBOARD_PORT=)\d+' "$TOOLKIT_DIR/.env" 2>/dev/null || echo "5000")
     _setup_tls
     exit 0
@@ -611,12 +611,19 @@ if [ -d "venv" ] && [ -f ".env" ]; then
 <body><div id="root"></div><script type="module" src="/frontend/main.jsx"></script></body>
 </html>
 HTMLEOF
-                npm install --legacy-peer-deps > /dev/null 2>&1
+                # v1.4.47: npm output was sent to /dev/null (the failure class fixed
+                # in update.sh in v1.4.35), and success was judged by dist/index.html
+                # existing — which an old build satisfies, so a failed build next
+                # to an old dist/ reported "Frontend rebuilt".
+                mkdir -p logs
+                npm install --legacy-peer-deps > logs/npm_install.log 2>&1
+                _NPM_RC=$?
                 BUILD_OUT=$(npm run build 2>&1)
-                if [ -f "dist/index.html" ]; then
+                if [ -f "dist/index.html" ] && echo "$BUILD_OUT" | grep -q "built in"; then
                     echo -e "  ${GREEN}✓ Frontend rebuilt → dist/${NC}"
                 else
                     echo -e "  ${YELLOW}⚠ Frontend build failed — keeping previous dist/${NC}"
+                    [ "$_NPM_RC" -ne 0 ] && echo -e "  ${DIM}npm install exited $_NPM_RC — log: $(pwd)/logs/npm_install.log${NC}"
                     echo "$BUILD_OUT" | tail -5
                 fi
                 rm -rf node_modules
@@ -881,7 +888,7 @@ echo "Step 7: Building frontend for production..."
 mkdir -p logs config
 # Fix ownership so the real user (not root) can write to logs/
 # This prevents the systemd autostart service from failing with Permission denied
-_SETUP_REAL_USER="${SUDO_USER:-$USER}"
+_SETUP_REAL_USER="${SUDO_USER:-${USER:-$(id -un)}}"
 if [ "$_SETUP_REAL_USER" != "root" ]; then
     chown -R "$_SETUP_REAL_USER:" logs/ 2>/dev/null || true
 fi
@@ -1808,7 +1815,7 @@ _SERVICE_FILE="/etc/systemd/system/${_SERVICE_NAME}.service"
 if [ -f "$_SERVICE_FILE" ]; then
     echo "Step 12a: Updating systemd service to new directory..."
     _VENV_PYTHON="$TOOLKIT_DIR/venv/bin/python"
-    _REAL_USER="${SUDO_USER:-$USER}"
+    _REAL_USER="${SUDO_USER:-${USER:-$(id -un)}}"
     _REAL_HOME=$(getent passwd "$_REAL_USER" | cut -d: -f6)
     mkdir -p "$TOOLKIT_DIR/logs"
     chown -R "$_REAL_USER:" "$TOOLKIT_DIR/logs" 2>/dev/null || true

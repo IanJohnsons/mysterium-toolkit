@@ -4,7 +4,7 @@
 # Sets up the toolkit as a production service on a VPS/server:
 #   - Builds the frontend (Vite → static files)
 #   - Creates a systemd service for the backend
-#   - Configures nginx as reverse proxy (optional — see the note below)
+#   - Configures nginx as reverse proxy only with --with-nginx (off by default — see below)
 #
 # NOTE (v1.4.4): the backend now serves itself through cheroot, a production WSGI
 # server with a thread pool, keep-alive and built-in TLS. A reverse proxy is no
@@ -15,7 +15,7 @@
 #
 # Usage:
 #   bash scripts/deploy_production.sh
-#   bash scripts/deploy_production.sh --port 8080 --no-nginx
+#   bash scripts/deploy_production.sh --port 8080 --with-nginx
 #
 # Author: Ian Johnsons
 # License: AGPL-3.0 (see LICENSE)

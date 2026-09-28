@@ -23,6 +23,9 @@ backend/databases/*.jsonl
 config/earnings_history.json
 config/uptime_log.json
 config/node_identity.txt
+# Written by the backend (v1.4.44) and update.sh (v1.4.47) on each install
+config/node_config_changes.json
+config/.sudoers.sha256
 
 # ── Runtime ──────────────────────────────────────────────────────────────────
 logs/

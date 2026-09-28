@@ -3772,6 +3772,11 @@ const MysteriumDashboard = () => {
                   </div>
                   {archiveSearch.trim() ? null : (metrics.sessions.items && metrics.sessions.items.length > 0 ? (
                     <>
+                      {metrics.sessions.items_truncated > 0 && (
+                        <div className="text-[11px] text-slate-500 mb-2">
+                          Latest {metrics.sessions.items.length} of {metrics.sessions.items_in_store} sessions the node reports — older ones are in the archive below.
+                        </div>
+                      )}
                       {/* Mobile stacked view */}
                       <div className="sm:hidden space-y-2">
                         <MobileSortBar state={historySort} setState={setHistorySort} keys={[
@@ -6892,6 +6897,7 @@ const NodeConfigModal = ({ backendUrl, authHeaders, onClose }) => {
   // v1.4.44: payment keys the node holds that this panel does not set.
   const [advisories, setAdvisories] = useState([]);
   const [advisoriesError, setAdvisoriesError] = useState('');
+  const [currentError, setCurrentError] = useState('');
   const [restoreResults, setRestoreResults] = useState({});
   const scrollRef = useRef(null);
 
@@ -6907,6 +6913,7 @@ const NodeConfigModal = ({ backendUrl, authHeaders, onClose }) => {
           if (data.toml_path) setTomlPath(data.toml_path);
           setAdvisories(Array.isArray(data.advisories) ? data.advisories : []);
           setAdvisoriesError(data.advisories_error || '');
+          setCurrentError(data.current_error || '');
         }
       } catch (e) {
         console.error('Config fetch failed:', e);
@@ -7105,6 +7112,9 @@ const NodeConfigModal = ({ backendUrl, authHeaders, onClose }) => {
             {/* Settings list */}
             <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
               {loading && <p className="text-xs text-slate-500 text-center py-8">Loading current values…</p>}
+              {!loading && currentError && (
+                <p className="text-[10px] text-amber-400">Current value could not be read: {currentError}</p>
+              )}
               {!loading && Object.entries(groups).map(([gk, g]) => (
                 <div key={gk}>
                   <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500 mb-2">{g.label}</p>
@@ -7407,6 +7417,13 @@ const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, 
                         ? nodeUpdate.text
                         : 'install ' + nodeUpdateInfo.latest + ' from GitHub'}
                 </button>
+              </div>
+            )}
+            {nodeUpdateInfo?.custom_build && nodeUpdateInfo?.latest && nodeUpdateInfo.latest !== nodeUpdateInfo.current && (
+              <div className="mt-0.5">
+                <span className="text-xs text-slate-500 border border-slate-700 rounded px-1.5 py-0.5" title={nodeUpdateInfo.custom_build_note || ''}>
+                  {nodeUpdateInfo.latest} released — this node runs its own build ({nodeUpdateInfo.custom_build.binary})
+                </span>
               </div>
             )}
             {nodeUpdateInfo?.pending_release && (

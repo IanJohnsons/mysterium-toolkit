@@ -27,7 +27,7 @@ echo
 # Run without outer sudo — script handles privileges internally via $SUDO.
 # On root installs (VPS) SUDO is empty. On non-root installs SUDO=sudo.
 [ "$(id -u)" -eq 0 ] && SUDO="" || SUDO="sudo"
-_REAL_USER="${SUDO_USER:-$USER}"
+_REAL_USER="${SUDO_USER:-${USER:-$(id -un)}}"
 _REAL_HOME=$(getent passwd "$_REAL_USER" | cut -d: -f6 2>/dev/null || echo "$HOME")
 
 # ── Must run from a git repo ──────────────────────────────────────────────
@@ -158,13 +158,19 @@ done
 # left them owned by root while the service ran as a normal user. SQLite could
 # not write, the database modules swallowed the error, and three databases
 # recorded nothing for six weeks without a single visible warning.
-_REAL_USER="${SUDO_USER:-$USER}"
+_REAL_USER="${SUDO_USER:-${USER:-$(id -un)}}"
 if [ "$_REAL_USER" != "root" ]; then
     # dist/ is included since v1.4.4: a sudo build or a root-run update leaves the
     # built frontend owned by root, and the next build then fails with EACCES while
     # update.sh still reports success. The stale bundle keeps being served, so new
     # UI features silently never appear.
-    for _d in "$TOOLKIT_DIR/config" "$TOOLKIT_DIR/backend" "$TOOLKIT_DIR/dist"; do
+    # v1.4.47: every tracked directory, not only the three above. Twelve files in
+    # the repository root were left root-owned after one update; the cause is still
+    # unknown, so this repairs the effect and says so. venv/ and node_modules/ are
+    # left out: they are rebuilt, not pulled.
+    for _d in "$TOOLKIT_DIR/config" "$TOOLKIT_DIR/backend" "$TOOLKIT_DIR/dist" \
+              "$TOOLKIT_DIR/bin" "$TOOLKIT_DIR/scripts" "$TOOLKIT_DIR/frontend" \
+              "$TOOLKIT_DIR/cli" "$TOOLKIT_DIR/docs" "$TOOLKIT_DIR/.build"; do
         if [ -d "$_d" ]; then
             # Looking only for root-owned files missed the case that actually
             # happened: a dist/ owned by neither root nor the service user, where
@@ -196,6 +202,23 @@ if [ "$_REAL_USER" != "root" ]; then
         fi
     done
 
+    # Files directly in the repository root (VERSION, README.md, update.sh, ...).
+    # Not recursive: the directories are handled above, and venv/ must not be walked.
+    _root_bad=$(find "$TOOLKIT_DIR" -maxdepth 1 -type f ! -user "$_REAL_USER" 2>/dev/null)
+    if [ -n "$_root_bad" ]; then
+        _n_bad=$(printf '%s\n' "$_root_bad" | wc -l)
+        _root_fix_ok=1
+        while IFS= read -r _f; do
+            [ -n "$_f" ] && { $SUDO chown "$_REAL_USER:" "$_f" 2>/dev/null || _root_fix_ok=0; }
+        done <<< "$_root_bad"
+        if [ "$_root_fix_ok" -eq 1 ]; then
+            echo -e "  ${GREEN}✓ $_n_bad file(s) in the toolkit root had another owner — corrected → $_REAL_USER${NC}"
+        else
+            echo -e "  ${YELLOW}⚠ $_n_bad file(s) in the toolkit root have another owner and could not be corrected${NC}"
+            echo -e "  ${DIM}    sudo chown $_REAL_USER: $TOOLKIT_DIR/*${NC}"
+        fi
+    fi
+
     # Verify the databases are writable now — a database the service cannot write
     # to is a silent failure, so surface it here where the operator will see it.
     _DBDIR="$TOOLKIT_DIR/backend/databases"
@@ -226,7 +249,9 @@ fi
 
 # ── New version ───────────────────────────────────────────────────────────
 NEW_VERSION=$(cat VERSION 2>/dev/null || echo "unknown")
-echo -e "  Version: ${BOLD}v${NEW_VERSION}${NC}"
+# v1.4.47: this is what was pulled, not yet what is installed — the build and
+# restart still follow, and "Update complete" at the end is the one that counts.
+echo -e "  Pulled: ${BOLD}v${NEW_VERSION}${NC} — installing"
 echo
 
 # ── Check first-time setup has been done ─────────────────────────────────
@@ -334,7 +359,13 @@ elif command -v npm &>/dev/null && [ -d ".build" ]; then
     set -e
     if [ "$_NPM_RC" -ne 0 ] && ! echo "$BUILD_OUT" | grep -q "built in"; then
         echo -e "  ${YELLOW}⚠ npm install failed (exit $_NPM_RC) — the build below could not use fresh packages${NC}"
-        grep -iE "error|SIGSEGV|EACCES|ENOSPC" "$_NPM_LOG" | tail -8 || tail -8 "$_NPM_LOG"
+        # v1.4.47: a pipeline's status is tail's, so "grep | tail || tail" never
+        # fell back and showed nothing when grep matched nothing.
+        if grep -qiE "error|SIGSEGV|EACCES|ENOSPC" "$_NPM_LOG"; then
+            grep -iE "error|SIGSEGV|EACCES|ENOSPC" "$_NPM_LOG" | tail -8
+        else
+            tail -8 "$_NPM_LOG"
+        fi
         echo -e "  ${DIM}    Full log: $TOOLKIT_DIR/$_NPM_LOG${NC}"
     fi
     if [ -f "dist/index.html" ] && echo "$BUILD_OUT" | grep -q "built in"; then
@@ -374,7 +405,7 @@ chmod +x "$TOOLKIT_DIR"/*.sh 2>/dev/null || true
 _SERVICE_FILE="/etc/systemd/system/mysterium-toolkit.service"
 if [ -f "$_SERVICE_FILE" ]; then
     echo -e "  Updating systemd service..."
-    _REAL_USER="${SUDO_USER:-$USER}"
+    _REAL_USER="${SUDO_USER:-${USER:-$(id -un)}}"
     _REAL_HOME=$(getent passwd "$_REAL_USER" | cut -d: -f6)
     _VENV_PYTHON="$TOOLKIT_DIR/venv/bin/python"
     mkdir -p "$TOOLKIT_DIR/logs"
@@ -441,7 +472,7 @@ fi
 
 # ── Sudoers update — always runs, regardless of autostart ─────────────────
 # Runs unconditionally so fail2ban and other new permissions reach all users
-_REAL_USER="${SUDO_USER:-$USER}"
+_REAL_USER="${SUDO_USER:-${USER:-$(id -un)}}"
 _SUDOERS_FILE="/etc/sudoers.d/mysterium-toolkit"
 # Write sudoers via heredoc — multi-line format required for Parrot OS and
 # other security-hardened Debian distros that reject single-line sudoers content.
@@ -516,14 +547,29 @@ ${_REAL_USER} ALL=(ALL) NOPASSWD: \
   /usr/bin/chmod 440 /etc/sudoers.d/mysterium-toolkit, \
   /usr/sbin/visudo -c -f /etc/sudoers.d/mysterium-toolkit, \
   /usr/bin/rm -f /etc/sudoers.d/mysterium-toolkit"
-_SUDOERS_CURRENT=""
+# v1.4.47: the file is root-only (440), so a non-root install could never read
+# it: the comparison saw an empty string, rewrote the file on every update and
+# asked for the sudo password each time. Root installs read it directly; the
+# others compare against a checksum of what they last wrote, kept in config/.
+_SUDOERS_STAMP="$TOOLKIT_DIR/config/.sudoers.sha256"
+_SUDOERS_NEW_SUM=$(printf '%s\n' "$_SUDOERS_NEW" | sha256sum | cut -d' ' -f1)
+_SUDOERS_SAME=0
 if [ -f "$_SUDOERS_FILE" ]; then
-    _SUDOERS_CURRENT=$(cat "$_SUDOERS_FILE" 2>/dev/null || true)
+    if [ -r "$_SUDOERS_FILE" ]; then
+        _SUDOERS_CUR_SUM=$(sha256sum "$_SUDOERS_FILE" 2>/dev/null | cut -d' ' -f1)
+    else
+        _SUDOERS_CUR_SUM=$(cat "$_SUDOERS_STAMP" 2>/dev/null || true)
+    fi
+    [ "$_SUDOERS_NEW_SUM" = "$_SUDOERS_CUR_SUM" ] && _SUDOERS_SAME=1
 fi
-if [ "$_SUDOERS_NEW" != "$_SUDOERS_CURRENT" ]; then
+if [ "$_SUDOERS_SAME" -eq 0 ]; then
     printf '%s\n' "$_SUDOERS_NEW" | $SUDO tee "$_SUDOERS_FILE" > /dev/null
     $SUDO chmod 440 "$_SUDOERS_FILE"
     if $SUDO visudo -c -f "$_SUDOERS_FILE" >/dev/null 2>&1; then
+        mkdir -p "$TOOLKIT_DIR/config" 2>/dev/null || true
+        if ! printf '%s\n' "$_SUDOERS_NEW_SUM" > "$_SUDOERS_STAMP" 2>/dev/null; then
+            echo -e "  ${YELLOW}⚠ Could not record the sudoers checksum in config/ — the next update will ask for the password again${NC}"
+        fi
         echo -e "  ${GREEN}✓ Sudoers updated — health fixes and firewall access enabled${NC}"
     else
         $SUDO rm -f "$_SUDOERS_FILE"
@@ -539,7 +585,7 @@ fi
 #   2. If the toolkit moved to a different directory the path stays correct
 _WRAPPER="/usr/local/bin/mysterium-toolkit-update-check.sh"
 if command -v systemctl &>/dev/null; then
-    _REAL_USER="${SUDO_USER:-$USER}"
+    _REAL_USER="${SUDO_USER:-${USER:-$(id -un)}}"
     $SUDO tee "$_WRAPPER" > /dev/null << WRAPPER_EOF
 #!/bin/bash
 # Auto-generated by update.sh — do not edit manually
@@ -587,7 +633,7 @@ fi
 _TIMER_FILE="/etc/systemd/system/mysterium-toolkit-update.timer"
 _TIMER_SVC="/etc/systemd/system/mysterium-toolkit-update.service"
 if command -v systemctl &>/dev/null; then
-    _REAL_USER="${SUDO_USER:-$USER}"
+    _REAL_USER="${SUDO_USER:-${USER:-$(id -un)}}"
     # Always rewrite the timer file
     printf '[Unit]\nDescription=Mysterium Toolkit auto-update\n\n[Timer]\nOnCalendar=hourly\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n' \
         | $SUDO tee "$_TIMER_FILE" > /dev/null

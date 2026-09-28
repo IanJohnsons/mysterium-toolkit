@@ -654,7 +654,7 @@ _action_autostart() {
         read -p "  Select (1-2): " _auto_choice
         case "$_auto_choice" in
             1)
-                _REAL_USER="${SUDO_USER:-$USER}"
+                _REAL_USER="${SUDO_USER:-${USER:-$(id -un)}}"
                 _REAL_HOME=$(getent passwd "$_REAL_USER" | cut -d: -f6)
                 mkdir -p "$TOOLKIT_DIR/logs"
                 chown -R "$_REAL_USER:" "$TOOLKIT_DIR/logs" 2>/dev/null || true
