@@ -30,6 +30,27 @@ echo
 _REAL_USER="${SUDO_USER:-${USER:-$(id -un)}}"
 _REAL_HOME=$(getent passwd "$_REAL_USER" | cut -d: -f6 2>/dev/null || echo "$HOME")
 
+# v1.4.48: run repository work as the operator, not as root.
+# The auto-update timer runs as the operator but its wrapper starts this script
+# with `sudo -n update.sh`, so every unattended update ran git pull, pip and the
+# npm build as root: .git/ORIG_HEAD, the pulled files, venv/ and dist/ came out
+# root-owned, and the next manual run had to repair them ("ownership corrected"
+# on every update). Root is still needed here for systemd, sudoers and the
+# restart — not for touching the repository. _as_user runs a command as the
+# operator when this script is root on their behalf, and unchanged otherwise
+# (root installs such as a VPS, and manual runs as the operator).
+_as_user() {
+    if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+        if command -v runuser >/dev/null 2>&1; then
+            runuser -u "$SUDO_USER" -- env HOME="$_REAL_HOME" "$@"
+        else
+            sudo -H -u "$SUDO_USER" "$@"
+        fi
+    else
+        "$@"
+    fi
+}
+
 # ── Must run from a git repo ──────────────────────────────────────────────
 if [ ! -d ".git" ]; then
     echo -e "${RED}✗ Not a git repository.${NC}"
@@ -78,14 +99,30 @@ fi
 if ! git rev-parse --git-dir >/dev/null 2>&1; then
     if git rev-parse --git-dir 2>&1 | grep -q "dubious ownership"; then
         echo -e "  ${YELLOW}⚠ git reports dubious ownership — registering safe.directory${NC}"
-        git config --global --add safe.directory "$(pwd)" 2>/dev/null || true
+        _as_user git config --global --add safe.directory "$(pwd)" 2>/dev/null || true
     fi
 fi
 
 # ── Pull latest code ──────────────────────────────────────────────────────
 echo -e "  Pulling latest code..."
 _SELF_BEFORE=$(md5sum "$0" 2>/dev/null | cut -d' ' -f1)
-_PULL_OUT=$(git pull 2>&1)
+# v1.4.48: git pull now runs as the operator. Files earlier root runs left in the
+# working tree would make it fail with permission denied, so when this script is
+# root on the operator's behalf, hand anything foreign back to them first.
+# venv/ and node_modules/ are handled further down, before pip and npm.
+if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+    _pre_bad=$(find "$TOOLKIT_DIR" \( -path "$TOOLKIT_DIR/venv" -o -path "$TOOLKIT_DIR/node_modules" \) -prune \
+                    -o ! -user "$SUDO_USER" -print -quit 2>/dev/null)
+    if [ -n "$_pre_bad" ]; then
+        if find "$TOOLKIT_DIR" \( -path "$TOOLKIT_DIR/venv" -o -path "$TOOLKIT_DIR/node_modules" \) -prune \
+                -o ! -user "$SUDO_USER" -exec chown "$SUDO_USER:" {} + 2>/dev/null; then
+            echo -e "  ${GREEN}✓ working tree ownership handed back to $SUDO_USER before pulling${NC}"
+        else
+            echo -e "  ${YELLOW}⚠ could not hand the working tree back to $SUDO_USER — the pull may fail${NC}"
+        fi
+    fi
+fi
+_PULL_OUT=$(_as_user git pull 2>&1)
 _PULL_RC=$?
 echo "$_PULL_OUT"
 if [ $_PULL_RC -ne 0 ]; then
@@ -164,13 +201,16 @@ if [ "$_REAL_USER" != "root" ]; then
     # built frontend owned by root, and the next build then fails with EACCES while
     # update.sh still reports success. The stale bundle keeps being served, so new
     # UI features silently never appear.
-    # v1.4.47: every tracked directory, not only the three above. Twelve files in
-    # the repository root were left root-owned after one update; the cause is still
-    # unknown, so this repairs the effect and says so. venv/ and node_modules/ are
-    # left out: they are rebuilt, not pulled.
+    # v1.4.47: every tracked directory, not only the three above.
+    # v1.4.48: plus venv/ and node_modules/. pip and npm now run as the operator
+    # (see _as_user), so what earlier root runs left behind there has to be
+    # theirs first, or the first run after this change fails with EACCES. The
+    # cause of the root-owned files — the auto-update wrapper running this
+    # script as root — is fixed at the source by _as_user.
     for _d in "$TOOLKIT_DIR/config" "$TOOLKIT_DIR/backend" "$TOOLKIT_DIR/dist" \
               "$TOOLKIT_DIR/bin" "$TOOLKIT_DIR/scripts" "$TOOLKIT_DIR/frontend" \
-              "$TOOLKIT_DIR/cli" "$TOOLKIT_DIR/docs" "$TOOLKIT_DIR/.build"; do
+              "$TOOLKIT_DIR/cli" "$TOOLKIT_DIR/docs" "$TOOLKIT_DIR/.build" \
+              "$TOOLKIT_DIR/venv" "$TOOLKIT_DIR/node_modules"; do
         if [ -d "$_d" ]; then
             # Looking only for root-owned files missed the case that actually
             # happened: a dist/ owned by neither root nor the service user, where
@@ -277,8 +317,8 @@ if [ -x "$_VENV_PY" ]; then
     _PIP_LOG="logs/pip_install.log"
     # A pip self-upgrade needs the network and is optional; its failure alone
     # is not a failed update. The requirements install is what matters.
-    "$_VENV_PY" -m pip install --upgrade pip > "$_PIP_LOG" 2>&1 || true
-    if "$_VENV_PY" -m pip install -r requirements.txt >> "$_PIP_LOG" 2>&1; then
+    _as_user "$_VENV_PY" -m pip install --upgrade pip > "$_PIP_LOG" 2>&1 || true
+    if _as_user "$_VENV_PY" -m pip install -r requirements.txt >> "$_PIP_LOG" 2>&1; then
         rm -f "$_PIP_LOG"
         echo -e "  ${GREEN}✓ Python packages updated${NC}"
     else
@@ -353,9 +393,9 @@ elif command -v npm &>/dev/null && [ -d ".build" ]; then
     # described that missing module — the actual cause was in the discarded output.
     mkdir -p logs
     _NPM_LOG="logs/npm_install.log"
-    npm install --legacy-peer-deps > "$_NPM_LOG" 2>&1
+    _as_user npm install --legacy-peer-deps > "$_NPM_LOG" 2>&1
     _NPM_RC=$?
-    BUILD_OUT=$(npm run build 2>&1)
+    BUILD_OUT=$(_as_user npm run build 2>&1)
     set -e
     if [ "$_NPM_RC" -ne 0 ] && ! echo "$BUILD_OUT" | grep -q "built in"; then
         echo -e "  ${YELLOW}⚠ npm install failed (exit $_NPM_RC) — the build below could not use fresh packages${NC}"
@@ -391,6 +431,22 @@ elif command -v npm &>/dev/null && [ -d ".build" ]; then
     rm -f vite.config.js postcss.config.js tailwind.config.js package.json package-lock.json index.html
 else
     echo -e "  ${YELLOW}⚠ npm not found — frontend not rebuilt${NC}"
+fi
+
+# ── Ownership after this run (v1.4.48) ────────────────────────────────────
+# Safety net for _as_user. If this run, as root on the operator's behalf, still
+# left something in the repository owned by root, correct it and say so plainly:
+# it means a step here writes as root that should not, and that is a bug to report.
+if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+    _late=$(find "$TOOLKIT_DIR/.git" "$TOOLKIT_DIR/dist" "$TOOLKIT_DIR/venv" "$TOOLKIT_DIR/node_modules" \
+                 -maxdepth 2 ! -user "$SUDO_USER" -print -quit 2>/dev/null)
+    if [ -n "$_late" ]; then
+        for _d in .git dist venv node_modules; do
+            [ -e "$TOOLKIT_DIR/$_d" ] && chown -R "$SUDO_USER:" "$TOOLKIT_DIR/$_d" 2>/dev/null
+        done
+        echo -e "  ${YELLOW}⚠ This run left files owned by root (first: ${_late#$TOOLKIT_DIR/}) — corrected.${NC}"
+        echo -e "  ${DIM}    Please report this: a step in update.sh still writes as root.${NC}"
+    fi
 fi
 
 # ── Executable bits ───────────────────────────────────────────────────────
