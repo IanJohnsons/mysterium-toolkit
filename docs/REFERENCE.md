@@ -346,11 +346,7 @@ From v1.4.0 the dashboard is served by [cheroot](https://cheroot.cherrypy.dev/),
 
 Thread count defaults to 30, or 10 when `pi_mode` is enabled. Override with `server_threads` in `config/setup.json` if you have reason to.
 
-Cheroot is already a production server, so it does not need anything in front of it.
-`scripts/deploy_production.sh` sets up nginx as a reverse proxy only when asked with
-`--with-nginx`; without it, cheroot serves on its own. Use nginx only if you specifically
-want it for something else, such as a real certificate on a domain name — otherwise it is
-two web servers doing the same job.
+Cheroot is a production server in its own right; nothing needs to sit in front of it.
 
 ---
 

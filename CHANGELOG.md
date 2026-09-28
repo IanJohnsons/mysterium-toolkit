@@ -7,7 +7,7 @@ Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 ## v1.4.48
 
 - fix: **unattended updates no longer leave root-owned files in the install.** The auto-update timer runs as the operator, but its wrapper starts `update.sh` with `sudo -n`, so every unattended update ran `git pull`, pip and the npm build as root — `.git/ORIG_HEAD`, the pulled files, `venv/` and `dist/` came out owned by root, and the next manual update had to report "ownership corrected" every time. Found in a Pi's journal: the timer at 17:00 ran `sudo update.sh`, and the manual run after it found `.git/ORIG_HEAD` and `dist/` owned by root. Root is still used for systemd, sudoers and the restart; the repository work (`git pull`, `git config`, pip, npm) now runs as the operator whenever the script is root on their behalf. Files an earlier root run left in the working tree are handed back before the pull, `venv/` and `node_modules/` before pip and npm, and a final check after the build says plainly if anything still came out root-owned. Root installs and manual runs as the operator behave as before. Tested against a real repository with a real unprivileged user: the old behaviour reproduces `ORIG_HEAD` and pulled files owned by root, the new one leaves nothing that is not the operator's.
-- docs: `docs/REFERENCE.md` — `scripts/deploy_production.sh` sets up nginx only with `--with-nginx`. Written for v1.4.47 and missing from that release.
+- remove: `scripts/deploy_production.sh`, an old install script from before cheroot that nothing calls; `setup.sh` does the same job. `docs/REFERENCE.md` no longer mentions it.
 
 ## v1.4.47
 
