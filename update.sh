@@ -383,8 +383,7 @@ if [ "$SETUP_MODE" = "3" ]; then
 elif command -v npm &>/dev/null && [ -d ".build" ]; then
     echo -e "  Rebuilding frontend..."
     cp .build/package.json .build/vite.config.js .build/postcss.config.js .build/tailwind.config.js .build/index.html . 2>/dev/null || true
-    # Build to temp dir — only replace dist/ if build succeeds
-    rm -rf dist_new/ 2>/dev/null || true
+    rm -rf dist_new/ 2>/dev/null || true   # leftover from versions before v1.4.49
     # Disable set -e for npm — warnings produce non-zero exit but build can still succeed
     set +e
     # npm install output used to go to /dev/null. On one install the esbuild binary
@@ -409,9 +408,9 @@ elif command -v npm &>/dev/null && [ -d ".build" ]; then
         echo -e "  ${DIM}    Full log: $TOOLKIT_DIR/$_NPM_LOG${NC}"
     fi
     if [ -f "dist/index.html" ] && echo "$BUILD_OUT" | grep -q "built in"; then
-        # Build succeeded into dist/ — rename to dist_new and swap
-        mv dist dist_new 2>/dev/null && rm -rf dist/ 2>/dev/null || true
-        mv dist_new dist 2>/dev/null || true
+        # Vite builds straight into dist/. The rename-and-swap that stood here
+        # did nothing useful, and a failed second mv would have left no dist/ at
+        # all under a "Frontend rebuilt" line. Removed in v1.4.49.
         rm -f "$_NPM_LOG"
         echo -e "  ${GREEN}✓ Frontend rebuilt${NC}"
     else
@@ -520,10 +519,28 @@ fi
 _F2B_LOCAL="/etc/fail2ban/jail.local"
 _BLOCK_START="# --- Mysterium Toolkit managed jails ---"
 _BLOCK_END="# --- End Mysterium Toolkit ---"
-if [ -f "$_F2B_LOCAL" ] && $SUDO grep -q "$_BLOCK_START" "$_F2B_LOCAL" 2>/dev/null; then
-    $SUDO sed -i "/$_BLOCK_START/,/$_BLOCK_END/d" "$_F2B_LOCAL" 2>/dev/null || true
-    $SUDO fail2ban-client reload >/dev/null 2>&1 || true
-    echo -e "  ${GREEN}✓ Migrated: moved toolkit jail out of jail.local (now in jail.d)${NC}"
+# v1.4.49: read without sudo. jail.local is world-readable, and grep is not in
+# the NOPASSWD list, so `sudo grep` asked for the password on every update of a
+# machine that has a jail.local — to find a block that was removed long ago.
+# sudo is used only when the file cannot be read, and then non-interactively.
+# The removal itself still needs root and happens at most once.
+_F2B_HAS_BLOCK=0
+if [ -f "$_F2B_LOCAL" ]; then
+    if [ -r "$_F2B_LOCAL" ]; then
+        grep -qF "$_BLOCK_START" "$_F2B_LOCAL" 2>/dev/null && _F2B_HAS_BLOCK=1
+    else
+        ${SUDO:+$SUDO -n} grep -qF "$_BLOCK_START" "$_F2B_LOCAL" 2>/dev/null && _F2B_HAS_BLOCK=1
+    fi
+fi
+if [ "$_F2B_HAS_BLOCK" -eq 1 ]; then
+    # The success line used to print even when sed failed (|| true).
+    if $SUDO sed -i "/$_BLOCK_START/,/$_BLOCK_END/d" "$_F2B_LOCAL" 2>/dev/null; then
+        $SUDO fail2ban-client reload >/dev/null 2>&1 || true
+        echo -e "  ${GREEN}✓ Migrated: moved toolkit jail out of jail.local (now in jail.d)${NC}"
+    else
+        echo -e "  ${YELLOW}⚠ The old toolkit block in $_F2B_LOCAL could not be removed${NC}"
+        echo -e "  ${DIM}    sudo sed -i '/$_BLOCK_START/,/$_BLOCK_END/d' $_F2B_LOCAL${NC}"
+    fi
 fi
 
 # ── Sudoers update — always runs, regardless of autostart ─────────────────
@@ -702,7 +719,14 @@ if command -v systemctl &>/dev/null; then
     # Start only if not already active
     systemctl is-active --quiet mysterium-toolkit-update.timer 2>/dev/null \
         || $SUDO systemctl start mysterium-toolkit-update.timer 2>/dev/null || true
-    echo -e "  ${GREEN}✓ Auto-update timer refreshed${NC}"
+    # v1.4.49: say so when the timer is not running — this line printed either
+    # way, and a timer that failed to start meant no unattended updates at all.
+    if systemctl is-active --quiet mysterium-toolkit-update.timer 2>/dev/null; then
+        echo -e "  ${GREEN}✓ Auto-update timer refreshed${NC}"
+    else
+        echo -e "  ${YELLOW}⚠ Auto-update timer is not running — unattended updates are off${NC}"
+        echo -e "  ${DIM}    sudo systemctl start mysterium-toolkit-update.timer${NC}"
+    fi
 fi
 
 # ── Restart backend ───────────────────────────────────────────────────────

@@ -228,7 +228,7 @@ def _node_self_updater_state():
     """What the node's own update timer is doing — and whether it is getting anywhere.
 
     v1.4.6 read `systemctl is-active myst-updater.timer` plus MYST_UPDATER_ENABLED
-    and reported a boolean. That boolean was true on two of Ian's nodes while the
+    and reported a boolean. That boolean was true on two test nodes while the
     service failed on every single run, so the dashboard promised an update that
     could never arrive.
 
@@ -7161,8 +7161,8 @@ def _collect_single_node(node_entry):
                     # v1.4.38. A session is left behind only when it started before
                     # the node process did — a provider session lives in the node's
                     # memory and cannot outlive it. The earlier rule here ("New, 0
-                    # bytes, 0 tokens, older than 4 hours") is the v1.3.12 rule that
-                    # decisions.md rejects: the node writes bytes and tokens only at
+                    # bytes, 0 tokens, older than 4 hours") is the v1.3.12 rule, dropped
+                    # since because the node writes bytes and tokens only at
                     # session close, so live multi-day B2B sessions look exactly like
                     # that and were hidden.
                     if is_active and _fb_node_start is not None:
@@ -7881,8 +7881,7 @@ def _node_custom_build():
     """The node binary systemd starts, when it is not the packaged one. v1.4.47.
 
     Returns {'binary': path} for a unit whose ExecStart points anywhere but
-    /usr/bin/myst (a drop-in with a self-built binary, as on Ian's laptop and
-    VPS), else None — also when there is no systemd unit to ask (Docker, a node
+    /usr/bin/myst (a drop-in with a self-built binary), else None — also when there is no systemd unit to ask (Docker, a node
     started by hand), since then nothing is known either way. Installing the
     official .deb on such a node replaces /usr/bin/myst, which is not what runs:
     the node restarts on the same custom binary and the update notice never
@@ -12727,7 +12726,7 @@ NODE_CONFIG_PRESETS = {
 # Payment keys held at the node default for every operator. v1.4.45.
 #
 # v1.4.44 only reported a different value, on the grounds that it might be the
-# operator's own choice. Ian's three nodes then turned out to hold max-amount
+# operator's own choice. Three nodes then turned out to hold max-amount
 # 15.0 that nobody had chosen, and the decision became: these stay at the node
 # default, everywhere. A value that differs is removed through the node's own
 # removal path, so the node falls back to its default at its next start. A value

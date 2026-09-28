@@ -536,8 +536,14 @@ if [ -f "$MIGRATE_SCRIPT" ] && [ -n "$MIGRATE_PYTHON" ]; then
                 echo -e "  ${DIM}Skipped.${NC}"
                 ;;
             *)
-                $MIGRATE_PYTHON "$MIGRATE_SCRIPT" --auto --dest "$TOOLKIT_DIR" || true
-                echo -e "  ${GREEN}✓ Data copied.${NC}"
+                # v1.4.49: the success line used to print whatever the script returned.
+                if $MIGRATE_PYTHON "$MIGRATE_SCRIPT" --auto --dest "$TOOLKIT_DIR"; then
+                    echo -e "  ${GREEN}✓ Data copied.${NC}"
+                else
+                    echo -e "  ${YELLOW}⚠ Copying data from the old installation failed — see the output above.${NC}"
+                    echo -e "  ${YELLOW}  Do not remove the old installation until this is resolved.${NC}"
+                    _MIGRATE_FAILED=1
+                fi
                 ;;
         esac
     else
@@ -554,7 +560,10 @@ if [ -f "$MIGRATE_SCRIPT" ] && [ -n "$MIGRATE_PYTHON" ]; then
 
     # Offer to remove old toolkit installations to reclaim disk space
     OLD_INSTALLS=$($MIGRATE_PYTHON "$MIGRATE_SCRIPT" --list-old --dest "$TOOLKIT_DIR" 2>/dev/null)
-    if [ -n "$OLD_INSTALLS" ]; then
+    # v1.4.49: never offer to delete the old installation after its data failed to copy.
+    if [ -n "$OLD_INSTALLS" ] && [ "${_MIGRATE_FAILED:-0}" -eq 1 ]; then
+        echo -e "  ${YELLOW}Old toolkit installations kept — the data copy above did not complete.${NC}"
+    elif [ -n "$OLD_INSTALLS" ]; then
         echo
         echo -e "  ${YELLOW}Old toolkit installations found:${NC}"
         echo "$OLD_INSTALLS" | while IFS= read -r line; do
@@ -564,8 +573,11 @@ if [ -f "$MIGRATE_SCRIPT" ] && [ -n "$MIGRATE_PYTHON" ]; then
         read -p "  Remove old installations to reclaim disk space? [y/N]: " cleanup_choice
         case "$cleanup_choice" in
             [yY]|[yY][eE][sS])
-                $MIGRATE_PYTHON "$MIGRATE_SCRIPT" --remove-old --dest "$TOOLKIT_DIR" || true
-                echo -e "  ${GREEN}✓ Old installations removed.${NC}"
+                if $MIGRATE_PYTHON "$MIGRATE_SCRIPT" --remove-old --dest "$TOOLKIT_DIR"; then
+                    echo -e "  ${GREEN}✓ Old installations removed.${NC}"
+                else
+                    echo -e "  ${YELLOW}⚠ Removing the old installations did not complete — see the output above.${NC}"
+                fi
                 ;;
             *)
                 echo -e "  ${DIM}Skipped — old installs kept.${NC}"

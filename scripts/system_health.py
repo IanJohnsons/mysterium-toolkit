@@ -1095,7 +1095,7 @@ class ServiceWatchdog:
                     pass
 
                 # Where this error comes from — mysteriumnetwork/node issue #6220,
-                # with the fix proposed in PR #6221 (both from Ian, September 2026):
+                # with the fix proposed in PR #6221:
                 # the provider-side trace stage "Session validation" in
                 # core/service/session_manager.go lacks the "Provider" prefix, so
                 # its metrics event is attributed to the consumer, and
@@ -3160,7 +3160,7 @@ class NicChecksumOffload:
 
     # Last reading per interface: {iface: (errors, good, monotonic_seconds)}.
     # v1.4.41: the scan judged a bare error count, so six errors from a cable
-    # event months ago read exactly like a card failing right now. Ian's eno1
+    # event months ago read exactly like a card failing right now. One eno1
     # showed 6 errors against 31.5 million good ones, none of them new in five
     # minutes of measuring, and the card was reported as "hardware checksum
     # failing, packets dropped". A counter only means something next to its
@@ -3263,7 +3263,7 @@ class NicChecksumOffload:
         good = NicChecksumOffload._get_csum_good(iface)
         new_errors, elapsed, first_sample = NicChecksumOffload._error_trend(iface, errors, good)
         # A card that is failing now produces new errors between two scans, and its
-        # errors are a meaningful share of its good checksums. Ian's eno1: 6 errors
+        # errors are a meaningful share of its good checksums. One eno1: 6 errors
         # against 31.5 million good, none new in five minutes — historical, and the
         # card is fine. One in a hundred thousand is already far beyond any healthy
         # NIC, so anything above that counts even without a second sample.

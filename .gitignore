@@ -52,7 +52,7 @@ Thumbs.db
 !config/.gitkeep
 !config/nodes.json.example
 
-# ── Project knowledge (Claude project files — never in the repo) ─────────────
+# ── Local working files — never in the repo ───────────────────────────────────
 START.md
 CONTEXT.md
 CLAUDE.md
