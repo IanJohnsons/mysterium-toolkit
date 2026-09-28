@@ -266,7 +266,10 @@ if [ "$_REAL_USER" != "root" ]; then
         _unwritable=""
         for _db in "$_DBDIR"/*.db; do
             [ -e "$_db" ] || continue
-            $SUDO -u "$_REAL_USER" test -w "$_db" 2>/dev/null || _unwritable="$_unwritable $(basename "$_db")"
+            # As the operator. `$SUDO -u` became `-u …` when this script runs as
+            # root (SUDO is empty then): "command not found", so every database
+            # was reported not writable on every unattended update.
+            _as_user test -w "$_db" 2>/dev/null || _unwritable="$_unwritable $(basename "$_db")"
         done
         if [ -n "$_unwritable" ]; then
             echo -e "  ${RED}✗ Not writable by $_REAL_USER:$_unwritable${NC}"
@@ -699,7 +702,10 @@ if ! sudo -n true 2>/dev/null; then
 fi
 exec sudo -n "$TOOLKIT_DIR/update.sh"
 WRAPPER_EOF
-    $SUDO chmod +x "$_WRAPPER"
+    # tee keeps the mode of an existing file, so the wrapper stays executable;
+    # chmod is needed only the first time. `chmod +x` is not in the passwordless
+    # list, so running it every update asked for the password each time.
+    [ -x "$_WRAPPER" ] || $SUDO chmod +x "$_WRAPPER"
 fi
 
 # ── Auto-update timer — always rewrite service file so User/path stay correct ──

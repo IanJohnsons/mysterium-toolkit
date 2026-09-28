@@ -4,6 +4,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.50
+
+- fix: **unattended updates no longer report every database as not writable.** After the ownership repair, `update.sh` checks that the service user can write each database with `$SUDO -u <user> test -w`. When the auto-update timer runs the script as root, `$SUDO` is empty, the line became `-u <user> test -w …`, the shell answered "command not found", and all databases were listed as "Not writable" on every unattended update — with repair instructions for a problem that did not exist. The check now runs as the service user directly, and needs no sudo at all on a manual run. A database that really is read-only is still reported.
+- fix: **`update.sh` no longer asks for the sudo password on a non-root install.** It ran `chmod +x` on the auto-update wrapper on every update; `chmod +x` is not in the passwordless list. The wrapper is rewritten in place, which keeps it executable, so chmod now runs only when it is not.
+
 ## v1.4.49
 
 - fix: **`update.sh` no longer asks for the sudo password on a machine with a `jail.local`.** It checked for a toolkit block that was moved out of `jail.local` long ago, and it did so with `sudo grep` — `grep` is not in the passwordless list, so every update on such a machine stopped for a password, including after v1.4.47 had removed the sudoers prompt. `jail.local` is world-readable; it is now read directly, sudo is used only when it cannot be read (non-interactively) and for the one-time removal. Every other `$SUDO` call in `update.sh` either is in the passwordless list or runs only when there is something to repair.
