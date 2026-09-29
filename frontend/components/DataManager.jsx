@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Database, Trash2, RefreshCw,
   Clock, DollarSign, Activity, Users, AlertTriangle,
@@ -52,10 +52,17 @@ const RetentionEditor = ({ base, authHeaders, retention, onSaved }) => {
     setSaving(true);
     setSaveStatus(null);
     try {
+      // Only the windows the operator changed. Posting all seven switched on the
+      // pre-filled defaults too (system 30, services 30, ...) and the daily prune
+      // then deleted history nobody chose to expire. The backend merges, so
+      // windows saved earlier are kept.
+      const changed = Object.fromEntries(
+        Object.keys(values).filter(k => values[k] !== current[k]).map(k => [k, values[k]])
+      );
       const res = await fetch(`${base}/data/retention`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json', ...(authHeaders || {}) },
-        body:    JSON.stringify({ retention: values }),
+        body:    JSON.stringify({ retention: changed }),
       });
       const d = await res.json();
       if (d.success) {
@@ -79,6 +86,9 @@ const RetentionEditor = ({ base, authHeaders, retention, onSaved }) => {
   };
 
   const isDirty = Object.keys(values).some(k => values[k] !== current[k]);
+  // Windows the daily prune actually applies. Every other field shows a default
+  // for editing and keeps all its data.
+  const activeKeys = retention.enabled ? Object.keys(retention.active || {}) : [];
 
   return (
     <div className="p-3 bg-slate-900/30 rounded-lg border border-slate-700">
@@ -87,9 +97,9 @@ const RetentionEditor = ({ base, authHeaders, retention, onSaved }) => {
           Auto-retention (days kept)
         </div>
         {retention.enabled
-          ? <div className="text-[10px] text-slate-600">Pruned daily · edit and save to apply</div>
-          : <div className="text-[10px] text-amber-500/70" title="Nothing is deleted until you save retention here once. The values below are defaults shown for editing, not a schedule that is running.">
-              Not pruning · all data is kept · save once to start applying these
+          ? <div className="text-[10px] text-slate-600">Pruned daily · only saved windows apply</div>
+          : <div className="text-[10px] text-amber-500/70" title="Nothing is deleted until you change a window here and save it. The values below are defaults shown for editing, not a schedule that is running.">
+              Not pruning · all data is kept · a window applies once you change and save it
             </div>}
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
@@ -104,6 +114,9 @@ const RetentionEditor = ({ base, authHeaders, retention, onSaved }) => {
               onChange={e => setValues(v => ({ ...v, [key]: parseInt(e.target.value) || 1 }))}
               className="w-full px-2 py-0.5 bg-slate-800 border border-slate-600 rounded text-xs text-white font-mono focus:border-emerald-500 focus:outline-none"
             />
+            {!activeKeys.includes(key) && (
+              <span className="text-[9px] text-slate-600">{'not pruned'}</span>
+            )}
           </div>
         ))}
       </div>
@@ -141,7 +154,17 @@ const RetentionEditor = ({ base, authHeaders, retention, onSaved }) => {
   );
 };
 
-const DataManagerInner = ({ nodeId, isFleetMode = false, authHeaders = {} }) => {
+const DataManagerInner = ({ nodeId, nodeLabel = '', isFleetMode = false, authHeaders = {} }) => {
+  // Every request - stats, retention, delete, save - goes to this one base. Built
+  // in three places before v1.4.51, all behind an isFleetMode that was never true,
+  // so the laptop and Pi views acted on the fleet master.
+  const base = isFleetMode && nodeId ? `/fleet/node/${encodeURIComponent(nodeId)}/proxy` : '';
+  const targetLabel = isFleetMode && nodeId ? (nodeLabel || nodeId) : 'this toolkit';
+  // The base a reply belongs to. A reply that arrives after the view moved to
+  // another node is dropped instead of being shown as that node's data.
+  const targetRef = useRef(base);
+  targetRef.current = base;
+  const [retentionError, setRetentionError] = useState(null);
   const [stats, setStats]               = useState(null);
   const [loading, setLoading]           = useState(false);
   const [deleteDone, setDeleteDone]      = useState(false);
@@ -164,33 +187,56 @@ const DataManagerInner = ({ nodeId, isFleetMode = false, authHeaders = {} }) => 
   ];
 
   const fetchStats = async () => {
+    const requestBase = base;
     setLoading(true);
     try {
-      const base = isFleetMode ? `/fleet/node/${nodeId}/proxy` : '';
       const res  = await fetch(`${base}/data/stats`, { headers: authHeaders || {} });
       const data = await res.json();
+      if (targetRef.current !== requestBase) return;
       if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
       setStats(data);
       setError(null);
-      // Fetch retention config in parallel — non-blocking
+      // Retention in parallel. A failure is shown in place of the editor: the old
+      // code dropped it silently and kept whatever node was on screen before.
       fetch(`${base}/data/retention`, { headers: authHeaders || {} })
-        .then(r => r.ok ? r.json() : null)
-        .then(d => { if (d?.retention) setRetention(d); })
-        .catch(() => {});
+        .then(async r => {
+          const d = await r.json().catch(() => null);
+          if (!r.ok) throw new Error(d?.error || `HTTP ${r.status}`);
+          return d;
+        })
+        .then(d => {
+          if (targetRef.current !== requestBase) return;
+          if (!d?.retention) throw new Error('reply had no retention values');
+          setRetention(d);
+          setRetentionError(null);
+        })
+        .catch(err => {
+          if (targetRef.current !== requestBase) return;
+          setRetention(null);
+          setRetentionError(err.message);
+        });
     } catch (err) {
+      if (targetRef.current !== requestBase) return;
       setError(`Failed to load: ${err.message}`);
       setStats(null);
     } finally {
-      setLoading(false);
+      if (targetRef.current === requestBase) setLoading(false);
     }
   };
 
-  useEffect(() => { fetchStats(); }, [nodeId]);
+  // Refetch whenever the target changes, and clear the previous node's numbers
+  // first so they are never on screen under another node's name.
+  useEffect(() => {
+    setStats(null);
+    setRetention(null);
+    setRetentionError(null);
+    setError(null);
+    fetchStats();
+  }, [base]);
 
   const handleDelete = async () => {
     setLoading(true);
     try {
-      const base = isFleetMode ? `/fleet/node/${nodeId}/proxy` : '';
       const url = `${base}/data/delete`;
       const payload = {
         type: selectedType,
@@ -263,11 +309,10 @@ const DataManagerInner = ({ nodeId, isFleetMode = false, authHeaders = {} }) => 
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          {isFleetMode && nodeId && (
-            <span className="px-2 py-0.5 text-xs bg-slate-700 text-slate-300 rounded border border-slate-600">
-              Node: {String(nodeId).slice(0, 10)}…
-            </span>
-          )}
+          <span className="px-2 py-0.5 text-xs bg-slate-700 text-slate-300 rounded border border-slate-600"
+            title={isFleetMode ? 'Requests go through the fleet proxy to this node' : 'Requests go to the toolkit serving this page'}>
+            {'Acting on: ' + targetLabel}
+          </span>
           <span className="text-xs text-slate-400">
             Total: <span className="text-white font-mono font-semibold">{totalRecords().toLocaleString()}</span> records
           </span>
@@ -424,7 +469,8 @@ const DataManagerInner = ({ nodeId, isFleetMode = false, authHeaders = {} }) => 
               <span className="text-white font-semibold">
                 {selectedType === 'all' ? 'ALL data' : dataTypes.find(t => t.id === selectedType)?.label || selectedType}
               </span>
-              {deleteMode === 'keep_days' && ` older than ${keepDays} days`}.{' '}
+              {deleteMode === 'keep_days' && ` older than ${keepDays} days`}
+              {' on '}<span className="text-white font-semibold">{targetLabel}</span>.{' '}
               This cannot be undone.
             </p>
             <div className="flex gap-3">
@@ -440,10 +486,17 @@ const DataManagerInner = ({ nodeId, isFleetMode = false, authHeaders = {} }) => 
       )}
 
       {/* Retention settings — editable */}
+      {retentionError && (
+        <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg flex items-center gap-2 text-amber-400 text-xs">
+          <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+          {'Retention settings could not be loaded from ' + targetLabel + ': ' + retentionError}
+          <button onClick={fetchStats} className="ml-auto underline hover:text-amber-300">Retry</button>
+        </div>
+      )}
       {retention?.retention && (
         <RetentionEditor
-          key={nodeId || 'local'}
-          base={isFleetMode ? `/fleet/node/${nodeId}/proxy` : ''}
+          key={base || 'local'}
+          base={base}
           authHeaders={authHeaders}
           retention={retention}
           onSaved={(reply) => setRetention(r => ({

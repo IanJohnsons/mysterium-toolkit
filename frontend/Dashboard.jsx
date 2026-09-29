@@ -4698,9 +4698,14 @@ const MysteriumDashboard = () => {
                 </div>
                 <button onClick={() => setActivePanel(null)} className="p-2 bg-slate-800 hover:bg-slate-700 rounded transition text-slate-300 text-sm font-semibold">✕ Close</button>
               </div>
+              {/* Same routing rule as healthFixUrl and getNodeAwareUrl: a selected
+                  node means the fleet proxy. metrics.fleet is null in the node view,
+                  so gating on it sent every Data Manager request - delete and save
+                  included - to the fleet master instead of the node (v1.0.0-v1.4.50). */}
               <DataManager
                 nodeId={selectedNodeId || ''}
-                isFleetMode={!!(metrics.fleet?.fleet_mode && selectedNodeId)}
+                nodeLabel={metrics._node_label || selectedNodeId || ''}
+                isFleetMode={!!selectedNodeId}
                 authHeaders={authHeaderRef.current || {}}
               />
             </div>

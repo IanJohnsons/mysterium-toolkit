@@ -6,6 +6,7 @@ Configured via setup wizard for easy user setup.
 """
 
 import os
+import re
 import json
 import copy
 import time
@@ -9116,6 +9117,53 @@ def _f2b_cleanup_legacy_file():
         logger.warning(f'Legacy jail file cleanup failed: {e}')
 
 
+# Every value below lands verbatim in a file fail2ban reads as root. A newline in
+# any of them adds a line of the sender's choosing, and a jail line can replace an
+# action's command (`action = x[actionban="..."]`), which fail2ban then runs as
+# root. Until v1.4.51 only the jail name was checked. The patterns match what the
+# dashboard itself sends; nothing else is accepted.
+_F2B_PORT_RE    = re.compile(r'^[A-Za-z0-9][A-Za-z0-9,:\-]{0,99}$')
+_F2B_FILTER_RE  = re.compile(r'^[A-Za-z0-9_\-]{1,64}$')
+_F2B_LOGPATH_RE = re.compile(r'^/[A-Za-z0-9_./*\-]{1,254}$')
+_F2B_INT_LIMITS = {
+    'maxretry': (1, 1000),
+    'bantime':  (1, 315360000),   # ten years; -1 (permanent) is allowed separately
+    'findtime': (1, 315360000),
+}
+
+
+def _f2b_validate_jail(jail):
+    """Return (clean_jail, None) or (None, error). Never raises.
+
+    Integers must be real ints (not bool, not strings) inside their range;
+    bantime may also be -1. port, filter and logpath must match their patterns,
+    and logpath must be absolute without a '..' segment. Empty port or logpath
+    means "not set" and is written as nothing, as before.
+    """
+    if not isinstance(jail, dict):
+        return None, 'jail must be an object'
+    clean = dict(jail)
+    for key, (lo, hi) in _F2B_INT_LIMITS.items():
+        if key not in jail:
+            continue
+        v = jail[key]
+        if isinstance(v, bool) or not isinstance(v, int):
+            return None, f'{key} must be a whole number'
+        if key == 'bantime' and v == -1:
+            continue
+        if not lo <= v <= hi:
+            return None, f'{key} must be between {lo} and {hi}' + (' or -1' if key == 'bantime' else '')
+    for key, pattern in (('port', _F2B_PORT_RE), ('filter', _F2B_FILTER_RE), ('logpath', _F2B_LOGPATH_RE)):
+        v = jail.get(key)
+        if v in (None, ''):
+            continue
+        if not isinstance(v, str) or not pattern.match(v):
+            return None, f'{key} contains characters fail2ban config does not allow here'
+        if key == 'logpath' and '..' in v.split('/'):
+            return None, 'logpath may not contain ".."'
+    return clean, None
+
+
 def _f2b_write_toolkit_conf(jails_data):
     """Write toolkit jails to the standalone jail.d file.
 
@@ -9134,7 +9182,15 @@ def _f2b_write_toolkit_conf(jails_data):
     _f2b_cleanup_legacy_file()
 
     # Only toolkit-owned jails may be written — never system jails (sshd, recidive…).
-    safe_jails = [j for j in jails_data if j.get('name') in TOOLKIT_JAIL_NAMES]
+    safe_jails = [j for j in jails_data if isinstance(j, dict) and j.get('name') in TOOLKIT_JAIL_NAMES]
+
+    # Second check, whoever the caller is: one bad value refuses the whole file,
+    # because a half-written jail file is as wrong as a poisoned one.
+    for jail in safe_jails:
+        _clean, _err = _f2b_validate_jail(jail)
+        if _err:
+            logger.error(f"fail2ban: refusing to write jail {jail.get('name')!r}: {_err}")
+            return False
 
     lines = [
         '# Mysterium Toolkit — managed jail file.\n',
@@ -9357,11 +9413,20 @@ def fail2ban_save_jails():
         # its own jails — never sshd, recidive or any system jail.
         import re as _re
         for j in jails:
+            if not isinstance(j, dict):
+                return jsonify({'ok': False, 'error': 'Each jail must be an object'}), 200
             name = j.get('name', '')
             if not _re.match(r'^[\w\-]+$', name):
                 return jsonify({'ok': False, 'error': f'Invalid jail name: {name}'}), 200
             if name not in TOOLKIT_JAIL_NAMES:
                 return jsonify({'ok': False, 'error': f'Refusing to manage non-toolkit jail: {name}'}), 200
+            # Every field ends up in a file fail2ban reads as root (see
+            # _f2b_validate_jail). Checked here so the dashboard gets a clear
+            # answer; the writer checks again.
+            _clean, _err = _f2b_validate_jail(j)
+            if _err:
+                logger.warning(f"fail2ban: rejected jail {name!r} from {request.remote_addr}: {_err}")
+                return jsonify({'ok': False, 'error': f'{name}: {_err}'}), 200
         ok = _f2b_write_toolkit_conf(jails)
         if not ok:
             return jsonify({'ok': False, 'error': 'Could not write jail config — check sudo permissions'}), 200
