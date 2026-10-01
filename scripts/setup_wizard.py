@@ -8,6 +8,7 @@ Interactive setup that tests connections and configures everything for you.
 import os
 import sys
 import json
+import time
 import secrets
 import requests
 import base64
@@ -85,6 +86,45 @@ def print_error(text):
 def print_warning(text):
     """Print warning message"""
     print(f"{Colors.WARNING}⚠ {text}{Colors.ENDC}")
+
+def _write_setup_json(config_json, path=None):
+    """Write the wizard's answers into config/setup.json without losing the rest.
+
+    Until v1.4.52 the wizard wrote its ten keys over the whole file, so a re-run
+    dropped everything set elsewhere: TLS, server threads, pi_mode,
+    fail2ban_managed and the retention saved in the Data Manager. Now the
+    existing file is read and the wizard's keys are laid over it. A file that
+    cannot be read is kept aside under a new name rather than lost. The write
+    goes to a temporary file that is renamed over the original, with the
+    original's permissions.
+    """
+    p = Path(path) if path is not None else Path('config/setup.json')
+    merged, mode = {}, None
+    if p.exists():
+        mode = p.stat().st_mode & 0o7777
+        try:
+            existing = json.loads(p.read_text())
+            if not isinstance(existing, dict):
+                raise ValueError('not a JSON object')
+            merged = existing
+        except Exception as e:
+            aside = p.with_name(f'{p.name}.unreadable-{time.strftime("%Y%m%d-%H%M%S")}')
+            os.replace(p, aside)
+            print(f'  ⚠ {p} could not be read ({e}); kept as {aside.name}, writing a new one')
+    merged.update(config_json)
+    tmp = p.with_name(f'.{p.name}.tmp-{os.getpid()}')
+    try:
+        with open(tmp, 'w') as f:
+            f.write(json.dumps(merged, indent=2))
+            f.flush()
+            os.fsync(f.fileno())
+        if mode is not None:
+            os.chmod(tmp, mode)
+        os.replace(tmp, p)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+    return merged
 
 def _hash_dashboard_password(plain: str) -> str:
     """Salted scrypt hash, in the same format app.py verifies against.
@@ -1005,8 +1045,8 @@ LOG_LEVEL={config.get('log_level', 'INFO')}
     # data_retention_enabled: true in this file. Pre-writing defaults here made every
     # install look user-configured and re-enabled the prune nobody asked for.
 
-    Path('config/setup.json').write_text(json.dumps(config_json, indent=2))
-    print_success("config/setup.json created")
+    _write_setup_json(config_json)
+    print_success("config/setup.json saved (settings the wizard does not ask about are kept)")
 
     # Summary
     print_header("Setup Complete!")

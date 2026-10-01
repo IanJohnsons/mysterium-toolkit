@@ -7502,6 +7502,11 @@ const EarningsCard = ({ earnings, backendUrl, authHeaders }) => {
     monthly: earnings?.monthly != null ? Number(earnings.monthly) : null,
   };
   const walletAddr = earnings?.wallet_address || '';
+  // v1.4.52: the node settles per Hermes channel. A refused settlement never
+  // reaches the node's history, so these are what makes one visible.
+  const settleChannels = Array.isArray(earnings?.channels) ? earnings.channels : [];
+  const feeQuote = earnings?.fee_quote || null;
+  const fmtSpan = (s) => (s >= 3600 ? Math.round(s / 3600) + ' h' : Math.max(1, Math.round(s / 60)) + ' min');
   const shortWallet = walletAddr ? `${walletAddr.slice(0, 6)}...${walletAddr.slice(-4)}` : '';
   const earningsSource = earnings?.earnings_source || 'building';
   const isTracked = earningsSource === 'delta';
@@ -7608,6 +7613,27 @@ const EarningsCard = ({ earnings, backendUrl, authHeaders }) => {
           </div>
         </div>
       </div>
+      {settleChannels.length > 0 && (
+        <div className="mb-2 space-y-0.5 text-[11px]">
+          {settleChannels.map((c) => (
+            <div key={(c.node || '') + c.hermes_id} className="flex flex-wrap gap-x-2 text-slate-400">
+              <span className="font-mono text-slate-500">{'Channel ' + String(c.hermes_id).slice(0, 6) + '…' + String(c.hermes_id).slice(-4)}</span>
+              <span className="text-slate-300">{Number(c.unsettled).toFixed(4) + ' MYST'}</span>
+              {c.threshold != null && <span className="text-slate-600">{'auto-settle at ' + c.threshold}</span>}
+              {c.due_secs != null && c.due_secs >= 3600 && (
+                <span className="w-full text-amber-400">
+                  {'Auto-settle due for ' + fmtSpan(c.due_secs) + ' and not done — the node log shows why (search it for "Could not settle promise").'}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {feeQuote && feeQuote.expired_secs != null && feeQuote.expired_secs >= 1800 && (
+        <div className="mb-2 p-2 bg-amber-500/10 border border-amber-500/30 rounded text-xs text-amber-300">
+          {'Transactor fee quote expired ' + fmtSpan(feeQuote.expired_secs) + ' ago — settlements are refused network-wide until Mysterium fixes it; nothing to fix on this node.'}
+        </div>
+      )}
       {isRateLimited && (
         <div className="mb-2 p-2 bg-red-500/10 border border-red-500/30 rounded text-xs text-red-300">
           ⚠ Identity API rate-limited — blockchain data unavailable. Showing cached session tokens only.

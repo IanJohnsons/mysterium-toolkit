@@ -48,21 +48,14 @@ const RetentionEditor = ({ base, authHeaders, retention, onSaved }) => {
     uptime:   'Uptime',
   };
 
-  const handleSave = async () => {
+  const post = async (body) => {
     setSaving(true);
     setSaveStatus(null);
     try {
-      // Only the windows the operator changed. Posting all seven switched on the
-      // pre-filled defaults too (system 30, services 30, ...) and the daily prune
-      // then deleted history nobody chose to expire. The backend merges, so
-      // windows saved earlier are kept.
-      const changed = Object.fromEntries(
-        Object.keys(values).filter(k => values[k] !== current[k]).map(k => [k, values[k]])
-      );
       const res = await fetch(`${base}/data/retention`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json', ...(authHeaders || {}) },
-        body:    JSON.stringify({ retention: changed }),
+        body:    JSON.stringify(body),
       });
       const d = await res.json();
       if (d.success) {
@@ -85,6 +78,18 @@ const RetentionEditor = ({ base, authHeaders, retention, onSaved }) => {
     }
   };
 
+  // Only the windows the operator changed. Posting all seven switched on the
+  // pre-filled defaults too (system 30, services 30, ...) and the daily prune
+  // then deleted history nobody chose to expire.
+  const handleSave = () => post({
+    retention: Object.fromEntries(
+      Object.keys(values).filter(k => values[k] !== current[k]).map(k => [k, values[k]])
+    ),
+  });
+  // A block saved before v1.3.3 is the operator's own choice but was never
+  // applied. Activating it is a separate, explicit step.
+  const handleApplyStored = () => post({ apply_stored: true });
+
   const isDirty = Object.keys(values).some(k => values[k] !== current[k]);
   // Windows the daily prune actually applies. Every other field shows a default
   // for editing and keeps all its data.
@@ -102,6 +107,21 @@ const RetentionEditor = ({ base, authHeaders, retention, onSaved }) => {
               Not pruning · all data is kept · a window applies once you change and save it
             </div>}
       </div>
+      {retention.stored_inactive && (
+        <div className="mb-2 p-2 bg-amber-500/10 border border-amber-500/30 rounded text-[10px] text-amber-300 flex flex-wrap items-center gap-2">
+          <span>
+            {'Values saved by an earlier version were found but are not applied — nothing is deleted. '
+              + 'They are shown below. Saving a change applies only the windows you change; the other saved values are then discarded.'}
+          </span>
+          <button
+            onClick={handleApplyStored}
+            disabled={saving}
+            className="ml-auto px-2 py-0.5 rounded border border-amber-500/50 text-amber-200 hover:bg-amber-500/20 font-semibold disabled:opacity-50"
+          >
+            {'Apply these saved values'}
+          </button>
+        </div>
+      )}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
         {Object.entries(labels).map(([key, label]) => (
           <div key={key} className="flex flex-col gap-0.5">
@@ -504,6 +524,10 @@ const DataManagerInner = ({ nodeId, nodeLabel = '', isFleetMode = false, authHea
             retention: reply.retention,
             enabled:   reply.enabled,
             active:    reply.active,
+            // Without these the "saved but not applied" notice stayed on screen
+            // after the values had been applied.
+            stored:          reply.stored,
+            stored_inactive: reply.stored_inactive,
           }))}
         />
       )}

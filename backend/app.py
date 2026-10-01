@@ -176,6 +176,62 @@ load_dotenv()
 # Load setup configuration
 setup_config = {}
 setup_config_path = Path('config/setup.json')
+
+# Every write to setup.json goes through _update_setup_json(). Until v1.4.52 each
+# writer read, merged and wrote in place on its own, and three of them carried on
+# with an empty dict when the read failed — writing back a file that held one key
+# and had lost the API key, auth and TLS settings, without a word.
+_SETUP_JSON_LOCK = Lock()
+
+
+class SetupConfigUnreadable(Exception):
+    """setup.json exists but could not be read; nothing was written."""
+
+
+def _update_setup_json(mutate, path=None):
+    """Read setup.json, let mutate(d) change the dict in place, write it back.
+
+    mutate may return False to say nothing changed; the file is then not rewritten.
+
+    Refuses to write over a file it cannot read or parse (raises
+    SetupConfigUnreadable) instead of replacing it with a partial dict. Writes to
+    a temporary file in the same directory and renames it over the original, so a
+    reader never sees half a file; the original's permissions (and owner, when
+    running as root) are kept. Writers in this process are serialised by a lock.
+    Returns the dict that was written.
+    """
+    p = Path(path) if path is not None else setup_config_path
+    with _SETUP_JSON_LOCK:
+        if p.exists():
+            try:
+                d = json.loads(p.read_text())
+            except Exception as e:
+                raise SetupConfigUnreadable(f'{p} could not be read ({e}) — nothing was changed')
+            if not isinstance(d, dict):
+                raise SetupConfigUnreadable(f'{p} does not hold a JSON object — nothing was changed')
+            st = p.stat()
+        else:
+            d, st = {}, None
+        if mutate(d) is False:
+            return d          # the mutator found nothing to change: leave the file alone
+        tmp = p.with_name(f'.{p.name}.tmp-{os.getpid()}')
+        try:
+            with open(tmp, 'w') as f:
+                f.write(json.dumps(d, indent=2))
+                f.flush()
+                os.fsync(f.fileno())
+            if st is not None:
+                os.chmod(tmp, st.st_mode & 0o7777)
+                if os.geteuid() == 0:
+                    try:
+                        os.chown(tmp, st.st_uid, st.st_gid)
+                    except OSError:
+                        pass
+            os.replace(tmp, p)
+        finally:
+            if tmp.exists():
+                tmp.unlink()
+        return d
 if setup_config_path.exists():
     try:
         with open(setup_config_path) as f:
@@ -494,14 +550,14 @@ try:
         _tz_source = 'auto-detected'
         # Persist detected timezone to setup.json so it survives restarts/updates
         try:
-            _cfg_data = {}
-            if setup_config_path.exists():
-                with open(setup_config_path) as _f:
-                    _cfg_data = json.load(_f)
-            if not _cfg_data.get('timezone'):
-                _cfg_data['timezone'] = _tz_name
-                with open(setup_config_path, 'w') as _f:
-                    json.dump(_cfg_data, _f, indent=2)
+            _tz_written = []
+            def _set_tz(_d):
+                if _d.get('timezone'):
+                    return False
+                _d['timezone'] = _tz_name
+                _tz_written.append(True)
+            _update_setup_json(_set_tz)
+            if _tz_written:
                 logger.info(f"Timezone auto-detected and saved to setup.json: {_tz_name}")
         except Exception as _save_e:
             logger.warning(f"Could not save timezone to setup.json: {_save_e}")
@@ -763,10 +819,14 @@ def _migrate_plaintext_password(plain: str) -> str:
     cfg = Path('config/setup.json')
     try:
         if cfg.exists():
-            d = json.loads(cfg.read_text())
-            if d.get('dashboard_password') == plain:
-                d['dashboard_password'] = hashed
-                cfg.write_text(json.dumps(d, indent=2))
+            _hashed_here = []
+            def _swap(_d):
+                if _d.get('dashboard_password') != plain:
+                    return False
+                _d['dashboard_password'] = hashed
+                _hashed_here.append(True)
+            _update_setup_json(_swap, path=cfg)
+            if _hashed_here:
                 rewrote.append(str(cfg))
     except Exception as e:
         logger.warning(f"Could not hash the password in config/setup.json: {e}")
@@ -1171,20 +1231,59 @@ def _migrate_unowned_retention():
         cfg_path = Path('config/setup.json')
         if not cfg_path.exists():
             return
-        d = json.loads(cfg_path.read_text())
-        if d.get('data_retention_enabled'):
+        _removed = []
+        def _drop_unowned(d):
+            if d.get('data_retention_enabled') or d.get('data_retention') != _UPDATE_SH_WRITTEN_DEFAULTS:
+                return False
+            del d['data_retention']
+            _removed.append(True)
+        _update_setup_json(_drop_unowned, path=cfg_path)
+        if not _removed:
             return
-        ret = d.get('data_retention')
-        if ret != _UPDATE_SH_WRITTEN_DEFAULTS:
-            return
-        del d['data_retention']
-        cfg_path.write_text(json.dumps(d, indent=2))
         logger.info('Removed the retention defaults update.sh had written into '
                     'setup.json — no retention was configured, and nothing was '
                     'being pruned. All data is kept until you save retention '
                     'in the Data Manager.')
     except Exception as e:
         logger.warning(f'Retention migration skipped: {e}')
+
+
+def _get_stored_retention():
+    """(stored, enabled): the data_retention block exactly as saved, valid values
+    only, and whether data_retention_enabled is set. A block without the flag was
+    saved before v1.3.3 introduced it; it is shown, never pruned with."""
+    try:
+        cfg_path = Path('config/setup.json')
+        if not cfg_path.exists():
+            return {}, False
+        d = json.loads(cfg_path.read_text())
+        raw = d.get('data_retention')
+        stored = {k: v for k, v in raw.items()
+                  if k in _DEFAULT_RETENTION and isinstance(v, int) and not isinstance(v, bool) and v > 0} \
+            if isinstance(raw, dict) else {}
+        return stored, bool(d.get('data_retention_enabled'))
+    except Exception as e:
+        logger.warning(f'Could not read stored retention: {e}')
+        return {}, False
+
+
+def _retention_payload() -> dict:
+    """What GET and POST /data/retention answer with.
+
+    stored_inactive marks a block saved before v1.3.3: the numbers are the
+    operator's, the prune has ignored them since, and the first save used to
+    switch the whole block on together with the one window that was changed."""
+    stored, enabled = _get_stored_retention()
+    active = _get_user_retention_config()
+    return {
+        'retention':       _get_retention_config(),
+        'defaults':        _DEFAULT_RETENTION,
+        'enabled':         bool(active),
+        'active':          active,
+        'stored':          stored,
+        'stored_inactive': bool(stored) and not enabled,
+        'last_prune':      _last_prune_date or None,
+    }
 
 
 def _get_retention_config() -> dict:
@@ -3859,6 +3958,7 @@ class MetricsCollector:
         """Get real balance/earnings from /identities/{id} endpoint across ALL nodes"""
         result = {'balance': 0.0, 'unsettled': 0.0, 'lifetime': 0.0,
                   'wallet_address': '', 'channel_address': '', 'hermes_id': '',
+                  'channels': [], 'fee_quote': None,   # v1.4.52: per-channel view, transactor quote
                   'reachable': False}  # True when at least one node identity API responded
         try:
             for node_url in NODE_API_URLS:
@@ -3893,6 +3993,16 @@ class MetricsCollector:
                     if resp.status_code != 200:
                         continue
                     data = resp.json()
+
+                    # v1.4.52: the node settles per Hermes channel; show each one
+                    # against the threshold, and whether the transactor's fee quote
+                    # is current (checked in the background, never on this poll).
+                    _label = MetricsCollector._node_label(node_url)
+                    result['channels'].extend(
+                        {**c, 'node': _label}
+                        for c in _settle_channels(node_url, data, _settle_threshold(node_url), time.time()))
+                    if result['fee_quote'] is None:
+                        result['fee_quote'] = _maybe_refresh_fee_quote(node_url, headers)
 
                     # Channel/hermes address if available
                     if not result['channel_address']:
@@ -4059,6 +4169,8 @@ class MetricsCollector:
             'earnings_source': earnings_source,
             'wallet_address': identity_data.get('wallet_address', ''),
             'channel_address': identity_data.get('channel_address', ''),
+            'channels': identity_data.get('channels', []),
+            'fee_quote': identity_data.get('fee_quote'),
         }
 
     # VPN interface name patterns (myst0..myst14+, wg0..wgN, tun0..tunN)
@@ -11949,7 +12061,7 @@ def get_settle_history():
                         break
                 break
             except Exception as e:
-                logger.debug(f'settle/history fetch error: {e}')
+                logger.warning(f'settle/history fetch error from {node_url}: {e}')
 
         # Sort newest first
         settlements.sort(key=lambda x: x.get('settled_at', ''), reverse=True)
@@ -12933,6 +13045,135 @@ _node_config_lock = Lock()
 NODE_CONFIG_RECHECK_SECS = 3600
 NODE_CONFIG_OBSOLETE_SHOWN_SECS = 86400
 
+# ── Settlement visibility (v1.4.52) ───────────────────────────────────────────
+# The node settles per Hermes channel, and a settlement the transactor refuses
+# never reaches the node's settlement history. On 29 Sept 2026 the transactor's
+# fee quote froze and every settlement was refused for a day, while the card
+# showed one total above the threshold and nothing else. What can be seen: the
+# per-channel balances, how long a channel has been at or above the threshold,
+# and whether the transactor's quote has expired.
+SETTLE_DUE_WARN_SECS = 3600
+FEE_QUOTE_CHECK_SECS = 600
+FEE_QUOTE_STALE_WARN_SECS = 1800
+_settle_due_since = {}           # (node url, hermes id) -> epoch the channel first reached the threshold
+_fee_quote_state = {}            # node url -> last fee quote check
+_settle_state_lock = Lock()
+
+
+def _tokens_ether(t):
+    """MYST from a TequilAPI Tokens value ({'wei', 'ether'}) or a bare wei amount."""
+    try:
+        if isinstance(t, dict):
+            if t.get('ether') not in (None, ''):
+                return float(t['ether'])
+            if t.get('wei') not in (None, ''):
+                return int(str(t['wei'])) / 1e18
+            return None
+        if isinstance(t, (int, str)) and str(t).strip().lstrip('-').isdigit():
+            return int(str(t)) / 1e18
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
+def _parse_go_time(s):
+    """RFC 3339 time from Go (up to nine fractional digits, 'Z') -> aware datetime, or None."""
+    if not isinstance(s, str):
+        return None
+    m = re.match(r'^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d+))?(Z|[+-]\d\d:\d\d)$', s.strip())
+    if not m:
+        return None
+    frac = (m.group(2) or '')[:6].ljust(6, '0')
+    tz = '+00:00' if m.group(3) == 'Z' else m.group(3)
+    try:
+        return datetime.fromisoformat(f'{m.group(1)}.{frac}{tz}')
+    except ValueError:
+        return None
+
+
+def _settle_channels(node_url, data, threshold, now):
+    """Per-Hermes channels from an /identities/{id} reply, at most eight.
+
+    due_since is when the channel was first seen at or above the auto-settle
+    threshold; it is cleared as soon as the channel drops below it (settled)."""
+    per = data.get('earnings_per_hermes') if isinstance(data, dict) else None
+    out = []
+    if not isinstance(per, dict):
+        return out
+    for hermes, e in list(per.items())[:8]:
+        e = e if isinstance(e, dict) else {}
+        unsettled = _tokens_ether(e.get('earnings'))
+        lifetime = _tokens_ether(e.get('earnings_total'))
+        key = (node_url, str(hermes).lower())
+        with _settle_state_lock:
+            if threshold is not None and unsettled is not None and unsettled >= threshold:
+                since = _settle_due_since.setdefault(key, now)
+            else:
+                _settle_due_since.pop(key, None)
+                since = None
+        out.append({'hermes_id': hermes,
+                    'unsettled': round(unsettled or 0.0, 4),
+                    'lifetime': round(lifetime or 0.0, 4),
+                    'threshold': threshold,
+                    'due_since': since,
+                    'due_secs': round(now - since) if since is not None else None})
+    return out
+
+
+def _settle_threshold(node_url):
+    """The node's auto-settle threshold: the operator's value from the last Node
+    Config check, else the node default. None until that check has succeeded —
+    right after a restart the default would be shown in place of the operator's
+    own value (5 instead of 12.5) and channels flagged as due that are not."""
+    key = 'payments.zero-stake-unsettled-amount'
+    insp = _node_config_state.get(node_url) or {}
+    if not insp.get('ok'):
+        return None
+    v = (insp.get('values') or {}).get(key)
+    if v is None:
+        v = (NODE_CONFIG_KEYS.get(key) or {}).get('node_default')
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _refresh_fee_quote(node_url, headers):
+    entry = {'checked': time.time(), 'expired_secs': None, 'valid_until': None, 'error': None}
+    try:
+        r = requests.get(f'{node_url}/v2/transactor/fees', headers=headers, timeout=15)
+        if r.status_code != 200:
+            entry['error'] = f'node answered HTTP {r.status_code}'
+        else:
+            d = r.json()
+            valid = _parse_go_time((d.get('current') or {}).get('valid_until'))
+            server = _parse_go_time(d.get('server_time'))
+            if valid and server:
+                entry['valid_until'] = valid.isoformat()
+                entry['expired_secs'] = max(0, round((server - valid).total_seconds()))
+            else:
+                entry['error'] = 'reply had no valid_until/server_time'
+    except Exception as e:
+        entry['error'] = f'{type(e).__name__}'
+    if entry['error']:
+        logger.warning(f'Transactor fee quote check via {node_url} failed: {entry["error"]}')
+    with _settle_state_lock:
+        _fee_quote_state[node_url] = entry
+
+
+def _maybe_refresh_fee_quote(node_url, headers):
+    """Start a fee quote check in the background when the last one is older than
+    FEE_QUOTE_CHECK_SECS; return the last result. Never blocks the poll."""
+    with _settle_state_lock:
+        last = _fee_quote_state.get(node_url)
+        due = last is None or time.time() - last.get('checked', 0) >= FEE_QUOTE_CHECK_SECS
+        if due:
+            # mark as checked now so a slow node does not start a thread per poll
+            _fee_quote_state[node_url] = {**(last or {}), 'checked': time.time()}
+    if due:
+        Thread(target=_refresh_fee_quote, args=(node_url, dict(headers or {})), daemon=True).start()
+    return dict(last) if last else None
+
 
 def _flatten_user_config(data, prefix=''):
     """Nested /config/user payload -> {'dotted.key': value}. Keys lowercased, as the node does."""
@@ -13331,18 +13572,35 @@ def _toolkit_health():
         statuses.append('warning')
 
     try:
-        if not _get_user_retention_config():
+        active = _get_user_retention_config()
+        stored, _flag = _get_stored_retention()
+        if active:
+            days = sorted(set(active.values()))
+            if len(active) == len(_DEFAULT_RETENTION) and len(days) == 1:
+                detail = f'pruned daily — {days[0]} days for all seven'
+            else:
+                detail = 'pruned daily — ' + ', '.join(f'{k} {v} d' for k, v in active.items())
+                if len(active) < len(_DEFAULT_RETENTION):
+                    detail += '; the others are kept in full'
+            sub['checks'].append({'name': 'Data retention', 'status': 'ok', 'detail': detail})
+        else:
             db_dir = _toolkit_root / 'backend' / 'databases'
             size_mb = sum(f.stat().st_size for f in db_dir.glob('*.db*') if f.is_file()) / 1e6 \
                 if db_dir.exists() else 0.0
-            sub['checks'].append({'name': 'Data retention', 'status': 'info',
-                                  'detail': (f'off — all history is kept ({size_mb:.0f} MB so far). '
-                                             f'Set it in Data Manager if storage is limited.')})
+            if stored:
+                detail = (f'off — values saved by an earlier version are not applied; all history '
+                          f'is kept ({size_mb:.0f} MB so far). Apply them or set retention in the '
+                          f'Data Manager.')
+            else:
+                detail = (f'off — all history is kept ({size_mb:.0f} MB so far). Set it in the Data '
+                          f'Manager if storage is limited — for a node without its own dashboard, '
+                          f'from its view on the fleet master.')
+            sub['checks'].append({'name': 'Data retention', 'status': 'info', 'detail': detail})
             statuses.append('info')
-        else:
-            sub['checks'].append({'name': 'Data retention', 'status': 'ok', 'detail': 'set'})
     except Exception as e:
-        logger.debug(f'Retention check skipped: {e}')
+        logger.warning(f'Retention check failed: {e}')
+        sub['checks'].append({'name': 'Data retention', 'status': 'info',
+                              'detail': f'could not be checked: {str(e)[:80]}'})
 
     sub['status'] = 'warning' if 'warning' in statuses else 'info' if 'info' in statuses else 'ok'
     return sub
@@ -13823,20 +14081,18 @@ def set_pi_mode():
         body = request.get_json(silent=True) or {}
         enabled = bool(body.get('enabled', False))
 
+        # Persist first: a setting that is applied but not saved silently reverts
+        # at the next restart.
+        try:
+            _update_setup_json(lambda d: d.__setitem__('pi_mode', enabled))
+        except SetupConfigUnreadable as e:
+            logger.error(f'settings/pi-mode not saved: {e}')
+            return jsonify({'success': False, 'error': str(e)}), 500
+
         # Apply immediately to running logger
         new_level = logging.WARNING if enabled else logging.INFO
         logging.getLogger().setLevel(new_level)
         PI_MODE = enabled
-
-        # Persist to setup.json
-        cfg_path = Path('config/setup.json')
-        try:
-            current = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
-        except Exception:
-            current = {}
-        current['pi_mode'] = enabled
-        cfg_path.write_text(json.dumps(current, indent=2))
-
         level_name = logging.getLevelName(new_level)
         logger.warning(f"Pi mode {'enabled' if enabled else 'disabled'} — log level set to {level_name}")
         return jsonify({
@@ -13867,16 +14123,14 @@ def set_fail2ban_managed():
     try:
         body = request.get_json(silent=True) or {}
         enabled = bool(body.get('enabled', True))
-        FAIL2BAN_MANAGED = enabled
 
-        # Persist to setup.json
-        cfg_path = Path('config/setup.json')
+        # Persist first, then apply — see set_pi_mode.
         try:
-            current = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
-        except Exception:
-            current = {}
-        current['fail2ban_managed'] = enabled
-        cfg_path.write_text(json.dumps(current, indent=2))
+            _update_setup_json(lambda d: d.__setitem__('fail2ban_managed', enabled))
+        except SetupConfigUnreadable as e:
+            logger.error(f'settings/fail2ban-managed not saved: {e}')
+            return jsonify({'success': False, 'error': str(e)}), 500
+        FAIL2BAN_MANAGED = enabled
 
         logger.info(f"fail2ban_managed set to {enabled}")
         return jsonify({
@@ -13902,15 +14156,7 @@ def get_data_retention():
     everything, and indistinguishable from a machine that really was deleting.
     """
     try:
-        retention = _get_retention_config()
-        active = _get_user_retention_config()
-        return jsonify({
-            'retention':  retention,
-            'defaults':   _DEFAULT_RETENTION,
-            'enabled':    bool(active),
-            'active':     active,
-            'last_prune': _last_prune_date or None,
-        }), 200
+        return jsonify(_retention_payload()), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -13925,6 +14171,7 @@ def save_data_retention():
     """
     try:
         body = request.get_json(silent=True) or {}
+        apply_stored = body.get('apply_stored') is True
         new_values = body.get('retention', {})
         if not isinstance(new_values, dict):
             return jsonify({'error': 'retention must be a JSON object'}), 400
@@ -13935,46 +14182,62 @@ def save_data_retention():
         for k, v in new_values.items():
             if k not in _DEFAULT_RETENTION:
                 rejected[k] = f'unknown key'
-            elif not isinstance(v, int) or v <= 0:
+            elif not isinstance(v, int) or isinstance(v, bool) or v <= 0:
                 rejected[k] = f'must be a positive integer (got {v!r})'
             else:
                 accepted[k] = v
 
-        if not accepted:
+        if not accepted and not apply_stored:
             return jsonify({'error': 'No valid retention values provided', 'rejected': rejected}), 400
 
-        # Read current setup.json, merge, write back
-        cfg_path = Path('config/setup.json')
+        outcome = {}
+
+        def _merge_retention(current):
+            enabled_before = bool(current.get('data_retention_enabled'))
+            raw = current.get('data_retention')
+            stored = {k: v for k, v in raw.items()
+                      if k in _DEFAULT_RETENTION and isinstance(v, int) and not isinstance(v, bool) and v > 0} \
+                if isinstance(raw, dict) else {}
+            if apply_stored:
+                # "Apply these saved values": the operator activates the block
+                # saved by an earlier version, as it stands, plus any change.
+                if not stored and not accepted:
+                    raise ValueError('there are no saved retention values to apply')
+                new_block = {**stored, **accepted}
+            elif enabled_before:
+                # Pruning is on: merge, so windows saved earlier are kept.
+                new_block = {**stored, **accepted}
+            else:
+                # First save on this install, or over a block saved before v1.3.3
+                # that was never applied. Only what was sent becomes active;
+                # merging switched the whole old block on with it.
+                new_block = dict(accepted)
+                outcome['dropped'] = {k: v for k, v in stored.items() if k not in accepted}
+            current['data_retention'] = new_block
+            # Explicit opt-in: saving retention via the Data Manager is the ONLY action
+            # that enables the daily auto-prune (see _get_user_retention_config).
+            current['data_retention_enabled'] = True
+            outcome['saved'] = new_block
         try:
-            current = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
-        except Exception:
-            current = {}
+            _update_setup_json(_merge_retention)
+        except SetupConfigUnreadable as e:
+            logger.error(f'data/retention not saved: {e}')
+            return jsonify({'success': False, 'error': str(e)}), 500
+        except ValueError as e:
+            return jsonify({'success': False, 'error': str(e)}), 400
 
-        existing = current.get('data_retention', {})
-        if not isinstance(existing, dict):
-            existing = {}
-        existing.update(accepted)
-        current['data_retention'] = existing
-        # Explicit opt-in: saving retention via the Data Manager is the ONLY action
-        # that enables the daily auto-prune (see _get_user_retention_config).
-        current['data_retention_enabled'] = True
-        cfg_path.write_text(json.dumps(current, indent=2))
-
-        logger.info(f"data/retention updated: {accepted}")
-        _active = _get_user_retention_config()
+        logger.info(f"data/retention updated: {outcome.get('saved')}"
+                    + (f" — values saved by an earlier version, never applied, dropped: {outcome['dropped']}"
+                       if outcome.get('dropped') else ''))
+        # Saving is what sets data_retention_enabled, so this reply is the moment
+        # the answer changes from "nothing is pruned" to "these windows apply";
+        # it carries the same fields as GET so the card never shows two states.
         return jsonify({
             'success':  True,
             'saved':    accepted,
             'rejected': rejected,
-            'retention': _get_retention_config(),
-            # Saving is what sets data_retention_enabled, so this response is the
-            # moment the answer changes from "nothing is pruned" to "these windows
-            # apply". Leaving it out of the reply meant the card kept showing
-            # "Not pruning" next to its own "Saved" confirmation until the page
-            # was reloaded — two contradictory messages side by side, which reads
-            # as a save that did not take.
-            'enabled':  bool(_active),
-            'active':   _active,
+            'dropped':  outcome.get('dropped', {}),
+            **_retention_payload(),
         }), 200
     except Exception as e:
         logger.error(f'data/retention POST error: {e}')
