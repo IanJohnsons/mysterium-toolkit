@@ -19,6 +19,9 @@ import requests
 import base64
 import hashlib
 import hmac
+import ipaddress
+import ssl
+import tempfile
 import logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timezone, timedelta
@@ -26,6 +29,7 @@ from functools import wraps
 from collections import deque
 from threading import Thread, Lock
 from pathlib import Path
+from urllib.parse import urlparse
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
@@ -627,13 +631,19 @@ def _load_nodes_json():
                     if isinstance(n, str):
                         # Simple URL string
                         n = {'url': n}
-                    if 'url' not in n:
+                    # v1.4.53: a peer node needs only toolkit_url — the master never
+                    # talks to a remote node's TequilAPI, which listens on that node's
+                    # own 127.0.0.1. Requiring `url` silently dropped every node added
+                    # through the fleet form without one: in nodes.json, in no view.
+                    if not n.get('url') and not n.get('toolkit_url'):
+                        logger.warning(f"nodes.json: skipping node '{n.get('id', i)}' — it has "
+                                       f"neither a toolkit_url nor a url")
                         continue
                     # Skip template nodes — never installed by user
                     if 'REPLACE_WITH_NODE_IP' in n.get('url', '')                             or 'REPLACE_WITH_NODE_IP' in n.get('toolkit_url', '')                             or 'REPLACE_WITH_DASHBOARD_API_KEY' in n.get('toolkit_api_key', ''):
                         logger.info(f"nodes.json: skipping template node '{n.get('id', i)}' — placeholder values not replaced")
                         continue
-                    raw_url = _normalize_url(n['url'])
+                    raw_url = _normalize_url(n['url']) if n.get('url') else ''
                     # Auto-correct: port 4449 is the MystNodes UI, not TequilAPI (4050).
                     # Silently remap so existing nodes.json files work without manual editing.
                     if ':4449' in raw_url:
@@ -971,7 +981,7 @@ FLEET_POLL_INTERVAL = max(int(os.getenv('FLEET_POLL_INTERVAL', 10)), 5)
 if MULTI_NODE_MODE:
     logger.info(f"=== MULTI-NODE MODE: {len(_node_registry)} nodes from nodes.json ===")
     for n in _node_registry:
-        logger.info(f"  {n['id']}: {n['label']} → {n['url']}")
+        logger.info(f"  {n['id']}: {n['label']} → {n['url'] or n.get('toolkit_url', '')}")
 else:
     logger.info(f"Single-node mode: {NODE_API_URLS}")
 logger.info(f"Update Interval: {UPDATE_INTERVAL}s")
@@ -6975,6 +6985,104 @@ _NODE_HEAVY_DEFAULTS = {'date': '', 'earnings_history': [], 'traffic_history': {
 
 
 _tls_warned = set()
+_scheme_hint = {}          # node id -> URL on the other scheme that answered, or None (v1.4.53)
+_scheme_hint_checked = {}  # node id -> epoch of the last check
+
+
+def _cert_info(pem):
+    """Fingerprint, names and expiry of one PEM certificate, or None if it is not one.
+
+    Standard library only — cryptography is not a toolkit dependency. The names
+    come from ssl's certificate decoder; if that is unavailable the fingerprint
+    is still returned and `sans` is empty."""
+    if not isinstance(pem, str) or '-----BEGIN CERTIFICATE-----' not in pem:
+        return None
+    try:
+        der = ssl.PEM_cert_to_DER_cert(pem.strip() + '\n')
+    except Exception:
+        return None
+    fp = hashlib.sha256(der).hexdigest().upper()
+    info = {'fingerprint': ':'.join(fp[i:i + 2] for i in range(0, 64, 2)), 'sans': [], 'not_after': None}
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile('w', suffix='.pem', delete=False) as f:
+            f.write(pem)
+            tmp = f.name
+        decoded = ssl._ssl._test_decode_cert(tmp)
+        info['sans'] = [v for _, v in decoded.get('subjectAltName', ())]
+        info['not_after'] = decoded.get('notAfter')
+    except Exception:
+        pass
+    finally:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+    return info
+
+
+def _cert_covers(sans, host):
+    """Whether a certificate with these names is valid for `host` — the same
+    check requests makes when a certificate is pinned (IP exact, DNS
+    case-insensitive, a leading '*.' matching one label)."""
+    if not host:
+        return False
+    host = host.strip('[]').lower()
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None
+    for name in sans or []:
+        n = str(name).lower()
+        if ip is not None:
+            try:
+                if ipaddress.ip_address(n) == ip:
+                    return True
+            except ValueError:
+                continue
+        elif n == host:
+            return True
+        elif n.startswith('*.') and host.count('.') == n.count('.') and host.endswith(n[1:]):
+            return True
+    return False
+
+
+def _other_scheme_answers(url, timeout=4):
+    """If a toolkit does not answer on the scheme in `url`, check the other one.
+
+    Returns the corrected base URL when GET /api/version answers there (200 or
+    401 — a toolkit either way), else None. Certificates are not checked here:
+    this only finds out which scheme the node speaks, nothing is sent but the
+    request line. A node switched to HTTPS used to drop out of the fleet as
+    "unreachable" until someone edited nodes.json (v1.4.53)."""
+    u = str(url or '')
+    if u.lower().startswith('http://'):
+        alt = 'https://' + u[7:]
+    elif u.lower().startswith('https://'):
+        alt = 'http://' + u[8:]
+    else:
+        return None
+    try:
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        r = requests.get(alt.rstrip('/') + '/api/version', timeout=timeout, verify=False)
+        if r.status_code in (200, 401):
+            return alt
+    except Exception:
+        pass
+    return None
+
+
+def _apply_scheme_hint(node_entry, node_data):
+    """Replace the error of a node that is not online with "now answers on HTTPS"
+    when that is what the last scheme check found. Applied after collection, so
+    the TequilAPI fallback's own failure does not overwrite it (v1.4.53)."""
+    alt = _scheme_hint.get(node_entry.get('id'))
+    if alt and isinstance(node_data, dict) and node_data.get('status') != 'online':
+        node_data['error'] = (f'This node now answers on {alt.split(":")[0].upper()} — '
+                              f'edit it in the fleet settings and use {alt}')
+    return node_data
 
 
 def _peer_verify(node_entry):
@@ -7186,9 +7294,23 @@ def _collect_single_node(node_entry):
                 # Fall through to TequilAPI fallback
         except Exception as e:
             result['error'] = f'Peer connection failed: {str(e)[:60]}'
+            # v1.4.53: a node that switched to HTTPS (or back) answers on the
+            # other scheme. Checked here at most once per ten minutes per node (a
+            # hanging node already costs a timeout); _apply_scheme_hint() puts it
+            # in the error once the TequilAPI fallback has had its turn.
+            if isinstance(e, requests.exceptions.ConnectionError):
+                _now = time.time()
+                _last = _scheme_hint_checked.get(node_id, 0)
+                if _now - _last >= 600:
+                    _scheme_hint_checked[node_id] = _now
+                    _scheme_hint[node_id] = _other_scheme_answers(toolkit_url, timeout=3)
             # Fall through to TequilAPI fallback
 
     # ── TEQUILA MODE: direct TequilAPI ────────────────────────────────────────
+    if not node_entry.get('url'):
+        # Peer-only node (no TequilAPI address): nothing to fall back to. Keep the
+        # peer error, which says what went wrong (v1.4.53).
+        return result
     username = node_entry.get('username', NODE_USERNAME)
     password = node_entry.get('password', NODE_PASSWORD)
     headers  = {}
@@ -7453,7 +7575,7 @@ def multi_node_background_collector():
 
             for node_entry in _node_registry:
                 try:
-                    node_data = _collect_single_node(node_entry)
+                    node_data = _apply_scheme_hint(node_entry, _collect_single_node(node_entry))
                     with _per_node_lock:
                         _per_node_metrics[node_entry['id']] = node_data
                 except Exception as e:
@@ -10087,6 +10209,24 @@ def save_fleet_config():
                 else:
                     return jsonify({'error': f'Node {i+1} missing toolkit_api_key'}), 400
 
+            # v1.4.53: a certificate fetched in the Add/Edit form arrives as
+            # tls_cert_pem. It is checked, written to config/tls/peers/<id>.pem
+            # and pinned — the step operators used to do by copying cert.pem by hand.
+            _pem = n.pop('tls_cert_pem', None)
+            if _pem:
+                if not str(n.get('toolkit_url', '')).lower().startswith('https://'):
+                    return jsonify({'error': f'Node {i+1}: a certificate can only be pinned for an https:// address'}), 400
+                if not _cert_info(_pem):
+                    return jsonify({'error': f'Node {i+1}: the certificate to pin is not a valid PEM certificate'}), 400
+                _safe = re.sub(r'[^A-Za-z0-9_-]', '-', str(n['id']))[:64] or f'node{i}'
+                _peer_dir = Path('config/tls/peers')
+                _peer_dir.mkdir(parents=True, exist_ok=True)
+                _peer_file = _peer_dir / f'{_safe}.pem'
+                _peer_file.write_text(_pem.strip() + '\n')
+                n['tls_cert'] = str(_peer_file)
+                n['tls_verify'] = True
+                logger.info(f"Node {n['id']}: pinned certificate {_cert_info(_pem)['fingerprint'][:23]}… "
+                            f"at {_peer_file}")
             # The node's TequilAPI has no TLS. An https:// value here is always
             # wrong and takes the node out of the fleet — correct it rather than
             # storing something that cannot work.
@@ -10175,17 +10315,27 @@ def probe_fleet_node():
             # broader handler would swallow this and report an unreachable node
             # when the real problem is an unverified certificate — a completely
             # different fix for the operator.
-            return jsonify({
-                'success': False,
-                'error': 'TLS certificate could not be verified. Copy that node\'s '
-                         'config/tls/cert.pem to this machine and set tls_cert, or set '
-                         'tls_verify to false if you trust the network.',
-                'detail': str(e)[:160],
-                'tls_error': True,
-            }), 200
+            alt = _other_scheme_answers(toolkit_url)
+            if alt and alt.startswith('http://'):
+                return jsonify({'success': False, 'suggest_url': alt,
+                                'error': f'This node answers over plain HTTP, not HTTPS. Use {alt}'}), 200
+            if 'mismatch' in str(e).lower() or "doesn't match" in str(e).lower():
+                msg = ('The certificate is valid, but not for this address — it does not list '
+                       f'{urlparse(toolkit_url).hostname}. Pinning cannot work on this address until '
+                       'that node generates a certificate that includes it (start.sh → Security → TLS). '
+                       'On a Tailscale address, skipping verification is safe meanwhile.')
+            else:
+                msg = ('This node\'s certificate is self-signed and not pinned yet. Use "Fetch '
+                       'certificate" to pin it after comparing the fingerprint, or skip verification '
+                       'if you trust the network.')
+            return jsonify({'success': False, 'error': msg, 'detail': str(e)[:160], 'tls_error': True}), 200
         except requests.exceptions.Timeout:
             return jsonify({'success': False, 'error': f'Connection timed out — node may be offline'}), 200
         except requests.exceptions.ConnectionError:
+            alt = _other_scheme_answers(toolkit_url)
+            if alt:
+                return jsonify({'success': False, 'suggest_url': alt,
+                                'error': f'This node answers on {alt.split(":")[0].upper()}, not on the address given. Use {alt}'}), 200
             return jsonify({'success': False, 'error': f'Cannot reach {toolkit_url} — check URL and port forwarding'}), 200
 
         # Fetch peer/data for node info
@@ -10242,6 +10392,45 @@ def probe_fleet_node():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
+
+
+@app.route('/fleet/fetch-cert', methods=['POST'])
+@require_auth
+def fleet_fetch_cert():
+    """Fetch the certificate an https:// node presents, for pinning (v1.4.53).
+
+    Nothing is trusted or stored here: the certificate is returned with its
+    SHA-256 fingerprint, the names it is valid for, and whether those include
+    the host in the URL — which pinning needs, since requests checks the address
+    against the certificate. The operator compares the fingerprint with the one
+    on that node's Toolkit card; the form stores the certificate on save."""
+    try:
+        from urllib.parse import urlparse
+        body = request.get_json(silent=True) or {}
+        url = str(body.get('toolkit_url') or '').strip()
+        parsed = urlparse(url)
+        if parsed.scheme != 'https' or not parsed.hostname:
+            return jsonify({'success': False, 'error': 'an https:// toolkit address is required'}), 400
+        port = parsed.port or 443
+        try:
+            pem = ssl.get_server_certificate((parsed.hostname, port), timeout=8)
+        except TypeError:   # Python < 3.10 has no timeout argument
+            pem = ssl.get_server_certificate((parsed.hostname, port))
+        info = _cert_info(pem)
+        if not info:
+            return jsonify({'success': False, 'error': 'the node did not present a readable certificate'}), 200
+        covers = _cert_covers(info['sans'], parsed.hostname)
+        return jsonify({
+            'success':     True,
+            'pem':         pem,
+            'fingerprint': info['fingerprint'],
+            'sans':        info['sans'],
+            'not_after':   info['not_after'],
+            'host':        parsed.hostname,
+            'covers_host': covers,
+        }), 200
+    except (ConnectionError, OSError, ssl.SSLError) as e:
+        return jsonify({'success': False, 'error': f'could not fetch the certificate: {type(e).__name__}: {str(e)[:120]}'}), 200
 
 
 @app.route('/fleet/test/<node_id>', methods=['GET'])
@@ -13602,6 +13791,35 @@ def _toolkit_health():
         sub['checks'].append({'name': 'Data retention', 'status': 'info',
                               'detail': f'could not be checked: {str(e)[:80]}'})
 
+    # v1.4.53: TLS as it actually runs, the certificate's fingerprint (compare it
+    # with what a fleet master shows before pinning), and whether the certificate
+    # lists every address this machine has — a master reaching it on a missing
+    # one (typically the Tailscale 100.x address) cannot pin it.
+    if HTTPS_ENABLED:
+        try:
+            if not _TLS_STATE.get('active'):
+                sub['checks'].append({'name': 'HTTPS', 'status': 'warning',
+                                      'detail': 'enabled in setup.json, but this toolkit serves plain HTTP: '
+                                                + (_TLS_STATE.get('reason') or 'unknown reason')})
+                statuses.append('warning')
+            info = _cert_info(Path(TLS_CERT).read_text()) if Path(TLS_CERT).exists() else None
+            if info:
+                own = sorted({a.address for addrs in psutil.net_if_addrs().values() for a in addrs
+                              if a.family == socket.AF_INET and not a.address.startswith('127.')})
+                missing = [a for a in own if not _cert_covers(info['sans'], a)]
+                sub['checks'].append({'name': 'TLS certificate', 'status': 'ok',
+                                      'detail': f"SHA-256 {info['fingerprint']}"})
+                if missing:
+                    sub['checks'].append({
+                        'name': 'Certificate addresses', 'status': 'info',
+                        'detail': (f"not valid for {', '.join(missing)} — a fleet master using one of "
+                                   f"these cannot pin it. Regenerate: start.sh → Security → TLS")})
+                    statuses.append('info')
+        except Exception as e:
+            logger.warning(f'TLS check failed: {e}')
+            sub['checks'].append({'name': 'TLS certificate', 'status': 'info',
+                                  'detail': f'could not be checked: {str(e)[:80]}'})
+
     sub['status'] = 'warning' if 'warning' in statuses else 'info' if 'info' in statuses else 'ok'
     return sub
 
@@ -14397,6 +14615,11 @@ def get_system_history():
         return jsonify({'error': str(e)}), 500
 
 
+# What _serve actually did about TLS, for the Toolkit card (v1.4.53). HTTPS_ENABLED
+# is what setup.json asks for; this is what is running.
+_TLS_STATE = {'active': False, 'reason': ''}
+
+
 def _serve(wsgi_app, port):
     """Serve the dashboard (v1.4.0).
 
@@ -14412,6 +14635,7 @@ def _serve(wsgi_app, port):
     if DEBUG:
         logger.warning("DEBUG is enabled — using the Flask development server. "
                        "Never leave this on for a node that is reachable from the internet.")
+        _TLS_STATE['reason'] = 'DEBUG mode runs the Flask development server, which serves plain HTTP'
         wsgi_app.run(host='0.0.0.0', port=port, debug=True)
         return
 
@@ -14420,6 +14644,7 @@ def _serve(wsgi_app, port):
     except ImportError:
         logger.warning("cheroot is not installed — falling back to the Flask development "
                        "server. Run: pip install -r requirements.txt")
+        _TLS_STATE['reason'] = 'cheroot is not installed, so the Flask development server runs, without TLS'
         wsgi_app.run(host='0.0.0.0', port=port, debug=False)
         return
 
@@ -14436,10 +14661,12 @@ def _serve(wsgi_app, port):
                 f"({TLS_CERT} / {TLS_KEY}). Starting over plain HTTP instead. "
                 f"Re-run setup.sh to generate a certificate."
             )
+            _TLS_STATE['reason'] = f'the certificate is missing ({TLS_CERT} / {TLS_KEY})'
         else:
             from cheroot.ssl.builtin import BuiltinSSLAdapter
             server.ssl_adapter = BuiltinSSLAdapter(str(cert_path), str(key_path))
             logger.info(f"TLS enabled — serving HTTPS using {TLS_CERT}")
+            _TLS_STATE['active'] = True
 
     try:
         server.safe_start()

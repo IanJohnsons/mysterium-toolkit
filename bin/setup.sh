@@ -14,18 +14,47 @@ _setup_tls() {
     _TLS_KEY="$_TLS_DIR/key.pem"
     mkdir -p "$_TLS_DIR"
 
+    # Every IPv4 address this machine is reached on: all of `hostname -I` (LAN,
+    # Tailscale, other interfaces), the Tailscale address explicitly, and the
+    # public IP. Until v1.4.53 only the first LAN address went in, so a fleet
+    # master reaching the node over Tailscale (100.x) could not pin it: the
+    # address was not in the certificate. A certificate still only matches what
+    # is listed, so a bare IP stops matching when the provider changes it.
+    _ADDRS=$(hostname -I 2>/dev/null | tr ' ' '\n')
+    if command -v tailscale &>/dev/null; then
+        _ADDRS="$_ADDRS
+$(tailscale ip -4 2>/dev/null)"
+    fi
+    _PUB_IP=$(curl -sf --max-time 5 https://api.ipify.org 2>/dev/null || echo "")
+    _ADDRS=$(printf '%s\n%s\n' "$_ADDRS" "$_PUB_IP" | grep -E '^[0-9]+(\.[0-9]+){3}$' | grep -v '^127\.' | sort -u)
+
     if [ -f "$_TLS_CERT" ] && [ -f "$_TLS_KEY" ]; then
-        echo -e "  ${CYAN}Existing certificate found — keeping it${NC}"
-        echo -e "  ${DIM}  Delete $_TLS_CERT to generate a new one${NC}"
-    else
-        # Collect the names and addresses this certificate must be valid for.
-        # A certificate only matches what is listed here, so a node reached by a
-        # bare IP address stops matching when the provider changes that address.
-        _LAN_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
-        _PUB_IP=$(curl -sf --max-time 5 https://api.ipify.org 2>/dev/null || echo "")
+        _missing=""
+        if command -v openssl &>/dev/null; then
+            _have=$(openssl x509 -in "$_TLS_CERT" -noout -ext subjectAltName 2>/dev/null)
+            for _a in $_ADDRS; do
+                echo "$_have" | grep -qE "IP Address:${_a//./\\.}(,|$)" || _missing="$_missing $_a"
+            done
+        fi
+        if [ -n "$_missing" ]; then
+            echo -e "  ${YELLOW}⚠ Existing certificate — these addresses are missing from the certificate:${_missing}${NC}"
+            echo -e "  ${DIM}  A fleet master that reaches this node on one of them cannot pin it.${NC}"
+            echo -e "  ${DIM}  A new certificate has a new fingerprint: a master that pinned the old one${NC}"
+            echo -e "  ${DIM}  must fetch it again (fleet → edit this node → Fetch certificate).${NC}"
+            printf "  Generate a new certificate that includes them? [y/N]: "
+            read -r _tls_regen </dev/tty
+            if [[ "$_tls_regen" =~ ^[Yy]$ ]]; then
+                rm -f "$_TLS_CERT" "$_TLS_KEY"
+            fi
+        fi
+        if [ -f "$_TLS_CERT" ]; then
+            echo -e "  ${CYAN}Existing certificate found — keeping it${NC}"
+            echo -e "  ${DIM}  Delete $_TLS_CERT to generate a new one${NC}"
+        fi
+    fi
+    if [ ! -f "$_TLS_CERT" ] || [ ! -f "$_TLS_KEY" ]; then
         _SAN="IP:127.0.0.1,DNS:localhost"
-        [ -n "$_LAN_IP" ] && _SAN="$_SAN,IP:$_LAN_IP"
-        [ -n "$_PUB_IP" ] && _SAN="$_SAN,IP:$_PUB_IP"
+        for _a in $_ADDRS; do _SAN="$_SAN,IP:$_a"; done
 
         echo
         echo -e "  ${DIM}If this machine has a hostname that always points to it (a DNS${NC}"
@@ -2092,7 +2121,9 @@ if [[ "$_ts_answer" =~ ^[Yy]$ ]]; then
     if command -v tailscale &>/dev/null; then
         _ts_ip=$(tailscale ip -4 2>/dev/null | head -1)
         if [ -n "$_ts_ip" ]; then
-            echo -e "  ${GREEN}✓ Tailscale detected — reach the dashboard at http://${_ts_ip}:${DASHBOARD_PORT:-5000}${NC}"
+            _ts_scheme=http
+            grep -q '"https_enabled": *true' "$TOOLKIT_DIR/config/setup.json" 2>/dev/null && _ts_scheme=https
+            echo -e "  ${GREEN}✓ Tailscale detected — reach the dashboard at ${_ts_scheme}://${_ts_ip}:${DASHBOARD_PORT:-5000}${NC}"
         else
             echo -e "  ${YELLOW}⚠ Tailscale installed but not connected. Run: sudo tailscale up${NC}"
         fi

@@ -1234,6 +1234,8 @@ const MysteriumDashboard = () => {
   const fleetEditNodeRef = useRef(null);
   useEffect(() => { fleetEditNodeRef.current = fleetEditNode; }, [fleetEditNode]);
   const [fleetForm, setFleetForm] = useState({ label: '', toolkit_url: '', url: '', toolkit_api_key: '', tls_cert: '', tls_verify: true });
+  // v1.4.53: certificate fetched from an https:// node, and whether to pin it on save.
+  const [fleetCert, setFleetCert] = useState({ loading: false, result: null, pin: false });
   const [fleetProbing, setFleetProbing] = useState(false);
   const [fleetProbeResult, setFleetProbeResult] = useState(null);
   const [fleetSaving, setFleetSaving] = useState(false);
@@ -1411,14 +1413,7 @@ const MysteriumDashboard = () => {
 
   const getBackendUrl = useCallback(() => {
     if (backendUrlRef.current) return backendUrlRef.current;
-    const port = config?.dashboard_port || 5000;
-    const host = window.location.hostname || 'localhost';
-    // If accessed from another device (not localhost), use Vite proxy to avoid
-    // needing port 5000 open in firewall. Proxy routes /api → localhost:5000.
-    if (host !== 'localhost' && host !== '127.0.0.1') {
-      return `${window.location.protocol}//${window.location.host}`;
-    }
-    return `http://${host}:${port}`;
+    return toolkitBaseUrl(config?.dashboard_port || 5000);
   }, [config]);
 
   // ============ INITIALIZATION ============
@@ -1523,13 +1518,7 @@ const MysteriumDashboard = () => {
         setConfig(data);
 
         // Determine backend URL — use proxy for remote access (phone/LAN)
-        const host = window.location.hostname || 'localhost';
-        let backendUrl;
-        if (host !== 'localhost' && host !== '127.0.0.1') {
-          backendUrl = `${window.location.protocol}//${window.location.host}`;
-        } else {
-          backendUrl = `http://${data.node_host || 'localhost'}:${data.dashboard_port || 5000}`;
-        }
+        const backendUrl = toolkitBaseUrl(data.dashboard_port || 5000);
         backendUrlRef.current = backendUrl;
 
         // Show appropriate auth UI based on setup
@@ -1542,25 +1531,13 @@ const MysteriumDashboard = () => {
         }
       } else {
         // No config file — try auto-connect anyway (proxy or localhost)
-        const host = window.location.hostname || 'localhost';
-        let backendUrl;
-        if (host !== 'localhost' && host !== '127.0.0.1') {
-          backendUrl = `${window.location.protocol}//${window.location.host}`;
-        } else {
-          backendUrl = `http://localhost:5000`;
-        }
+        const backendUrl = toolkitBaseUrl(5000);
         backendUrlRef.current = backendUrl;
         attemptAutoConnect(backendUrl, {});
       }
     } catch (e) {
       // Network error — still try auto-connect
-      const host = window.location.hostname || 'localhost';
-      let backendUrl;
-      if (host !== 'localhost' && host !== '127.0.0.1') {
-        backendUrl = `${window.location.protocol}//${window.location.host}`;
-      } else {
-        backendUrl = `http://localhost:5000`;
-      }
+      const backendUrl = toolkitBaseUrl(5000);
       backendUrlRef.current = backendUrl;
       attemptAutoConnect(backendUrl, {});
     }
@@ -2141,6 +2118,7 @@ const MysteriumDashboard = () => {
       const openFleetAdd = () => {
         setFleetEditNode(null);
         setFleetForm({ label: '', toolkit_url: '', url: '', toolkit_api_key: '', tls_cert: '', tls_verify: true });
+        setFleetCert({ loading: false, result: null, pin: false });
         setFleetProbeResult(null);
         setFleetSaveError('');
         setFleetModalOpen(true);
@@ -2156,6 +2134,7 @@ const MysteriumDashboard = () => {
       // and an empty field means "leave it as it is".
       const openFleetEdit = (node) => {
         setFleetEditNode(node);
+        setFleetCert({ loading: false, result: null, pin: false });
         setFleetForm({
           label: node.label || '', toolkit_url: node.toolkit_url || '', url: node.url || '',
           toolkit_api_key: '', tls_cert: node.tls_cert || '', tls_verify: node.tls_verify !== false,
@@ -2258,8 +2237,12 @@ const MysteriumDashboard = () => {
           // Only write tls_* when the URL is https — leaving them on an http node
           // is confusing and they are ignored anyway.
           const isHttps = String(fleetForm.toolkit_url || '').toLowerCase().startsWith('https://');
+          const pinNow = isHttps && fleetCert.pin && fleetCert.result && fleetCert.result.success && fleetCert.result.covers_host;
           const tlsFields = isHttps
-            ? { tls_cert: fleetForm.tls_cert || '', tls_verify: fleetForm.tls_verify !== false }
+            ? (pinNow
+                // v1.4.53: the backend writes it to config/tls/peers/<id>.pem and pins it.
+                ? { tls_cert_pem: fleetCert.result.pem, tls_verify: true }
+                : { tls_cert: fleetForm.tls_cert || '', tls_verify: fleetForm.tls_verify !== false })
             : {};
           if (fleetEditNode) {
             // Match on id, not toolkit_url: the URL is itself editable, so matching
@@ -2465,7 +2448,7 @@ const MysteriumDashboard = () => {
                               value={fleetForm.toolkit_url}
                               onChange={e => {
                                 let v = e.target.value.trim();
-                                setFleetForm(f => ({ ...f, toolkit_url: v }));
+                                setFleetForm(f => ({ ...f, toolkit_url: v })); setFleetCert({ loading: false, result: null, pin: false });
                                 setFleetProbeResult(null);
                               }}
                               onBlur={e => {
@@ -2473,7 +2456,7 @@ const MysteriumDashboard = () => {
                                 // Auto-fix bare IP or hostname: add http:// and :5000
                                 if (v && !v.startsWith('http')) v = 'http://' + v;
                                 if (v && /^http:\/\/[\d.a-zA-Z-]+$/.test(v)) v = v + ':5000';
-                                setFleetForm(f => ({ ...f, toolkit_url: v }));
+                                setFleetForm(f => ({ ...f, toolkit_url: v })); setFleetCert({ loading: false, result: null, pin: false });
                               }}
                               placeholder="http://NODE_IP:5000"
                               className="w-full bg-slate-800 border border-slate-600 focus:border-violet-400 rounded px-3 py-2 text-xs text-slate-200 outline-none transition font-mono"
@@ -2549,8 +2532,9 @@ const MysteriumDashboard = () => {
                                 <p className="text-xs text-slate-400">
                                   <span className="text-emerald-300">This is a Tailscale address.</span>{' '}
                                   That connection is already encrypted and authenticated on keys, so
-                                  <em> skip verification</em> is the normal choice. Pin the certificate as
-                                  well if you want a second layer.
+                                  <em> skip verification</em> is the normal choice. Pinning as a second layer
+                                  works only if the node&apos;s certificate lists this address —
+                                  <em> Fetch certificate</em> shows whether it does.
                                 </p>
                               )}
                               {fleetReach === 'lan' && (
@@ -2572,6 +2556,58 @@ const MysteriumDashboard = () => {
                                   </span>
                                 </p>
                               )}
+                              <div className="space-y-1">
+                                <button
+                                  type="button"
+                                  disabled={fleetCert.loading}
+                                  onClick={async () => {
+                                    setFleetCert({ loading: true, result: null, pin: false });
+                                    try {
+                                      const r = await fetch(`${backendUrlRef.current}/fleet/fetch-cert`, {
+                                        method: 'POST',
+                                        headers: { ...authHeaderRef.current, 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ toolkit_url: fleetForm.toolkit_url }),
+                                      });
+                                      const d = await r.json();
+                                      setFleetCert({ loading: false, result: d, pin: !!(d.success && d.covers_host) });
+                                    } catch (e) {
+                                      setFleetCert({ loading: false, result: { success: false, error: e.message }, pin: false });
+                                    }
+                                  }}
+                                  className="px-2 py-1 rounded border border-emerald-500/40 text-emerald-300 text-xs hover:bg-emerald-500/10 disabled:opacity-50"
+                                >
+                                  {fleetCert.loading ? 'Fetching…' : 'Fetch certificate'}
+                                </button>
+                                {fleetCert.result && !fleetCert.result.success && (
+                                  <p className="text-xs text-red-300">{'✗ ' + fleetCert.result.error}</p>
+                                )}
+                                {fleetCert.result && fleetCert.result.success && (
+                                  <div className="text-xs space-y-1 p-2 rounded bg-slate-900/60 border border-slate-700">
+                                    <div className="text-slate-400">{'SHA-256 fingerprint'}</div>
+                                    <div className="font-mono text-[10px] text-slate-200 break-all">{fleetCert.result.fingerprint}</div>
+                                    <div className="text-slate-500">
+                                      {'Compare it with the fingerprint on that node\u2019s Toolkit card (System Health \u2192 Toolkit) before pinning.'}
+                                    </div>
+                                    <div className="text-slate-500">{'Valid for: ' + (fleetCert.result.sans || []).join(', ')}</div>
+                                    {fleetCert.result.covers_host ? (
+                                      <label className="flex items-center gap-2 cursor-pointer text-emerald-300">
+                                        <input
+                                          type="checkbox"
+                                          checked={fleetCert.pin}
+                                          onChange={e => setFleetCert(c => ({ ...c, pin: e.target.checked }))}
+                                        />
+                                        {'Pin this certificate when saving'}
+                                      </label>
+                                    ) : (
+                                      <p className="text-amber-300">
+                                        {'This certificate does not list ' + fleetCert.result.host + ', so pinning it on this address cannot work. '
+                                          + 'On that node, regenerate the certificate (start.sh \u2192 Security \u2192 TLS) so it includes this address, '
+                                          + 'then fetch it again. On a Tailscale address, skipping verification is safe meanwhile.'}
+                                      </p>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
                               <input
                                 type="text"
                                 value={fleetForm.tls_cert}
@@ -2626,7 +2662,22 @@ const MysteriumDashboard = () => {
                                   </div>
                                 </div>
                               ) : (
-                                <div className="text-red-300">✗ {fleetProbeResult.error}</div>
+                                <div className="text-red-300">
+                                  ✗ {fleetProbeResult.error}
+                                  {fleetProbeResult.suggest_url && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setFleetForm(f => ({ ...f, toolkit_url: fleetProbeResult.suggest_url }));
+                                        setFleetCert({ loading: false, result: null, pin: false });
+                                        setFleetProbeResult(null);
+                                      }}
+                                      className="ml-2 px-2 py-0.5 rounded border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10"
+                                    >
+                                      {'Use ' + fleetProbeResult.suggest_url}
+                                    </button>
+                                  )}
+                                </div>
                               )}
                             </div>
                           )}
@@ -7470,6 +7521,21 @@ const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, 
     </div>
     </>
   );
+};
+
+// v1.4.53: the toolkit serves this page itself, so the page's own origin is the
+// backend — on any host, over http or https. Until v1.4.53 opening the dashboard
+// on the machine itself (localhost / 127.0.0.1) always used http:// (and the
+// TequilAPI host), which fails once TLS is on. Only the Vite dev server, on
+// another port, needs the backend's address spelled out.
+const toolkitBaseUrl = (port) => {
+  const loc = window.location;
+  const host = loc.hostname || 'localhost';
+  const pagePort = loc.port || (loc.protocol === 'https:' ? '443' : '80');
+  if ((host !== 'localhost' && host !== '127.0.0.1') || String(pagePort) === String(port || 5000)) {
+    return `${loc.protocol}//${loc.host}`;
+  }
+  return `http://${host}:${port || 5000}`;
 };
 
 const EarningsCard = ({ earnings, backendUrl, authHeaders }) => {
