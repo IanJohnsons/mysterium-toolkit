@@ -12516,10 +12516,18 @@ def force_health_scan():
         return jsonify({'error': 'System health module not available'}), 500
     try:
         result = _with_node_config_health(system_health.scan_all())
-        # Push directly into cache so next GET reflects it
+        # Push directly into cache so next GET reflects it — and into the
+        # collector's own cache. Until v1.4.53 only metrics_cache was set and the
+        # timer reset to 0; the next poll then wrote the collector's old
+        # _health_cache back, so a manual scan showed for one poll and the
+        # previous results returned for up to five minutes.
         with metrics_lock:
             metrics_cache['systemHealth'] = result
-        MetricsCollector._health_last_scan = 0  # Reset timer so next poll also refreshes
+        MetricsCollector._health_cache = result
+        MetricsCollector._health_last_scan = time.time()
+        # Every poll rebuilds metrics from the slow tier's cache; without this the
+        # scan was replaced by the slow tier's copy until its next cycle.
+        _tier_slow_cache['systemHealth'] = result
         return jsonify(result), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -13797,14 +13805,21 @@ def _toolkit_health():
     # one (typically the Tailscale 100.x address) cannot pin it.
     if HTTPS_ENABLED:
         try:
-            if not _TLS_STATE.get('active'):
+            # Only when _serve() decided on plain HTTP — every such path sets a
+            # reason. The collectors start before _serve(), so the first scan
+            # after a restart sees neither flag and must not warn (found live on
+            # the VPS, 3 Oct 2026: a false "serves plain HTTP: unknown reason").
+            if not _TLS_STATE.get('active') and _TLS_STATE.get('reason'):
                 sub['checks'].append({'name': 'HTTPS', 'status': 'warning',
                                       'detail': 'enabled in setup.json, but this toolkit serves plain HTTP: '
-                                                + (_TLS_STATE.get('reason') or 'unknown reason')})
+                                                + _TLS_STATE['reason']})
                 statuses.append('warning')
             info = _cert_info(Path(TLS_CERT).read_text()) if Path(TLS_CERT).exists() else None
             if info:
-                own = sorted({a.address for addrs in psutil.net_if_addrs().values() for a in addrs
+                # myst<N> are the node's own WireGuard tunnels (10.182.0.0/16 by
+                # default, created per session) — nobody reaches the toolkit there.
+                own = sorted({a.address for name, addrs in psutil.net_if_addrs().items()
+                              if not name.startswith('myst') for a in addrs
                               if a.family == socket.AF_INET and not a.address.startswith('127.')})
                 missing = [a for a in own if not _cert_covers(info['sans'], a)]
                 sub['checks'].append({'name': 'TLS certificate', 'status': 'ok',

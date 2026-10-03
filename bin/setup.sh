@@ -20,7 +20,13 @@ _setup_tls() {
     # master reaching the node over Tailscale (100.x) could not pin it: the
     # address was not in the certificate. A certificate still only matches what
     # is listed, so a bare IP stops matching when the provider changes it.
-    _ADDRS=$(hostname -I 2>/dev/null | tr ' ' '\n')
+    # myst<N> are the node's own WireGuard tunnels (10.182.0.0/16 by default,
+    # created per session): not addresses anyone reaches the toolkit on.
+    if command -v ip &>/dev/null; then
+        _ADDRS=$(ip -4 -o addr show 2>/dev/null | awk '$2 !~ /^myst/ {split($4, a, "/"); print a[1]}')
+    else
+        _ADDRS=$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -v '^10\.182\.')
+    fi
     if command -v tailscale &>/dev/null; then
         _ADDRS="$_ADDRS
 $(tailscale ip -4 2>/dev/null)"
