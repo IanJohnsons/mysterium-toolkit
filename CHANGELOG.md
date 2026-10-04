@@ -4,6 +4,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.56
+
+- fix: **the cause of the ghost "active" sessions.** The toolkit loads the node's full session history once at startup and afterwards re-read only the newest page (50 sessions). A session that left that page while still open — a long B2B session on a node with many short ones — was never read again, so when the node closed it cleanly the toolkit kept it as "New" indefinitely. Measured on a node with five such ghosts: the node had closed all five; it had no stale open sessions from its current run. Every cycle the toolkit now asks the node which sessions it still has open (`/sessions?status=New`), and re-reads any it holds as open that the node has closed — by start day and consumer — replacing it with the node's final record (status, duration, traffic, earnings) in memory and in its database.
+- improve: sessions left open in the node's history by a node restart are labelled "ended at node restart" instead of showing "New". The v1.4.55 label "ended — no clean close" now only appears for a session the node itself still records as open while it is no longer live.
+
 ## v1.4.55
 
 - fix: **sessions that ended without a clean close no longer count as active.** The toolkit took "active" from the node's stored session list, where a session is written when it starts and when it closes cleanly — a consumer that vanishes leaves its row on "New" for good. From that list a dead session cannot be told from a live multi-day session (both "New", no bytes, no tokens yet), which is why every rule tried before brought the ghosts back. The toolkit now listens to the node's own live session list (`/events/state`, the stream the node's web UI uses), from which a session disappears the moment it ends, however it ends. Active means live in the node; a stored row the node no longer has is shown in the history as "ended — no clean close".
