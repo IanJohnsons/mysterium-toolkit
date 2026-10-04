@@ -4,6 +4,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.54
+
+- fix: **a node running its own build could be offered — and given — the official release.** The toolkit recognised a custom node build only when the systemd unit started a binary other than `/usr/bin/myst`. A build copied over `/usr/bin/myst` itself looked like the packaged release, and versions were compared as text, so `1.39.7` against `1.39.7+fix6221` read as "update available": the install button would have overwritten the custom build. A custom build is now recognised by any of three signs — a unit starting another binary, build metadata in the version the node reports (`+…`), or `dpkg -V` showing that `/usr/bin/myst` differs from the installed package — and the install is refused with a message that says what it would have done.
+- fix: **node versions are compared as versions.** Numbers are compared as numbers, build metadata is ignored and a pre-release ranks below its release. Before, any difference counted as an update, so a node on a newer pre-release (for example a 1.40.0 beta) was offered a "downgrade update" to the older release.
+
 ## v1.4.53
 
 - fix: **a fleet over Tailscale could not pin node certificates.** Setup generated the certificate for 127.0.0.1, localhost, the first LAN address and the public IP. A master reaching a node on its Tailscale (100.x) address — or any other address not listed — gets "IP address mismatch" when the certificate is pinned, so only "skip verification" worked. Setup now lists every IPv4 address of the machine, the Tailscale address and the public IP, and checks an existing certificate against them: missing addresses are named and a new certificate is offered (with a warning that its fingerprint changes, so a master that pinned the old one must fetch it again).

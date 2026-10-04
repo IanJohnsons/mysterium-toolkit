@@ -8109,18 +8109,45 @@ def check_for_update():
     return jsonify(result), 200
 
 
+def _parse_node_version(v):
+    """'1.39.7', 'v1.39.7', '1.39.7+fix6221', '1.40.0-beta.1' ->
+    (major, minor, patch, pre-release or None, build metadata or None), or None."""
+    m = re.match(r'^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$',
+                 str(v or '').strip())
+    if not m:
+        return None
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3)), m.group(4), m.group(5))
+
+
+def _version_newer(latest, current):
+    """True only when `latest` is a newer release than `current` (v1.4.54).
+
+    Semver order: numbers compared as numbers, build metadata (+fix6221)
+    ignored, a pre-release ranked below its release. Anything unparseable
+    answers False — no update is offered on a guess. Until v1.4.54 this was
+    `latest != current` as text: "1.39.7" differed from "1.39.7+fix6221" (an
+    install button over a fork build) and from "1.40.0-beta.1" (a downgrade)."""
+    lp, cp = _parse_node_version(latest), _parse_node_version(current)
+    if not lp or not cp:
+        return False
+    if lp[:3] != cp[:3]:
+        return lp[:3] > cp[:3]
+    return cp[3] is not None and lp[3] is None
+
+
 _node_exec_cache = {'t': 0.0, 'val': None}
 
 
 def _node_custom_build():
-    """The node binary systemd starts, when it is not the packaged one. v1.4.47.
+    """The node is running a build other than the packaged release, or None.
 
-    Returns {'binary': path} for a unit whose ExecStart points anywhere but
-    /usr/bin/myst (a drop-in with a self-built binary), else None — also when there is no systemd unit to ask (Docker, a node
-    started by hand), since then nothing is known either way. Installing the
-    official .deb on such a node replaces /usr/bin/myst, which is not what runs:
-    the node restarts on the same custom binary and the update notice never
-    clears. Cached five minutes."""
+    Recognised three ways (v1.4.54; only the first existed in v1.4.47):
+      drop_in          the unit's ExecStart points somewhere other than /usr/bin/myst
+      version_tag      the node reports build metadata, e.g. 1.39.7+fix6221
+      replaced_binary  dpkg -V says /usr/bin/myst differs from the installed package
+    The VPS ran its fork copied over /usr/bin/myst, which only the last two see.
+    Without systemd or dpkg (Docker, a node started by hand) those checks say
+    nothing either way. Cached five minutes."""
     now = time.time()
     if now - _node_exec_cache['t'] < 300:
         return _node_exec_cache['val']
@@ -8128,14 +8155,42 @@ def _node_custom_build():
     try:
         r = subprocess.run(['systemctl', 'show', 'mysterium-node', '-p', 'ExecStart', '--value'],
                            capture_output=True, text=True, timeout=5)
-        import re as _re
-        m = _re.search(r'path=([^ ;]+)', r.stdout or '')
+        m = re.search(r'path=([^ ;]+)', r.stdout or '')
         if r.returncode == 0 and m and m.group(1) not in ('/usr/bin/myst',):
-            val = {'binary': m.group(1)}
+            val = {'binary': m.group(1), 'reason': 'drop_in'}
     except Exception as e:
         logger.debug(f'Node ExecStart not readable: {e}')
+    if val is None:
+        with metrics_lock:
+            live = metrics_cache.get('nodeStatus', {}).get('version', '')
+        parsed = _parse_node_version(live)
+        if parsed and parsed[4]:
+            val = {'binary': '/usr/bin/myst', 'reason': 'version_tag', 'version': str(live).strip()}
+    if val is None:
+        try:
+            r = subprocess.run(['dpkg', '-V', 'myst'], capture_output=True, text=True, timeout=15)
+            # dpkg -V prints one line per file that differs; '5' in the flags
+            # column is a changed checksum.
+            for line in (r.stdout or '').splitlines():
+                if line.rstrip().endswith(' /usr/bin/myst') and '5' in line[:9]:
+                    val = {'binary': '/usr/bin/myst', 'reason': 'replaced_binary'}
+                    break
+        except Exception as e:
+            logger.debug(f'dpkg -V myst not available: {e}')
     _node_exec_cache.update(t=now, val=val)
     return val
+
+
+def _custom_build_note(cb):
+    """What installing the official release would do on this custom build."""
+    if cb.get('reason') == 'drop_in':
+        return (f'This node runs {cb["binary"]}, not the packaged /usr/bin/myst. Installing the '
+                f'official release would replace /usr/bin/myst only; the node would restart on the '
+                f'same binary. Update that build the way it was installed.')
+    what = f'a custom build ({cb["version"]})' if cb.get('version') else 'a custom build'
+    return (f'This node runs {what} in /usr/bin/myst. '
+            f'Installing the official release would overwrite it. '
+            f'Update that build the way it was installed.')
 
 
 def _with_custom_build(result):
@@ -8145,10 +8200,7 @@ def _with_custom_build(result):
     if cb:
         result['update_available'] = False
         result['pending_release'] = False
-        result['custom_build_note'] = (
-            f'This node runs {cb["binary"]}, not the packaged /usr/bin/myst. Installing the '
-            f'official release would replace /usr/bin/myst only; the node would restart on the '
-            f'same binary. Update that build the way it was installed.')
+        result['custom_build_note'] = _custom_build_note(cb)
     return result
 
 
@@ -8184,9 +8236,9 @@ def check_node_update():
         latest_c = fresh.get('latest')
         fresh['current'] = live_n or 'unknown'
         if latest_c and live_n and live_n != 'unknown':
-            differs = latest_c != live_n
-            fresh['update_available'] = differs and fresh.get('_assets_ready') is not False
-            fresh['pending_release'] = differs and fresh.get('_assets_ready') is False
+            newer = _version_newer(latest_c, live_n)
+            fresh['update_available'] = newer and fresh.get('_assets_ready') is not False
+            fresh['pending_release'] = newer and fresh.get('_assets_ready') is False
         return jsonify(_with_custom_build(fresh)), 200
 
     latest = None
@@ -8253,7 +8305,7 @@ def check_node_update():
     update_available = bool(
         latest_n and current_n and
         current_n != 'unknown' and
-        latest_n != current_n and
+        _version_newer(latest_n, current_n) and
         assets_ready is not False
     )
     # When the tag is newer but nothing is published yet, say that rather than
@@ -8261,7 +8313,7 @@ def check_node_update():
     pending_release = bool(
         latest_n and current_n and
         current_n != 'unknown' and
-        latest_n != current_n and
+        _version_newer(latest_n, current_n) and
         assets_ready is False
     )
 
@@ -8330,9 +8382,8 @@ def node_update():
     cb = _node_custom_build()
     if cb:
         return jsonify({'ok': False, 'custom_build': cb,
-                        'error': (f'This node runs {cb["binary"]}, not the packaged /usr/bin/myst — '
-                                  f'installing the official release would not change what runs. '
-                                  f'Nothing was installed.')}), 409
+                        'error': _custom_build_note(cb) + ' Nothing was installed.',
+                        'reason': cb.get('reason')}), 409
 
     script = Path(__file__).parent.parent / 'bin' / 'node_update.sh'
     if not script.exists():
