@@ -4,6 +4,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.55
+
+- fix: **sessions that ended without a clean close no longer count as active.** The toolkit took "active" from the node's stored session list, where a session is written when it starts and when it closes cleanly — a consumer that vanishes leaves its row on "New" for good. From that list a dead session cannot be told from a live multi-day session (both "New", no bytes, no tokens yet), which is why every rule tried before brought the ghosts back. The toolkit now listens to the node's own live session list (`/events/state`, the stream the node's web UI uses), from which a session disappears the moment it ends, however it ends. Active means live in the node; a stored row the node no longer has is shown in the history as "ended — no clean close".
+- feat: **active sessions show their running traffic and earnings** from the same live list, instead of "—" until the session closes.
+- improve: if the live list cannot be read (an older node, wrong node credentials), the toolkit falls back to the stored list as before, and the Connections card and the log say so.
+
 ## v1.4.54
 
 - fix: **a node running its own build could be offered — and given — the official release.** The toolkit recognised a custom node build only when the systemd unit started a binary other than `/usr/bin/myst`. A build copied over `/usr/bin/myst` itself looked like the packaged release, and versions were compared as text, so `1.39.7` against `1.39.7+fix6221` read as "update available": the install button would have overwritten the custom build. A custom build is now recognised by any of three signs — a unit starting another binary, build metadata in the version the node reports (`+…`), or `dpkg -V` showing that `/usr/bin/myst` differs from the installed package — and the install is refused with a message that says what it would have done.

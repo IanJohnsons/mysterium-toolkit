@@ -3584,7 +3584,17 @@ const MysteriumDashboard = () => {
                       <span className="text-cyan-400 font-semibold">Live VPN traffic (since boot)</span>
                       <span>↑ Out: <span className="text-emerald-300 font-semibold">{formatDataSize(safeNum(metrics.sessions?.live_vpn_tx_mb || 0))}</span></span>
                       <span>↓ In: <span className="text-slate-300 font-semibold">{formatDataSize(safeNum(metrics.sessions?.live_vpn_rx_mb || 0))}</span></span>
-                      <span className="text-slate-600 italic">Session bytes shown at close</span>
+                      <span className="text-slate-600 italic">
+                        {metrics.sessions?.live_list ? 'Session bytes live from the node' : 'Session bytes shown at close'}
+                      </span>
+                    </div>
+                  )}
+                  {/* v1.4.55: "active" comes from the node's own live list. When the
+                      toolkit cannot read it, say so — the stored list it falls back
+                      on keeps sessions that ended without a clean close. */}
+                  {metrics.sessions && metrics.sessions.live_list === false && (
+                    <div className="mb-3 px-3 py-2 bg-amber-500/10 border border-amber-500/30 rounded text-xs text-amber-300">
+                      {'Live session list unavailable — the count may include sessions that ended without a clean close. See the toolkit log for the reason.'}
                     </div>
                   )}
                   {(() => {

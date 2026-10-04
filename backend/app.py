@@ -4433,6 +4433,9 @@ class MetricsCollector:
                 pass
 
             # Process all cached sessions
+            # v1.4.55: the node's live list decides what is active (None when
+            # it is unavailable — then the stored-status rules below stand alone).
+            _live = _live_sessions_view(NODE_API_URLS)
             for session in TequilaCache.get_all_sessions():
                 tokens = int(session.get('tokens', 0))
                 b_in = int(session.get('bytes_received', 0))
@@ -4522,6 +4525,24 @@ class MetricsCollector:
                         except (ValueError, TypeError):
                             pass
 
+                # v1.4.55: live in the node = active, with its running bytes and
+                # tokens. A stored "New" row the node no longer has ended without
+                # a clean close — the ghost the stored list cannot tell apart.
+                ended_unclean = False
+                if _live is not None and not explicitly_closed:
+                    _ls = _live.get(session_id)
+                    if _ls is not None:
+                        is_active, is_stale = True, False
+                        try:
+                            b_in = max(b_in, int(_ls.get('bytes_received') or 0))
+                            b_out = max(b_out, int(_ls.get('bytes_sent') or 0))
+                            tokens = max(tokens, int(_ls.get('tokens') or 0))
+                        except (TypeError, ValueError):
+                            pass
+                    elif is_active:
+                        is_active = False
+                        ended_unclean = True
+
                 # Parse duration — format HH:MM:SS
                 # Priority: API-provided 'duration' field (seconds int) — accurate for all sessions.
                 # Fallback for active sessions: now - created_at (elapsed so far).
@@ -4603,7 +4624,7 @@ class MetricsCollector:
                     'id': session_id,
                     'consumer_id': session.get('consumer_id', 'unknown'),
                     'service_type': service_type,
-                    'status': status or '(active)',
+                    'status': 'ended — no clean close' if ended_unclean else (status or '(active)'),
                     'started': started,
                     'started_fmt': started_fmt,
                     'duration': duration_str,
@@ -4616,6 +4637,7 @@ class MetricsCollector:
                     'is_paid': tokens > 0,
                     'is_active': is_active,
                     'is_stale': is_stale,
+                    'ended_unclean': ended_unclean,
                     'recently_closed': recently_closed,
                     'bytes_pending': bytes_pending,
                     'consumer_country': consumer_country,
@@ -4939,13 +4961,17 @@ class MetricsCollector:
             return {
                 'items': sessions,
                 'active_items': active_items,
+                # v1.4.55: True when "active" came from the node's own live list;
+                # False means it is unavailable and the stored list was used.
+                'live_list': _live is not None,
+                'ended_unclean_count': sum(1 for s in sessions if s.get('ended_unclean')),
                 'active_unique_consumers': active_unique_consumers,
                 'total': len(sessions),
                 'total_shown': len(sessions),
                 'total_in_store': len(sessions),
                 'total_items_api': SessionStore._total_items.get(NODE_API_URLS[0] if NODE_API_URLS else '', 0),
                 'history_loaded': SessionStore.is_ready(NODE_API_URLS[0] if NODE_API_URLS else ''),
-                'active': active_count if active_count > 0 else len(_observed_active),
+                'active': active_count if (active_count > 0 or _live is not None) else len(_observed_active),
                 'active_api': active_count,
                 'recently_closed_count': sum(1 for s in sessions if s.get('recently_closed')),
                 # Observed-active: sessions we saw active in the node's own log within the
@@ -6985,6 +7011,115 @@ _NODE_HEAVY_DEFAULTS = {'date': '', 'earnings_history': [], 'traffic_history': {
 
 
 _tls_warned = set()
+# ── Live sessions from the node's own memory (v1.4.55) ───────────────────────
+# TequilAPI /sessions is the node's stored list: a row is written when a session
+# starts and when it closes cleanly, so a consumer that vanishes leaves a row on
+# "New" for good — indistinguishable there from a live multi-day session. The
+# node's in-memory list (core/state/state.go) drops a session the moment it ends,
+# however it ends, and is served as /events/state (SSE). One listener per local
+# node keeps it here. The node publishes on change only, with no keepalive, so the
+# read times out after a quiet spell and reconnects (a new connection always gets
+# the full state first); a quiet list stays valid, a failing connection does not.
+LIVE_SESSIONS_READ_TIMEOUT = 300
+LIVE_SESSIONS_MAX_AGE = 600
+_LIVE_SESSIONS = {}          # node url -> {'connected', 'ready', 'by_id', 'at', 'error'}
+_live_sessions_lock = Lock()
+
+
+def _parse_sse_line(line):
+    """`data: {...}` -> dict; comments, other fields and bad JSON -> None."""
+    if not isinstance(line, str) or not line.startswith('data:'):
+        return None
+    try:
+        evt = json.loads(line[5:].strip())
+    except ValueError:
+        return None
+    return evt if isinstance(evt, dict) else None
+
+
+def _apply_state_event(node_url, evt):
+    """Take the session list from a state-change event. An event without a
+    sessions list changes nothing — it is not a statement that none are live."""
+    if evt.get('type') != 'state-change':
+        return
+    sessions = (evt.get('payload') or {}).get('sessions')
+    if not isinstance(sessions, list):
+        return
+    by_id = {s['id']: s for s in sessions if isinstance(s, dict) and s.get('id')}
+    with _live_sessions_lock:
+        st = _LIVE_SESSIONS.setdefault(node_url, {})
+        st.update(ready=True, by_id=by_id, at=time.time())
+
+
+def _live_sessions_view(node_urls):
+    """{session id: live session} across these nodes, or None when the live list
+    cannot be trusted for every one of them (never received, or the connection
+    has failed and the last list is older than LIVE_SESSIONS_MAX_AGE)."""
+    out = {}
+    now = time.time()
+    with _live_sessions_lock:
+        for url in node_urls:
+            st = _LIVE_SESSIONS.get(url)
+            if not st or not st.get('ready'):
+                return None
+            if not st.get('connected') and now - st.get('at', 0) > LIVE_SESSIONS_MAX_AGE:
+                return None
+            out.update(st.get('by_id') or {})
+    return out
+
+
+def _live_session_listener(node_url):
+    """Keep _LIVE_SESSIONS[node_url] current from the node's /events/state."""
+    backoff = 5
+    last_err = None
+    while True:
+        quiet = False
+        try:
+            with requests.get(f'{node_url}/events/state', auth=(NODE_USERNAME, NODE_PASSWORD),
+                              stream=True, timeout=(10, LIVE_SESSIONS_READ_TIMEOUT)) as r:
+                if r.status_code != 200:
+                    raise RuntimeError(f'/events/state answered HTTP {r.status_code}')
+                with _live_sessions_lock:
+                    _LIVE_SESSIONS.setdefault(node_url, {}).update(connected=True, error='')
+                if last_err:
+                    logger.info(f'Live session list from {node_url} restored')
+                last_err = None
+                backoff = 5
+                # chunk_size=None: hand over each chunk as it arrives. The default
+                # (512 bytes) holds a short event in the buffer until more data
+                # comes — and the node only sends on change. The node (Go) sends
+                # SSE with chunked transfer encoding, one event per flush.
+                for raw in r.iter_lines(chunk_size=None, decode_unicode=True):
+                    evt = _parse_sse_line(raw)
+                    if evt:
+                        _apply_state_event(node_url, evt)
+            err = 'stream closed by the node'
+        except Exception as e:
+            err = f'{type(e).__name__}: {str(e)[:120]}'
+            # No event for LIVE_SESSIONS_READ_TIMEOUT: the node had nothing to say.
+            # Reconnect at once and keep the list — the new connection resends it.
+            quiet = 'timed out' in str(e).lower()
+        with _live_sessions_lock:
+            st = _LIVE_SESSIONS.setdefault(node_url, {})
+            st['connected'] = False
+            if not quiet:
+                st['error'] = err
+        if quiet:
+            continue
+        if err != last_err:
+            logger.warning(f'Live session list from {node_url} unavailable ({err}) — '
+                           f'active sessions fall back to the stored list until it returns')
+            last_err = err
+        time.sleep(backoff)
+        backoff = min(backoff * 2, 60)
+
+
+def _start_live_session_listeners():
+    for url in NODE_API_URLS:
+        Thread(target=_live_session_listener, args=(url,), daemon=True,
+               name=f'live-sessions-{url}').start()
+
+
 _scheme_hint = {}          # node id -> URL on the other scheme that answered, or None (v1.4.53)
 _scheme_hint_checked = {}  # node id -> epoch of the last check
 
@@ -14781,6 +14916,7 @@ if __name__ == '__main__':
             pass
 
     start_collector()
+    _start_live_session_listeners()   # v1.4.55: active sessions from the node's own memory
 
     # v1.4.44: check the node's payment config and remove what the toolkit
     # itself wrote wrongly (see _node_config_run). Never restarts the node.
