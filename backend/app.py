@@ -1805,6 +1805,35 @@ class SessionStore:
         except Exception as e:
             logger.debug(f"SessionStore: page1 refresh failed for {node_url}: {e}")
 
+    @staticmethod
+    def _node_pages(url, params, headers, max_pages):
+        """Yield the items of every page of GET {url}/sessions with these params.
+
+        Read the way the node answers (v1.4.56 got this wrong and missed 60 open
+        rows): total_pages sits at the top level — there is no 'paging' object —
+        and a page past the end returns the last page again. So: follow
+        total_pages when present, and stop anyway on a short page or a page
+        that brings no new ids. Raises on an unreachable node or a non-200."""
+        page_size = params.get('page_size', 100)
+        seen = set()
+        page = 1
+        while page <= max_pages:
+            r = requests.get(f'{url}/sessions', params={**params, 'page': page, 'page_size': page_size},
+                             headers=headers, timeout=15)
+            if r.status_code != 200:
+                raise RuntimeError(f'/sessions answered HTTP {r.status_code}')
+            d = r.json()
+            items = d.get('items', []) or []
+            fresh = [s for s in items if s.get('id') and s.get('id') not in seen]
+            if not fresh:
+                return
+            seen.update(s['id'] for s in fresh)
+            yield fresh
+            total = d.get('total_pages') or (d.get('paging') or {}).get('total_pages')
+            if len(items) < page_size or (total and page >= int(total)):
+                return
+            page += 1
+
     @classmethod
     def reconcile_open(cls, node_urls, headers):
         """Update rows this store still holds as New that the node has closed (v1.4.56).
@@ -1815,31 +1844,23 @@ class SessionStore:
         reached the toolkit and the row stayed New for good: the "ghost" active
         sessions (laptop, 4–5 Oct 2026; the node had closed all of them).
 
-        Asks each node which sessions it still has as New. A row held here as New
-        that no node has is re-read by its start day and consumer (two filters
-        the node supports) and replaced by the node's final record, in memory and
-        in SessionDB. One not found that way is still marked Completed: the node
-        no longer has it open. If the open list cannot be read, nothing changes."""
+        Asks each node for every session it still has as New. A row held here
+        as New that no node has is re-read by its start day and consumer (two
+        filters the node supports) and replaced by the node's final record, in
+        memory and in SessionDB. A row not found that way is left as it is —
+        not proven closed (v1.4.56 marked those Completed, which on the laptop
+        hit 60 rows the node still had open); the live list keeps it off
+        "active" either way. If the open list cannot be read, nothing changes."""
         if any(cls._loading.values()):
             return    # the startup full fetch is still filling the store
         open_ids = set()
         for url in node_urls:
-            page, pages = 1, 1
-            while page <= pages and page <= 50:
-                try:
-                    r = requests.get(f'{url}/sessions', params={'status': 'New', 'page': page, 'page_size': 100},
-                                     headers=headers, timeout=15)
-                except Exception as e:
-                    logger.warning(f'SessionStore: open-session check skipped, {url} unreachable: {e}')
-                    return
-                if r.status_code != 200:
-                    logger.warning(f'SessionStore: open-session check skipped, /sessions?status=New '
-                                   f'answered HTTP {r.status_code}')
-                    return
-                d = r.json()
-                open_ids.update(s.get('id') for s in d.get('items', []) if s.get('id'))
-                pages = int((d.get('paging') or {}).get('total_pages') or 1)
-                page += 1
+            try:
+                for items in cls._node_pages(url, {'status': 'New', 'page_size': 100}, headers, 100):
+                    open_ids.update(s['id'] for s in items)
+            except Exception as e:
+                logger.warning(f'SessionStore: open-session check skipped for {url}: {e}')
+                return
         with cls._lock:
             stale = {sid: dict(s) for sid, s in cls._sessions.items()
                      if str(s.get('status', '')).lower() == 'new' and sid not in open_ids}
@@ -1851,33 +1872,28 @@ class SessionStore:
             for day, consumer in sorted(lookups):
                 if not day or not consumer:
                     continue
-                page, pages = 1, 1
-                while page <= pages and page <= 20:
-                    try:
-                        r = requests.get(f'{url}/sessions', params={
-                            'status': 'Completed', 'date_from': day, 'date_to': day,
-                            'consumer_id': consumer, 'page': page, 'page_size': 100},
-                            headers=headers, timeout=15)
-                        if r.status_code != 200:
-                            break
-                        d = r.json()
-                    except Exception:
-                        break
-                    for s in d.get('items', []):
-                        if s.get('id') in stale:
-                            found[s['id']] = s
-                    pages = int((d.get('paging') or {}).get('total_pages') or 1)
-                    page += 1
+                try:
+                    for items in cls._node_pages(url, {'status': 'Completed', 'date_from': day, 'date_to': day,
+                                                       'consumer_id': consumer, 'page_size': 100}, headers, 20):
+                        for s in items:
+                            if s['id'] in stale:
+                                found[s['id']] = s
+                except Exception:
+                    continue
+        if not found:
+            logger.info(f'SessionStore: {len(stale)} session(s) held as New are not open in the node, '
+                        f'but no final record was found — left as they are')
+            return
         with cls._lock:
-            for sid, row in stale.items():
-                cls._sessions[sid] = found.get(sid) or {**row, 'status': 'Completed'}
-        if found:
-            try:
-                SessionDB.upsert_sessions(list(found.values()))
-            except Exception as e:
-                logger.warning(f'SessionDB upsert (closed sessions): {e}')
-        logger.info(f'SessionStore: {len(stale)} session(s) closed by the node after leaving page 1 '
-                    f'updated ({len(found)} with their final record)')
+            for sid, row in found.items():
+                cls._sessions[sid] = row
+        try:
+            SessionDB.upsert_sessions(list(found.values()))
+        except Exception as e:
+            logger.warning(f'SessionDB upsert (closed sessions): {e}')
+        logger.info(f'SessionStore: {len(found)} session(s) closed by the node after leaving page 1 '
+                    f'updated with their final record'
+                    + (f'; {len(stale) - len(found)} not found, left as they are' if len(stale) > len(found) else ''))
 
     @classmethod
     def get_all(cls):
