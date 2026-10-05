@@ -2558,6 +2558,41 @@ def _node_start_source():
 # observed is ~1.3e-5 MYST, so 1e-6 cleanly separates artifacts from payments.
 PROBE_EARNINGS_EPSILON = 1e-6
 
+# v1.4.57: consumers are grouped by what the node recorded, nothing guessed.
+# The former "probe" rule (>=5 sessions, ~0 MYST, <2 MB/session) labelled
+# consumers "Mysterium quality monitoring" without evidence: it hid a consumer
+# confirmed on-chain as a real user and missed the costliest non-payer (88.8 MB,
+# >2 MB per session). Real monitoring services (monitoring, noop) are still
+# excluded by service type.
+NO_TRAFFIC_MAX_MB = 0.01     # up to ~10 KB: nothing transferred worth naming
+UNPAID_MIN_MB = 1.0          # unpaid with less than this: a connection test
+
+
+def _payment_class(earnings_myst, data_mb):
+    """'paying', 'unpaid' (data served, nothing paid), 'test' (at most a token
+    amount — the 1-wei first invoice — and under UNPAID_MIN_MB) or 'no_traffic'
+    (nothing paid, nothing transferred) — from the node's own figures."""
+    if (earnings_myst or 0) > PROBE_EARNINGS_EPSILON:
+        return 'paying'
+    if (data_mb or 0) <= NO_TRAFFIC_MAX_MB and not (earnings_myst or 0) > 0:
+        return 'no_traffic'        # nothing paid, nothing transferred
+    if data_mb < UNPAID_MIN_MB:
+        return 'test'
+    return 'unpaid'
+
+
+def _payment_summary(consumers):
+    """Counts per payment class, plus the data served to unpaid consumers."""
+    cls = [c.get('payment_class') for c in consumers]
+    return {
+        'paying_consumers':     cls.count('paying'),
+        'unpaid_consumers':     cls.count('unpaid'),
+        'unpaid_mb':            round(sum(c.get('total_data_mb') or 0 for c in consumers
+                                          if c.get('payment_class') == 'unpaid'), 1),
+        'test_consumers':       cls.count('test'),
+        'no_traffic_consumers': cls.count('no_traffic'),
+    }
+
 
 class SessionDB:
     """Persistent session history database using SQLite.
@@ -4854,35 +4889,13 @@ class MetricsCollector:
             paying_consumers = sum(1 for c in consumer_map.values()
                                    if c['total_earnings'] > PROBE_EARNINGS_EPSILON)
 
-            # Detect Mysterium network probes — infrastructure quality bots that test
-            # node reachability. They never pay and make many short low-traffic sessions.
-            # Criteria: ≥5 sessions, near-zero earnings, avg data < 2 MB/session.
-            # Earnings use PROBE_EARNINGS_EPSILON instead of strict ==0 because the
-            # node emits occasional 1-wei artifact sessions that would otherwise flip
-            # probe-pattern consumers into "paying" (see constant definition).
-            #
-            # Confirmed via blockchain research: Mysterium monitoring agents have
-            # 0 MYST/MATIC balance, nonce=0, are not in the whitelist, and connect
-            # via wireguard (Public) without a consumer_country. This matches exactly:
-            # - 0 earnings (agents never pay)
-            # - ≥5 sessions (periodic quality checks every 6h = many sessions over time)
-            # - avg data < 2 MB/session (0.1 GB/day spread over many short sessions)
-            # Source: https://help.mystnodes.com/en/articles/8005478-node-service-monitoring
-            probe_ids = set()
+            # v1.4.57: a payment class from the node's figures (see _payment_class).
             for c in top_consumers:
-                avg_mb = c['total_data_mb'] / c['sessions'] if c['sessions'] > 0 else 0
-                c['is_probe'] = (
-                    c['sessions'] >= 5
-                    and c['total_earnings'] <= PROBE_EARNINGS_EPSILON
-                    and avg_mb < 2.0
-                )
-                if c['is_probe']:
-                    probe_ids.add(c['consumer_id'])
-            probe_consumers = len(probe_ids)
-
-            # Propagate is_probe to individual session items for UI indicators
-            for s in sessions:
-                s['is_probe'] = s.get('consumer_id', '') in probe_ids
+                c['payment_class'] = _payment_class(c['total_earnings'], c['total_data_mb'])
+            _pay_summary = _payment_summary(top_consumers)
+            _class_of = {c['consumer_id']: c['payment_class'] for c in top_consumers}
+            for s_item in sessions:
+                s_item['payment_class'] = _class_of.get(s_item.get('consumer_id', ''), '')
 
             # ===== SERVICE TYPE BREAKDOWN =====
             # Count sessions, earnings and data per business service type.
@@ -5106,7 +5119,7 @@ class MetricsCollector:
                 'live_vpn_tx_mb': round(live_vpn_tx / (1024 * 1024), 2),
                 'unique_consumers': unique_consumers,
                 'paying_consumers': paying_consumers,
-                'probe_consumers':  probe_consumers,
+                **_pay_summary,
                 # top_consumers removed from every poll in v1.3.7 — was shipped in full
                 # (1000+ entries on an active node) on every 5s poll regardless of
                 # whether the Consumers tab was open. Now fetched on demand via
@@ -11479,7 +11492,8 @@ def consumers_top():
         rows = SessionDB.get_range(limit=50000, offset=0)
     except Exception as e:
         return jsonify({'top_consumers': [], 'unique_consumers': 0,
-                         'paying_consumers': 0, 'probe_consumers': 0,
+                         'paying_consumers': 0, 'unpaid_consumers': 0, 'unpaid_mb': 0.0,
+                         'test_consumers': 0, 'no_traffic_consumers': 0,
                          'error': str(e)}), 200
 
     consumer_map = {}
@@ -11517,24 +11531,13 @@ def consumers_top():
     top_consumers = sorted(consumer_map.values(),
                             key=lambda c: (-c['total_earnings'], -c['total_data_mb']))
 
-    # Same probe criteria as get_metrics (Mysterium quality-monitoring agents):
-    # >=5 sessions, near-zero earnings (PROBE_EARNINGS_EPSILON — filters 1-wei
-    # node artifacts), avg data < 2 MB/session.
-    probe_ids = set()
+    # v1.4.57: the same payment class as the session list (see _payment_class).
     for c in top_consumers:
-        avg_mb = c['total_data_mb'] / c['sessions'] if c['sessions'] > 0 else 0
-        c['is_probe'] = (c['sessions'] >= 5
-                         and c['total_earnings'] <= PROBE_EARNINGS_EPSILON
-                         and avg_mb < 2.0)
-        if c['is_probe']:
-            probe_ids.add(c['consumer_id'])
-
+        c['payment_class'] = _payment_class(c['total_earnings'], c['total_data_mb'])
     return jsonify({
         'top_consumers': top_consumers,
         'unique_consumers': len(consumer_map),
-        'paying_consumers': sum(1 for c in consumer_map.values()
-                                if c['total_earnings'] > PROBE_EARNINGS_EPSILON),
-        'probe_consumers': len(probe_ids),
+        **_payment_summary(top_consumers),
     }), 200
 
 
@@ -11597,16 +11600,9 @@ def sessions_by_wallet():
                 'status':           r.get('status', '') or '',
             })
 
-        # Probe classification for this wallet — same criteria as /consumers/top
-        # and get_metrics, so the history modal shows the same 🔧 verdict as the
-        # consumer list (previously the modal showed no probe indicator at all,
-        # making the Mysterium monitoring agent look like a non-paying consumer).
+        # v1.4.57: the same payment class as the consumer list (see _payment_class).
         total_data_mb = (tot_out + tot_in) / (1024 * 1024)
         earnings_myst = tot_tokens / 1e18
-        avg_mb = total_data_mb / len(items) if items else 0
-        is_probe = (len(items) >= 5
-                    and earnings_myst <= PROBE_EARNINGS_EPSILON
-                    and avg_mb < 2.0)
 
         summary = {
             'wallet':          wallet,
@@ -11618,7 +11614,7 @@ def sessions_by_wallet():
             'by_service':      by_service,
             'first_session':   items[-1]['started'] if items else '',
             'last_session':    items[0]['started'] if items else '',
-            'is_probe':        is_probe,
+            'payment_class':   _payment_class(earnings_myst, total_data_mb),
         }
         return jsonify({'items': items, 'summary': summary}), 200
     except Exception as e:

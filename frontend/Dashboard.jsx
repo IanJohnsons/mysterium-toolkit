@@ -519,7 +519,7 @@ const ConsumerCard = ({ c, onHistory }) => (
       </div>
     </div>
     <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-400">
-      <span>{c.is_probe ? '🔧' : (countryFlag(c.consumer_country) || '—')}</span>
+      <span>{countryFlag(c.consumer_country) || '—'}</span>
       {(c.service_types || []).map(st => <span key={st} className="text-slate-300">{fmtType(st)}</span>)}
       <span>{c.sessions}{c.active_sessions > 0 ? ` (${c.active_sessions} live)` : ''}</span>
       <span>{formatDataSize(c.total_data_mb)}</span>
@@ -544,7 +544,7 @@ const ConsumerRow = ({ c, onHistory }) => (
                 className="text-[11px] text-sky-400 hover:text-sky-300 shrink-0">↗</button>
       )}
     </div>
-    <div className="col-span-1 text-sm">{c.is_probe ? '🔧' : (countryFlag(c.consumer_country) || '—')}</div>
+    <div className="col-span-1 text-sm">{countryFlag(c.consumer_country) || '—'}</div>
     <div className="col-span-2 text-slate-300 text-xs truncate">{(c.service_types || []).map(t => fmtType(t)).join(', ') || '—'}</div>
     <div className="col-span-1 text-slate-300">{c.sessions}{c.active_sessions > 0 ? ` (${c.active_sessions} live)` : ''}</div>
     <div className="col-span-2 text-slate-300">{formatDataSize(c.total_data_mb)}</div>
@@ -1750,7 +1750,7 @@ const MysteriumDashboard = () => {
     fetch(`${base}/consumers/top`, { headers: authHeaderRef.current || {} })
       .then(r => r.json())
       .then(d => setConsumersData(d))
-      .catch(() => setConsumersData({ top_consumers: [], unique_consumers: 0, paying_consumers: 0, probe_consumers: 0, error: true }))
+      .catch(() => setConsumersData({ top_consumers: [], unique_consumers: 0, paying_consumers: 0, unpaid_consumers: 0, unpaid_mb: 0, error: true }))
       .finally(() => setConsumersLoading(false));
   }, []);
 
@@ -3620,7 +3620,7 @@ const MysteriumDashboard = () => {
                                 </span>
                               </div>
                               <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-400">
-                                <span>{s.is_probe ? <span title="Likely monitoring probe — 0 earnings, tiny sessions (behavioural inference)">🔧</span> : (countryFlag(s.consumer_country) || '—')}</span>
+                                <span>{countryFlag(s.consumer_country) || '—'}</span>
                                 <span className="text-slate-300">{fmtType(s.service_type) || '—'}</span>
                                 <span>{s.duration}</span>
                                 <span>↑{s.bytes_pending ? <span className="text-slate-600 italic">—</span> : formatDataSize(s.data_out)}</span>
@@ -3645,7 +3645,7 @@ const MysteriumDashboard = () => {
                             <div key={s.id || i} className="grid grid-cols-12 gap-2 text-xs px-3 py-2.5 rounded border bg-emerald-500/5 border-emerald-500/20">
                               <div className="col-span-1"><div className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse mt-0.5" /></div>
                               <div className="col-span-3 min-w-0"><CopyableId id={s.consumer_id} /></div>
-                              <div className="col-span-1 text-sm">{s.is_probe ? <span title="Likely monitoring probe — 0 earnings, tiny sessions (behavioural inference)">🔧</span> : (countryFlag(s.consumer_country) || '—')}</div>
+                              <div className="col-span-1 text-sm">{countryFlag(s.consumer_country) || '—'}</div>
                               <div className="col-span-1 text-slate-300 text-xs truncate">{fmtType(s.service_type) || '—'}</div>
                               <div className="col-span-1 text-slate-300">{s.duration}</div>
                               <div className="col-span-2 text-emerald-300">
@@ -3688,7 +3688,7 @@ const MysteriumDashboard = () => {
                                   <div className="flex items-center gap-2 sm:contents">
                                     <div className="sm:col-span-1"><div className="w-2.5 h-2.5 rounded-full bg-cyan-400" title="Observed active — seen in the node's session log within the last 10 minutes" /></div>
                                     <div className="sm:col-span-3 min-w-0 flex-1"><CopyableId id={s.consumer_id} /></div>
-                                    <div className="sm:col-span-1 text-sm">{s.is_probe ? <span title="Likely monitoring probe — 0 earnings, tiny sessions (behavioural inference)">🔧</span> : (countryFlag(s.consumer_country) || '—')}</div>
+                                    <div className="sm:col-span-1 text-sm">{countryFlag(s.consumer_country) || '—'}</div>
                                   </div>
                                   <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-slate-400 pl-6 sm:pl-0 sm:contents">
                                     <div className="sm:col-span-1 text-slate-300 truncate">{fmtType(s.service_type) || '—'}</div>
@@ -3717,7 +3717,7 @@ const MysteriumDashboard = () => {
                                   <div className="flex items-center gap-2 sm:contents">
                                     <div className="sm:col-span-1"><div className="w-2.5 h-2.5 rounded-full bg-slate-500" title="Recently closed session (from the node's session log)" /></div>
                                     <div className="sm:col-span-3 min-w-0 flex-1"><CopyableId id={s.consumer_id} /></div>
-                                    <div className="sm:col-span-1 text-sm">{s.is_probe ? <span title="Likely monitoring probe — 0 earnings, tiny sessions (behavioural inference)">🔧</span> : (countryFlag(s.consumer_country) || '—')}</div>
+                                    <div className="sm:col-span-1 text-sm">{countryFlag(s.consumer_country) || '—'}</div>
                                   </div>
                                   <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-slate-400 pl-6 sm:pl-0 sm:contents">
                                     <div className="sm:col-span-1 text-slate-300 truncate">{fmtType(s.service_type) || '—'}</div>
@@ -4047,10 +4047,17 @@ const MysteriumDashboard = () => {
               {/* ======= CONSUMERS TAB ======= */}
               {sessionTab === 'consumers' && (() => {
                 const allConsumers = consumersData?.top_consumers || [];
-                const realConsumers = allConsumers.filter(c => !c.is_probe);
-                const probeList    = allConsumers.filter(c => c.is_probe);
-                const probeCount   = safeNum(consumersData?.probe_consumers || probeList.length);
-                const realCount    = safeNum(consumersData?.unique_consumers ?? metrics.sessions?.unique_consumers ?? 0) - probeCount;
+                // v1.4.57: grouped by what the node recorded (payment_class), not by
+                // a guess at who the consumer is. Paying consumers form the main list;
+                // consumers that received data and never paid are shown with the
+                // traffic they got; token-amount tests and no-traffic connections are
+                // folded away.
+                const realConsumers = allConsumers.filter(c => !c.payment_class || c.payment_class === 'paying');
+                const unpaidList   = allConsumers.filter(c => c.payment_class === 'unpaid');
+                const testList     = allConsumers.filter(c => c.payment_class === 'test');
+                const quietList    = allConsumers.filter(c => c.payment_class === 'no_traffic');
+                const unpaidMb     = safeNum(consumersData?.unpaid_mb ?? unpaidList.reduce((t, c) => t + (c.total_data_mb || 0), 0));
+                const realCount    = safeNum(consumersData?.unique_consumers ?? metrics.sessions?.unique_consumers ?? 0);
 
                 if (consumersLoading && allConsumers.length === 0) {
                   return <div className="px-3 py-10 text-center text-sm text-slate-500">Loading consumers…</div>;
@@ -4084,21 +4091,49 @@ const MysteriumDashboard = () => {
                   <>
                     <div className="mb-3 flex flex-wrap gap-4 text-xs text-slate-400">
                       <span>Consumers: <span className="text-slate-200 font-semibold">{realCount}</span></span>
-                      <span>Paying: <span className="text-emerald-300 font-semibold">{safeNum(metrics.sessions?.paying_consumers || 0)}</span></span>
-                      {probeCount > 0 && <span>Probes: <span className="text-slate-500 font-semibold">{probeCount}</span></span>}
+                      <span>Paying: <span className="text-emerald-300 font-semibold">{safeNum(consumersData?.paying_consumers ?? metrics.sessions?.paying_consumers ?? 0)}</span></span>
+                      {unpaidList.length > 0 && (
+                        <span>{'Never paid this node: '}<span className="text-amber-300 font-semibold">{unpaidList.length}</span>
+                          <span className="text-slate-500">{' · free traffic served ' + unpaidMb.toFixed(1) + ' MB'}</span></span>
+                      )}
                       <span>Sessions: <span className="text-slate-200">{safeNum(metrics.sessions?.total || 0)}</span></span>
                     </div>
 
-                    {probeList.length > 0 && (
-                      <div className="mb-3 p-2 rounded border border-slate-700/40 bg-slate-900/20">
-                        <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1.5 px-1">🔧 Network probes — Mysterium quality monitoring · never pay</div>
+                    {unpaidList.length > 0 && (
+                      <div className="mb-3 p-2 rounded border border-amber-500/30 bg-amber-500/5">
+                        <div className="text-[10px] text-amber-400/90 uppercase tracking-wider mb-1.5 px-1">
+                          {'Never paid this node — data served, no payment recorded by the node'}
+                        </div>
                         <div className="sm:hidden space-y-1.5">
-                          {probeList.map((c, i) => <ConsumerCard key={c.consumer_id || i} c={c} onHistory={openWalletHistory} />)}
+                          {sortRows(unpaidList, { key: 'total_data_mb', dir: 'desc' }).map((c, i) => <ConsumerCard key={c.consumer_id || i} c={c} onHistory={openWalletHistory} />)}
                         </div>
                         <div className="hidden sm:block space-y-1">
-                          {probeList.map((c, i) => <ConsumerRow key={c.consumer_id || i} c={c} onHistory={openWalletHistory} />)}
+                          {sortRows(unpaidList, { key: 'total_data_mb', dir: 'desc' }).map((c, i) => <ConsumerRow key={c.consumer_id || i} c={c} onHistory={openWalletHistory} />)}
                         </div>
                       </div>
+                    )}
+                    {(testList.length > 0 || quietList.length > 0) && (
+                      <details className="mb-3 p-2 rounded border border-slate-700/40 bg-slate-900/20">
+                        <summary className="text-[10px] text-slate-500 uppercase tracking-wider px-1 cursor-pointer">
+                          {'Connection tests: ' + testList.length + ' · No traffic: ' + quietList.length}
+                        </summary>
+                        {testList.length > 0 && (
+                          <div className="mt-2">
+                            <div className="text-[10px] text-slate-500 px-1 mb-1">{'Connection tests — a token amount at most, under 1 MB'}</div>
+                            <div className="space-y-1">
+                              {testList.map((c, i) => <ConsumerRow key={c.consumer_id || i} c={c} onHistory={openWalletHistory} />)}
+                            </div>
+                          </div>
+                        )}
+                        {quietList.length > 0 && (
+                          <div className="mt-2">
+                            <div className="text-[10px] text-slate-500 px-1 mb-1">{'No traffic — connected, nothing transferred'}</div>
+                            <div className="space-y-1">
+                              {quietList.map((c, i) => <ConsumerRow key={c.consumer_id || i} c={c} onHistory={openWalletHistory} />)}
+                            </div>
+                          </div>
+                        )}
+                      </details>
                     )}
                     {realConsumers.length > 0 ? (
                       <>
@@ -4882,10 +4917,11 @@ const MysteriumDashboard = () => {
                 <div className="min-w-0">
                   <div className="text-sm font-semibold text-emerald-400 flex items-center gap-2">
                     <span>Consumer history</span>
-                    {walletHistory.summary?.is_probe && (
+                    {walletHistory.summary?.payment_class && walletHistory.summary.payment_class !== 'paying' && (
                       <span className="text-[10px] font-normal px-1.5 py-0.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-300"
-                            title="Matches the Mysterium quality-monitoring pattern: many sessions, near-zero earnings, low data per session. These infrastructure agents test node reachability and bandwidth and never pay.">
-                        🔧 Mysterium monitoring agent
+                            title="From the node's own records for this consumer — not a guess at who it is.">
+                        {walletHistory.summary.payment_class === 'unpaid' ? 'Never paid this node'
+                          : walletHistory.summary.payment_class === 'test' ? 'Connection tests' : 'No traffic'}
                       </span>
                     )}
                   </div>

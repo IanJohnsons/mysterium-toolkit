@@ -4,6 +4,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.57
+
+- fix: **consumers are no longer labelled "Mysterium quality monitoring" on a guess.** The 🔧 "Network probes" group came from a rule of thumb (at least five sessions, next to no earnings, under 2 MB per session). Checked against the node's own records, the figures were right but the label was not provable: it put a consumer confirmed on-chain as a real user among the "probes", and left out the consumer that cost the node most — 89 MB over 23 sessions, never paying — because it used more than 2 MB per session. The rule, the label and the 🔧 marks are gone. Real Mysterium monitoring services (`monitoring`, `noop`) remain excluded by service type, as before.
+- feat: **consumers are grouped by what the node recorded.** Paying consumers form the main list. Consumers that received data and never paid are shown under "Never paid this node", with the traffic they got and a total of free traffic served. Connections that paid at most a token amount with under 1 MB ("Connection tests") and connections that transferred nothing ("No traffic") are folded away. The consumer history shows the same group.
+
 ## v1.4.56
 
 - fix: **the cause of the ghost "active" sessions.** The toolkit loads the node's full session history once at startup and afterwards re-read only the newest page (50 sessions). A session that left that page while still open — a long B2B session on a node with many short ones — was never read again, so when the node closed it cleanly the toolkit kept it as "New" indefinitely. Measured on a node with five such ghosts: the node had closed all five; it had no stale open sessions from its current run. Every cycle the toolkit now asks the node which sessions it still has open (`/sessions?status=New`), and re-reads any it holds as open that the node has closed — by start day and consumer — replacing it with the node's final record (status, duration, traffic, earnings) in memory and in its database. Pages are read the way the node sends them (page count at the top level; a page past the end repeats the last one), and a session whose final record cannot be found is left as it is rather than assumed closed.
