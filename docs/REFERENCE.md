@@ -105,6 +105,10 @@ Run the master on the machine with a stable public address — usually a VPS. No
 
 Hot-reload: edit `nodes.json` while running — changes apply within 30 seconds.
 
+Polling: the master asks all nodes at the same time — ten at once by default, four with `pi_mode`, or set `fleet_poll_workers` in `config/setup.json` — and starts a new round every 10 seconds (`FLEET_POLL_INTERVAL` in the environment, minimum 5). A node that does not answer only holds up its own slot, for the length of its timeout. The fleet cards keep the order of `nodes.json`. The dashboard poll (`/metrics`) carries only the fields the fleet cards show; `GET /fleet` returns every node's full record.
+
+Each node reports its own update status — whether its branch has a newer version — so the **↑ Update** badge on a card always refers to that node's branch.
+
 ### Fleet Update Manager
 
 The fleet dashboard shows a version badge per node and an **↑ Update** button when a newer version is available on GitHub. Clicking it triggers a remote update on that node. An **↑ Update All** button updates all nodes in parallel.
@@ -302,7 +306,26 @@ Rules are persisted automatically:
 
 By default the dashboard is served over plain HTTP. On a LAN, or through an SSH tunnel, that is fine. If you reach the dashboard over the internet, or run a fleet where the master polls nodes across the internet, that traffic — including your API key — travels in clear text.
 
-Enable TLS during setup (step 12.55), or afterwards by editing `config/setup.json`:
+### Turning it on
+
+Setup asks at step 12.55. It suggests yes on a machine with a public IPv4 address and no Tailscale (where the dashboard would otherwise cross the internet in clear text) and when HTTPS is already on; elsewhere it suggests no, and says why.
+
+Afterwards, in a terminal in the toolkit folder, either of these runs only the TLS step:
+
+```bash
+./setup.sh --tls-only
+./start.sh          # → Security & Upgrades → TLS
+```
+
+The menu item turns TLS on when it is off. When it is on it offers to regenerate the certificate, turn TLS off, or show the certificate's fingerprint. Regenerating sets the current certificate aside first and puts it back if the new one cannot be made, so TLS is never left on without a certificate.
+
+The toolkit uses a new certificate or setting after it restarts:
+
+```bash
+sudo systemctl stop mysterium-toolkit && sudo systemctl start mysterium-toolkit
+```
+
+The TLS step writes these keys to `config/setup.json`:
 
 ```json
 {
@@ -312,11 +335,13 @@ Enable TLS during setup (step 12.55), or afterwards by editing `config/setup.jso
 }
 ```
 
-Setup generates a self-signed certificate locally. No domain name, no Let's Encrypt, no certbot and no port 80 are required. Your browser will warn about the certificate the first time — that is expected for a self-signed certificate, and you can accept it permanently.
+The certificate is self-signed and generated locally. No domain name, no Let's Encrypt, no certbot and no port 80 are required. It covers every IPv4 address of the machine — LAN, Tailscale and public — plus an optional hostname. Your browser warns about each new certificate once; that is expected for a self-signed certificate, and you can accept it permanently.
+
+The **Toolkit** card in System Health shows the certificate's SHA-256 fingerprint and names any current address of the machine the certificate does not cover. `./setup.sh --tls-only` then offers to generate a new one that includes it.
 
 ### Fleet over TLS
 
-Copy each node's `config/tls/cert.pem` to the master and point that node's entry at it:
+To pin a node's certificate on the master, use the fleet form: Fleet → ✎ on the node (or **Add Node**) → **Fetch certificate**. The master fetches the certificate the node presents and shows its fingerprint and the addresses it covers. Check the fingerprint matches the one on that node's Toolkit card, and save with **Pin this certificate** ticked. The master stores it as `config/tls/peers/<id>.pem` and points the node's entry at it:
 
 ```json
 {
@@ -327,18 +352,23 @@ Copy each node's `config/tls/cert.pem` to the master and point that node's entry
 }
 ```
 
-This pins the connection to that one certificate, which is stronger than validating against a public certificate authority.
+Pinning is only offered when the certificate covers the address the master uses; if it does not, regenerate it on the node first. Pinning ties the connection to that one certificate, which is stronger than validating against a public certificate authority.
 
-A mixed fleet is supported. Some nodes may use HTTPS while others stay on HTTP, and nothing needs to change for nodes you leave alone.
+Over **Tailscale** the connection is already encrypted and authenticated by Tailscale itself, so **Skip certificate verification** (`"tls_verify": false`) is a sound choice there; pinning adds a second layer.
+
+When a node switches between http and https, the master detects it and the fleet form offers the matching address. A mixed fleet is supported: some nodes may use HTTPS while others stay on HTTP, and nothing needs to change for nodes you leave alone.
+
+A regenerated certificate has a new fingerprint. A master that pinned the old one must fetch it again.
 
 ### Nodes whose IP address changes
 
-A certificate is only valid for the names and addresses it was issued for. If a node sits behind a home connection and the provider changes the IP address — after an outage or a line reset, for example — the certificate no longer matches and the master can no longer reach that node. Note that this second part is already true without TLS: `nodes.json` holds the old address either way.
+A certificate is only valid for the names and addresses it was issued for. If a node sits behind a home connection and the provider changes the IP address — after an outage or a line reset, for example — the certificate no longer matches and a master that pinned it can no longer reach that node. Note that this second part is already true without TLS: `nodes.json` holds the old address either way.
 
-Two ways around it:
+Ways around it:
 
-- Give the node a hostname that always points to it — a DNS record you control, or a dynamic DNS name — and enter it during setup. A certificate issued for a name keeps working when the address changes. This is the recommended option.
-- Set `"tls_verify": false` for that node in `nodes.json`. Traffic stays encrypted but the certificate is no longer checked, which means a man-in-the-middle attack becomes possible. Use this only on a network you trust.
+- Reach the node over Tailscale. Its Tailscale address does not change with your provider, and setup includes it in the certificate.
+- Give the node a hostname that always points to it — a DNS record you control, or a dynamic DNS name — and enter it at the TLS step. A certificate issued for a name keeps working when the address changes.
+- Set `"tls_verify": false` for that node in `nodes.json`. Traffic stays encrypted but the certificate is no longer checked, so a man-in-the-middle attack becomes possible outside a network you trust.
 
 ### Web server
 

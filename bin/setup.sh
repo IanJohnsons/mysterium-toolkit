@@ -295,7 +295,10 @@ if [ "${1:-}" = "--tls-only" ]; then
     _REAL_USER="${SUDO_USER:-${USER:-$(id -un)}}"
     DASHBOARD_PORT=$(grep -oP '(?<=DASHBOARD_PORT=)\d+' "$TOOLKIT_DIR/.env" 2>/dev/null || echo "5000")
     _setup_tls
-    exit 0
+    _tls_rc=$?
+    # v1.4.58: pass the result on — this always exited 0, so start.sh could not
+    # tell a failed TLS step from a successful one.
+    exit $_tls_rc
 fi
 
 

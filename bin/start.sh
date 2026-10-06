@@ -321,6 +321,40 @@ stop_frontend() {
     fi
 }
 
+# ── TLS helpers for Security & Upgrades → TLS (v1.4.58) ─────────────────────
+_tls_restart_hint() {
+    echo -e "  ${YELLOW}The toolkit uses the new setting after it restarts:${NC}"
+    echo -e "  ${DIM}    sudo systemctl stop mysterium-toolkit && sudo systemctl start mysterium-toolkit${NC}"
+}
+
+_tls_regenerate_cert() {
+    # Set the current certificate aside, run the TLS step, and only then discard
+    # the old one. Until v1.4.58 "Regenerate" deleted cert.pem and key.pem first
+    # and pointed to the full setup; https_enabled stayed on without a
+    # certificate, so a restart fell back to plain HTTP. If the TLS step fails,
+    # the old certificate is put back.
+    local d="$TOOLKIT_DIR/config/tls" stamp
+    stamp=$(date +%s)
+    if [ ! -f "$d/cert.pem" ] || [ ! -f "$d/key.pem" ]; then
+        bash "$TOOLKIT_DIR/bin/setup.sh" --tls-only
+        return $?
+    fi
+    mv "$d/cert.pem" "$d/cert.pem.old-$stamp" || return 1
+    if ! mv "$d/key.pem" "$d/key.pem.old-$stamp"; then
+        mv "$d/cert.pem.old-$stamp" "$d/cert.pem"
+        return 1
+    fi
+    if bash "$TOOLKIT_DIR/bin/setup.sh" --tls-only && [ -s "$d/cert.pem" ] && [ -s "$d/key.pem" ]; then
+        rm -f "$d/cert.pem.old-$stamp" "$d/key.pem.old-$stamp"
+        return 0
+    fi
+    rm -f "$d/cert.pem" "$d/key.pem"
+    mv "$d/cert.pem.old-$stamp" "$d/cert.pem"
+    mv "$d/key.pem.old-$stamp" "$d/key.pem"
+    echo -e "  ${RED}✗ No new certificate — the previous one is back in place${NC}"
+    return 1
+}
+
 # ============ MAIN MENU LOOP ============
 
 # ── Detect install type ──────────────────────────────────────────────────────
@@ -953,13 +987,12 @@ _action_security() {
                     echo
                     echo "  a. Regenerate the certificate (after an IP or hostname change)"
                     echo "  b. Turn TLS off — back to plain HTTP"
-                    echo "  c. Show the certificate to copy to a fleet master"
+                    echo "  c. Show the certificate fingerprint (to compare when a fleet master pins it)"
                     echo "  0. Back"
                     echo
                     read -p "  Select: " _tls_c
                     case "$_tls_c" in
-                        a) rm -f "$_TLS_DIR/cert.pem" "$_TLS_DIR/key.pem"
-                           echo -e "  ${DIM}  Removed. Run ./setup.sh and answer yes at the TLS step.${NC}" ;;
+                        a) _tls_regenerate_cert ;;   # setup's TLS step prints the restart line itself
                         b) "$TOOLKIT_DIR/venv/bin/python3" - << 'TLSOFF'
 import json, pathlib
 p = pathlib.Path('config/setup.json')
@@ -968,12 +1001,15 @@ d['https_enabled'] = False
 p.write_text(json.dumps(d, indent=2))
 print("  setup.json updated: https_enabled = false")
 TLSOFF
-                           echo -e "  ${GREEN}✓ TLS disabled — restart the backend to apply${NC}"
+                           echo -e "  ${GREEN}✓ TLS disabled${NC}"
+                           _tls_restart_hint
                            echo -e "  ${DIM}  The certificate is kept in config/tls/ for later${NC}" ;;
                         c) if [ -f "$_TLS_DIR/cert.pem" ]; then
-                               echo -e "  ${DIM}  Copy this file to the fleet master and point tls_cert at it:${NC}"
-                               echo -e "  ${CYAN}  $_TLS_DIR/cert.pem${NC}"
-                               openssl x509 -in "$_TLS_DIR/cert.pem" -noout -subject -dates -ext subjectAltName 2>/dev/null | sed 's/^/    /'
+                               # v1.4.58: the master fetches the certificate itself (Fleet → edit
+                               # this node → Fetch certificate); compare its fingerprint with this one.
+                               openssl x509 -in "$_TLS_DIR/cert.pem" -noout -fingerprint -sha256 -dates -ext subjectAltName 2>/dev/null | sed 's/^/    /'
+                               echo -e "  ${DIM}  To pin it on a fleet master: Fleet → edit this node → Fetch certificate,${NC}"
+                               echo -e "  ${DIM}  check the fingerprint matches the one above, and save with \"Pin\" ticked.${NC}"
                            else
                                echo -e "  ${RED}✗ No certificate found${NC}"
                            fi ;;
@@ -989,7 +1025,8 @@ TLSOFF
                     printf "  Continue? [y/N]: "
                     read -r _tls_go
                     if [[ "$_tls_go" =~ ^[Yy]$ ]]; then
-                        bash "$TOOLKIT_DIR/bin/setup.sh" --tls-only 2>&1 | tail -20
+                        # v1.4.58: run directly; piping it through tail held every prompt back until the end.
+                        bash "$TOOLKIT_DIR/bin/setup.sh" --tls-only   # prints the restart line itself
                     fi
                 fi
                 echo
