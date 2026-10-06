@@ -8,6 +8,7 @@ Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
 - fix: **consumers are no longer labelled "Mysterium quality monitoring" on a guess.** The 🔧 "Network probes" group came from a rule of thumb (at least five sessions, next to no earnings, under 2 MB per session). Checked against the node's own records, the figures were right but the label was not provable: it put a consumer confirmed on-chain as a real user among the "probes", and left out the consumer that cost the node most — 89 MB over 23 sessions, never paying — because it used more than 2 MB per session. The rule, the label and the 🔧 marks are gone. Real Mysterium monitoring services (`monitoring`, `noop`) remain excluded by service type, as before.
 - feat: **consumers are grouped by what the node recorded.** Paying consumers form the main list. Consumers that received data and never paid are shown under "Never paid this node", with the traffic they got and a total of free traffic served. Connections that paid at most a token amount with under 1 MB ("Connection tests") and connections that transferred nothing ("No traffic") are folded away. The consumer history shows the same group.
+- fix: **lists sorted ▼ now show the largest first.** The shared sort function had its sign inverted, so every list that starts descending — consumers by earnings, sessions by earnings, the history and archive by start time, tunnels by traffic — showed the smallest or oldest first.
 
 ## v1.4.56
 

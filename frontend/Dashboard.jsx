@@ -1357,11 +1357,12 @@ const MysteriumDashboard = () => {
   }));
   const sortIcon = (state, key) => state.key === key ? (state.dir === 'desc' ? '▼' : '▲') : '⇅';
   const hdrCls = (state, key) => `cursor-pointer select-none flex items-center gap-1 hover:text-slate-200 transition${state.key === key ? ' text-slate-200' : ''}`;
+  // v1.4.57: the sign was inverted, so every list on ▼ showed the smallest first.
   const sortRows = (rows, state) => [...rows].sort((a, b) => {
     const mul = state.dir === 'desc' ? -1 : 1;
     const av = a[state.key] ?? '';
     const bv = b[state.key] ?? '';
-    return av > bv ? -mul : av < bv ? mul : 0;
+    return av > bv ? mul : av < bv ? -mul : 0;
   });
   const [showLogs, setShowLogs] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
@@ -4102,7 +4103,7 @@ const MysteriumDashboard = () => {
                     {unpaidList.length > 0 && (
                       <div className="mb-3 p-2 rounded border border-amber-500/30 bg-amber-500/5">
                         <div className="text-[10px] text-amber-400/90 uppercase tracking-wider mb-1.5 px-1">
-                          {'Never paid this node — data served, no payment recorded by the node'}
+                          {'Never paid this node — data served, nothing beyond a token amount paid'}
                         </div>
                         <div className="sm:hidden space-y-1.5">
                           {sortRows(unpaidList, { key: 'total_data_mb', dir: 'desc' }).map((c, i) => <ConsumerCard key={c.consumer_id || i} c={c} onHistory={openWalletHistory} />)}
@@ -4147,12 +4148,7 @@ const MysteriumDashboard = () => {
                         </div>
                         <div className="hidden sm:block space-y-1.5">
                           {desktopHeader}
-                          {[...realConsumers].sort((a, b) => {
-                            const mul = consumerSort.dir === 'desc' ? -1 : 1;
-                            const av = a[consumerSort.key] ?? 0;
-                            const bv = b[consumerSort.key] ?? 0;
-                            return av > bv ? -mul : av < bv ? mul : 0;
-                          }).map((c, i) => <ConsumerRow key={c.consumer_id || i} c={c} onHistory={openWalletHistory} />)}
+                          {sortRows(realConsumers, consumerSort).map((c, i) => <ConsumerRow key={c.consumer_id || i} c={c} onHistory={openWalletHistory} />)}
                         </div>
                       </>
                     ) : (
