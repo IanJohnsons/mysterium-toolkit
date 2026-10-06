@@ -7747,6 +7747,11 @@ def _build_fleet_aggregate():
     """Build an aggregate view from all per-node metrics."""
     with _per_node_lock:
         nodes = list(_per_node_metrics.values())
+    # The order of nodes.json, not of who answered first: with parallel polling
+    # (v1.4.58) the dict above is ordered by the quickest node after a restart.
+    # A node no longer in nodes.json goes last.
+    _order = {e.get('id'): i for i, e in enumerate(_node_registry)}
+    nodes.sort(key=lambda n: _order.get(n.get('node_id'), len(_order)))   # per-node records carry node_id
 
     if not nodes:
         return {}

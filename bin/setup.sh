@@ -215,8 +215,10 @@ except Exception:
         echo -e "  ${DIM}  Dashboard: https://localhost:${DASHBOARD_PORT:-5000}${NC}"
         echo -e "  ${DIM}  Your browser will warn about the certificate once — that is${NC}"
         echo -e "  ${DIM}  expected for a self-signed certificate; accept it permanently.${NC}"
-        echo -e "  ${DIM}  Fleet master: copy config/tls/cert.pem to the master and point${NC}"
-        echo -e "  ${DIM}  this node's tls_cert at it in nodes.json.${NC}"
+        echo -e "  ${YELLOW}  The toolkit uses the new certificate after it restarts${NC}"
+        echo -e "  ${DIM}    sudo systemctl stop mysterium-toolkit && sudo systemctl start mysterium-toolkit${NC}"
+        echo -e "  ${DIM}  Fleet master: to pin this node, open Fleet → edit this node → Fetch certificate${NC}"
+        echo -e "  ${DIM}    after the restart, compare the fingerprint, and save with \"Pin\" ticked.${NC}"
 
         # v1.4.6: turning TLS on changes what port 5000 serves, but nothing revisits
         # nodes.json. A fleet master's own entry is usually http://localhost:5000, and

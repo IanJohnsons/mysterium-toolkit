@@ -11,6 +11,8 @@ Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 - improve: **the fleet master polls its nodes in parallel.** Nodes were asked one after another with a pause between them; on the test bench with 100 nodes, 10 of them unreachable, a round took 161 s. Ten workers (four in Pi mode, or `fleet_poll_workers` in `setup.json`) now poll at the same time: 20 s per round, the first round over all nodes in 12 s.
 - improve: **the dashboard poll carries only what the fleet cards show.** `/metrics` included every node's full record every three seconds — 188 KB with 100 nodes. It now carries the fields the fleet view reads (54 KB). `/fleet` still returns the full records.
 - improve: **setup suggests TLS where the dashboard would otherwise travel in clear text.** "Enable TLS?" defaulted to no everywhere. It now defaults to yes on a machine with a public address and no Tailscale, or where HTTPS is already on, and says why; answering no never switches existing HTTPS off.
+- fix: **fleet cards keep the order of `nodes.json`.** With parallel polling the fleet list followed whichever node answered first after a restart, so the cards changed places.
+- fix: **`setup.sh --tls-only` says what happens next.** It still told the operator to copy `cert.pem` to the master by hand, which "Fetch certificate" in the fleet form has replaced since v1.4.53, and it did not mention that the toolkit only uses a new certificate after a restart.
 
 ## v1.4.57
 
