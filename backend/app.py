@@ -28,6 +28,7 @@ from datetime import datetime, timezone, timedelta
 from functools import wraps
 from collections import deque
 from threading import Thread, Lock
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -977,6 +978,9 @@ UPDATE_INTERVAL = 3 if _raw_interval >= 10 else max(_raw_interval, 2)
 # growing unbounded). The heavy history fields (earnings/traffic/uptime/logs) are on a
 # separate, once-per-day cache regardless of this interval — see _get_node_heavy_data.
 FLEET_POLL_INTERVAL = max(int(os.getenv('FLEET_POLL_INTERVAL', 10)), 5)
+# v1.4.58: nodes are polled in parallel by this many workers. Serial polling with
+# a stagger took 161 s per round for 100 nodes (10 hanging) on the test bench.
+FLEET_POLL_WORKERS = max(1, int(setup_config.get('fleet_poll_workers', 4 if PI_MODE else 10)))
 
 if MULTI_NODE_MODE:
     logger.info(f"=== MULTI-NODE MODE: {len(_node_registry)} nodes from nodes.json ===")
@@ -7083,26 +7087,23 @@ _fleet_lock = Lock()
 
 
 def _is_local_toolkit_url(url):
-    """Return True if url points to this toolkit instance (localhost / 127.0.0.1 / own IP)."""
+    """True only when url is this toolkit: a loopback host on this toolkit's own port.
+
+    Until v1.4.58 any localhost / 127.0.0.1 URL counted, whatever its port (the
+    port check after the first loop was never reached). A node reached through
+    an SSH tunnel or a second toolkit on this machine (localhost:5001) was then
+    read from this toolkit's own metrics and showed the master's data under its
+    name. A URL without a port means 80 or 443, not this toolkit."""
     if not url:
         return False
-    url = url.lower().rstrip('/')
-    local_hosts = {'localhost', '127.0.0.1', '::1', '0.0.0.0'}
-    for h in local_hosts:
-        if f'://{h}:' in url or url.endswith(f'://{h}'):
-            return True
-    # Check own port
     try:
-        own_port = str(PORT)
-        if url.endswith(f':{own_port}') or f':{own_port}/' in url:
-            # Also verify hostname is local
-            from urllib.parse import urlparse
-            parsed = urlparse(url)
-            if parsed.hostname in local_hosts:
-                return True
-    except Exception:
-        pass
-    return False
+        p = urlparse(str(url).strip())
+        if (p.hostname or '').lower() not in ('localhost', '127.0.0.1', '::1', '0.0.0.0'):
+            return False
+        port = p.port or (443 if p.scheme == 'https' else 80)
+        return port == int(PORT)
+    except (ValueError, TypeError):
+        return False
 
 
 # Heavy fleet-peer data (earnings_history, traffic_history, db_stats, logs) is slow-
@@ -7509,6 +7510,7 @@ def _collect_single_node(node_entry):
                     # Peers older than v1.4.29 do not send this; those nodes fall
                     # back to the master's own version, as before.
                     'toolkit_version':  data.get('toolkit_version', ''),
+                    'toolkit_update':   data.get('toolkit_update'),
                     'earnings':         data.get('earnings', {}),
                     'sessions':         data.get('sessions', {}),
                     'services':         data.get('services', {}),
@@ -7719,6 +7721,28 @@ def _collect_single_node(node_entry):
 
 
 
+def _fleet_nodes_for_ui(nodes):
+    """The per-node fields the fleet cards read, nothing else (v1.4.58).
+
+    /metrics carried every node's full record — uptime_stats, db_stats,
+    resources, all of sessions, earnings and node_quality — on every 3-second
+    dashboard poll: 188 KB with 100 nodes, almost all of it never read by the
+    fleet view. The node view gets its data from the node through the proxy, and
+    /fleet still returns the full records."""
+    keep = ('id', 'label', 'status', 'uptime', 'version', 'nat', 'toolkit_url', 'peer_mode',
+            'toolkit_version', 'toolkit_update', 'error', 'wallet', 'identity', 'ip')
+    out = []
+    for n in nodes:
+        e, s, q = n.get('earnings') or {}, n.get('sessions') or {}, n.get('node_quality') or {}
+        slim = {k: n.get(k) for k in keep}
+        slim['earnings'] = {'daily': e.get('daily'), 'unsettled': e.get('unsettled')}
+        slim['sessions'] = {'active': s.get('active')}
+        slim['node_quality'] = {'uptime_24h_local': q.get('uptime_24h_local'),
+                                'uptime_24h_net': q.get('uptime_24h_net')}
+        out.append(slim)
+    return out
+
+
 def _build_fleet_aggregate():
     """Build an aggregate view from all per-node metrics."""
     with _per_node_lock:
@@ -7767,6 +7791,7 @@ def _build_fleet_aggregate():
             # The toolkit release on that node, so the UI can tell which of them
             # is behind instead of asking only whether the master is.
             'toolkit_version': n.get('toolkit_version', ''),
+            'toolkit_update': n.get('toolkit_update'),
             'nat':         n.get('nat', n.get('node_status', {}).get('nat', '')),
             'ip':          n.get('ip', n.get('node_status', {}).get('ip', '')),
             'identity':    n.get('identity', n.get('earnings', {}).get('wallet_address', '')),
@@ -7795,7 +7820,17 @@ def multi_node_background_collector():
     this is the fix for the fleet peer-polling bandwidth cost.
     """
     logger.info(f"Multi-node collector started: {len(_node_registry)} nodes, "
-                f"stagger={max(1, FLEET_POLL_INTERVAL // max(1, len(_node_registry)))}s between nodes")
+                f"{FLEET_POLL_WORKERS} parallel workers, a round every {FLEET_POLL_INTERVAL}s")
+    pool = ThreadPoolExecutor(max_workers=FLEET_POLL_WORKERS, thread_name_prefix='fleet-poll')
+
+    def _poll_one(node_entry):
+        # One node per task: a slow or failing node occupies only its own worker.
+        try:
+            node_data = _apply_scheme_hint(node_entry, _collect_single_node(node_entry))
+            with _per_node_lock:
+                _per_node_metrics[node_entry['id']] = node_data
+        except Exception as e:
+            logger.warning(f"Error collecting {node_entry['id']}: {e}")
     cycle = 0
     _last_nodes_check = 0.0
     while True:
@@ -7813,20 +7848,10 @@ def multi_node_background_collector():
                     reload_node_registry()
                     log_result(f"nodes.json reloaded: {len(_node_registry)} nodes")
 
-            # Stagger: spread node queries across the interval
-            stagger_delay = max(0.5, FLEET_POLL_INTERVAL / max(1, len(_node_registry)))
-
-            for node_entry in _node_registry:
-                try:
-                    node_data = _apply_scheme_hint(node_entry, _collect_single_node(node_entry))
-                    with _per_node_lock:
-                        _per_node_metrics[node_entry['id']] = node_data
-                except Exception as e:
-                    logger.warning(f"Error collecting {node_entry['id']}: {e}")
-
-                if len(_node_registry) > 5:
-                    time.sleep(stagger_delay)
-
+            # v1.4.58: all nodes in parallel; the round ends when every node has
+            # answered or timed out, then the aggregate is built from all of them.
+            for fut in [pool.submit(_poll_one, entry) for entry in list(_node_registry)]:
+                fut.result()
             # Build aggregate
             agg = _build_fleet_aggregate()
             with _fleet_lock:
@@ -8306,50 +8331,66 @@ def _current_branch():
     return branch
 
 
+_TOOLKIT_UPDATE = {'result': None, 'at': 0.0, 'refreshing': False}
+_TOOLKIT_UPDATE_LOCK = Lock()
+
+
+def _toolkit_update_fetch():
+    """Read the VERSION file of the branch this install is on and compare."""
+    import urllib.request as _ur
+    url = (f'https://raw.githubusercontent.com/IanJohnsons/mysterium-toolkit/'
+           f'{_current_branch()}/VERSION')
+    try:
+        req = _ur.Request(url, headers={'User-Agent': 'mysterium-toolkit'})
+        with _ur.urlopen(req, timeout=5) as resp:
+            latest = resp.read().decode().strip()
+        newer = _version_newer(latest, APP_VERSION)
+        return {'current': APP_VERSION, 'latest': latest, 'up_to_date': not newer,
+                'update_available': newer, 'branch': _current_branch()}
+    except Exception as e:
+        return {'current': APP_VERSION, 'latest': None, 'up_to_date': True,
+                'update_available': False, 'branch': _current_branch(), 'error': str(e)[:80]}
+
+
+def _toolkit_update_status(block=True):
+    """This install's update status for its own branch, cached five minutes.
+
+    v1.4.58: one function for /api/update-check and the fleet peer data, and
+    compared as versions (an install ahead of its branch's VERSION file is not
+    told to "update" back). block=False (the peer path, polled by a fleet master)
+    never waits on GitHub: a stale cache refreshes in the background and the last
+    known answer — or None before the first one — is returned."""
+    with _TOOLKIT_UPDATE_LOCK:
+        res, age = _TOOLKIT_UPDATE['result'], time.time() - _TOOLKIT_UPDATE['at']
+        fresh = res is not None and age < 300
+        if fresh:
+            return dict(res)
+        if not block:
+            if not _TOOLKIT_UPDATE['refreshing']:
+                _TOOLKIT_UPDATE['refreshing'] = True
+                Thread(target=_toolkit_update_refresh, daemon=True, name='toolkit-update-check').start()
+            return dict(res) if res else None
+    return _toolkit_update_refresh()
+
+
+def _toolkit_update_refresh():
+    result = _toolkit_update_fetch()
+    with _TOOLKIT_UPDATE_LOCK:
+        _TOOLKIT_UPDATE.update(result=result, at=time.time(), refreshing=False)
+    return dict(result)
+
+
 @app.route('/api/update-check', methods=['GET'])
 def check_for_update():
-    """Check if a newer version is available on GitHub.
-    Polls the raw VERSION file for the branch this install is checked out on —
-    cached 5 minutes. No auth token required.
+    """Check if a newer version is available on GitHub, for the branch this
+    install is checked out on — cached 5 minutes. No auth token required.
 
     v1.4.0: the branch used to be hardcoded to main. An install running a test
     branch then permanently reported an update, because main carries a different
     version number. Reading the branch from git keeps testing quiet without having
     to disable the auto-update timer.
     """
-    import urllib.request as _ur
-    _VERSION_URL = (f'https://raw.githubusercontent.com/IanJohnsons/mysterium-toolkit/'
-                    f'{_current_branch()}/VERSION')
-    _cache = getattr(check_for_update, '_cache', None)
-    _cache_time = getattr(check_for_update, '_cache_time', 0)
-
-    now = time.time()
-    if _cache is not None and now - _cache_time < 300:  # 5 minutes
-        return jsonify(_cache), 200
-
-    try:
-        req = _ur.Request(_VERSION_URL, headers={'User-Agent': 'mysterium-toolkit'})
-        with _ur.urlopen(req, timeout=5) as resp:
-            latest = resp.read().decode().strip()
-        result = {
-            'current':    APP_VERSION,
-            'latest':     latest,
-            'up_to_date': latest == APP_VERSION,
-            'update_available': latest != APP_VERSION,
-            'branch':     _current_branch(),
-        }
-    except Exception as e:
-        result = {
-            'current':          APP_VERSION,
-            'latest':           None,
-            'up_to_date':       True,
-            'update_available': False,
-            'error':            str(e)[:80],
-        }
-
-    check_for_update._cache      = result
-    check_for_update._cache_time = now
-    return jsonify(result), 200
+    return jsonify(_toolkit_update_status()), 200
 
 
 def _parse_node_version(v):
@@ -10334,7 +10375,8 @@ def get_all_metrics():
     # Inject fleet data if multi-node mode
     if MULTI_NODE_MODE:
         with _fleet_lock:
-            fleet = copy.deepcopy(_fleet_aggregate)
+            fleet = {k: copy.deepcopy(v) for k, v in _fleet_aggregate.items() if k != 'nodes'}
+            fleet['nodes'] = _fleet_nodes_for_ui(_fleet_aggregate.get('nodes') or [])
         data['fleet'] = fleet
     return jsonify(data), 200
 
@@ -14473,6 +14515,8 @@ def peer_data():
             # every update button vanished while the other nodes were still
             # behind. One field on a call that already happens.
             'toolkit_version':  APP_VERSION,
+            # v1.4.58: this install's own, branch-aware update status, for the fleet card.
+            'toolkit_update':   _toolkit_update_status(block=False),
             'node_status':      cache.get('nodeStatus', {}),
             'earnings':         cache.get('earnings', {}),
             'sessions':         cache.get('sessions', {}),

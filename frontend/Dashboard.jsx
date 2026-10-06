@@ -2107,11 +2107,25 @@ const MysteriumDashboard = () => {
       // v1.4.29 and cannot report it; fall back to the master's own answer for
       // those rather than guessing they are fine.
       const fleetLatest = updateInfo?.latest || '';
-      const nodeIsBehind = (n) => {
-        if (!fleetLatest) return false;
-        const v = n.toolkit_version || '';
-        return v ? v !== fleetLatest : !!updateInfo?.update_available;
+      // v1.4.58: each node reports its own update status, for the branch it is on.
+      // The master's newest version only stands in for nodes too old to report it,
+      // and then only when the node is really older — never a "downgrade update".
+      const verTuple = (v) => String(v || '').replace(/^v/, '').split('+')[0].split('-')[0]
+        .split('.').map(x => parseInt(x, 10) || 0);
+      const verOlder = (a, b) => {
+        const x = verTuple(a), y = verTuple(b);
+        for (let i = 0; i < Math.max(x.length, y.length); i++) {
+          if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0);
+        }
+        return false;
       };
+      const nodeIsBehind = (n) => {
+        if (n.toolkit_update) return !!n.toolkit_update.update_available;
+        const v = n.toolkit_version || '';
+        if (!v) return !!updateInfo?.update_available;   // the master's own card, as before
+        return !!(fleetLatest && verOlder(v, fleetLatest));
+      };
+      const nodeLatest = (n) => (n.toolkit_update && n.toolkit_update.latest) || fleetLatest;
       const behindNodes = fleetNodes.filter(nodeIsBehind);
       const anyBehind = behindNodes.length > 0 || !!updateInfo?.update_available;
 
@@ -2804,7 +2818,7 @@ const MysteriumDashboard = () => {
                                 }
                               }}
                               className="text-[10px] px-2 py-0.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 transition"
-                            >↑ Update to v{updateInfo.latest}</button>
+                            >↑ Update to v{nodeLatest(n)}</button>
                           )}
                         </div>
                       )}

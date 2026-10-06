@@ -4,6 +4,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.58
+
+- fix: **a fleet node on localhost with another port is polled, not mistaken for the master.** Any `localhost` / `127.0.0.1` address counted as this toolkit whatever its port, so a node reached through an SSH tunnel or a second toolkit on the same machine showed the master's own data under its name. Only a loopback address on this toolkit's own port counts now.
+- fix: **each fleet card offers the update for that node's own branch.** The card showed "Update to" the master's newest version whenever a node's version differed from it: a node on `main` was offered a `dev` version its update could not fetch, and a node newer than the master would have been offered a downgrade. Every node now reports its own update status (from the VERSION file of the branch it is on, compared as versions) in its peer data; a node too old to report it is only marked when it is really older. The fleet master never waits on GitHub for this.
+- improve: **the fleet master polls its nodes in parallel.** Nodes were asked one after another with a pause between them; on the test bench with 100 nodes, 10 of them unreachable, a round took 161 s. Ten workers (four in Pi mode, or `fleet_poll_workers` in `setup.json`) now poll at the same time: 20 s per round, the first round over all nodes in 12 s.
+- improve: **the dashboard poll carries only what the fleet cards show.** `/metrics` included every node's full record every three seconds — 188 KB with 100 nodes. It now carries the fields the fleet view reads (54 KB). `/fleet` still returns the full records.
+- improve: **setup suggests TLS where the dashboard would otherwise travel in clear text.** "Enable TLS?" defaulted to no everywhere. It now defaults to yes on a machine with a public address and no Tailscale, or where HTTPS is already on, and says why; answering no never switches existing HTTPS off.
+
 ## v1.4.57
 
 - fix: **consumers are no longer labelled "Mysterium quality monitoring" on a guess.** The 🔧 "Network probes" group came from a rule of thumb (at least five sessions, next to no earnings, under 2 MB per session). Checked against the node's own records, the figures were right but the label was not provable: it put a consumer confirmed on-chain as a real user among the "probes", and left out the consumer that cost the node most — 89 MB over 23 sessions, never paying — because it used more than 2 MB per session. The rule, the label and the 🔧 marks are gone. Real Mysterium monitoring services (`monitoring`, `noop`) remain excluded by service type, as before.

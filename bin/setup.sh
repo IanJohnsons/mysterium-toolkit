@@ -7,6 +7,40 @@ TOOLKIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Extracted into a function so start.sh can invoke it through --tls-only.
 # Enabling TLS used to be possible during setup only, which left an existing
 # install with no way to turn it on short of editing setup.json by hand.
+_tls_default() {
+    # v1.4.58: the suggested answer for "Enable TLS?", and why. Sets _TLS_DEF (Y/N),
+    # _TLS_WHY and _TLS_ON (1 when HTTPS is already on). Asking [y/N] everywhere
+    # left a VPS with a public address and no Tailscale serving its dashboard and
+    # API key in clear text unless the operator knew to answer yes.
+    _TLS_DEF=N
+    _TLS_ON=0
+    if python3 -c 'import json,sys; sys.exit(0 if json.load(open("config/setup.json")).get("https_enabled") else 1)' 2>/dev/null; then
+        _TLS_DEF=Y
+        _TLS_ON=1
+        _TLS_WHY="HTTPS is already on — yes keeps it and checks the certificate, no leaves it as it is"
+        return 0
+    fi
+    if command -v tailscale &>/dev/null && [ -n "$(tailscale ip -4 2>/dev/null | head -1)" ]; then
+        _TLS_WHY="Tailscale is active — traffic over Tailscale is already encrypted"
+        return 0
+    fi
+    local _pub=""
+    if command -v ip &>/dev/null; then
+        # Not public: RFC1918, loopback, link-local, CGNAT 100.64.0.0/10, and the
+        # node's own WireGuard tunnels (myst*).
+        _pub=$(ip -4 -o addr show 2>/dev/null \
+            | awk '$2 !~ /^(lo|myst)/ {split($4, a, "/"); print a[1]}' \
+            | grep -vE '^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.)' \
+            | head -1)
+    fi
+    if [ -n "$_pub" ]; then
+        _TLS_DEF=Y
+        _TLS_WHY="this machine has a public address ($_pub) and no Tailscale — without TLS the dashboard and its API key travel unencrypted over the internet"
+    else
+        _TLS_WHY="only LAN addresses — the dashboard is reached on the local network"
+    fi
+}
+
 _setup_tls() {
 
     _TLS_DIR="$TOOLKIT_DIR/config/tls"
@@ -2106,10 +2140,20 @@ echo -e "  API key — travels in clear text."
 echo -e "  ${DIM}  A self-signed certificate is generated locally. No domain name,${NC}"
 echo -e "  ${DIM}  no Let's Encrypt, no certbot and no port 80 are required.${NC}"
 echo
-printf "  Enable TLS (HTTPS) for the dashboard? [y/N]: "
+_tls_default
+if [ "$_TLS_DEF" = "Y" ]; then
+    echo -e "  ${CYAN}Suggested: yes${NC} ${DIM}— $_TLS_WHY${NC}"
+    printf "  Enable TLS (HTTPS) for the dashboard? [Y/n]: "
+else
+    echo -e "  ${DIM}Suggested: no — $_TLS_WHY${NC}"
+    printf "  Enable TLS (HTTPS) for the dashboard? [y/N]: "
+fi
 read -r _tls_answer </dev/tty
+[ -z "$_tls_answer" ] && _tls_answer="$_TLS_DEF"
 if [[ "$_tls_answer" =~ ^[Yy]$ ]]; then
     _setup_tls
+elif [ "$_TLS_ON" = "1" ]; then
+    echo -e "  ${DIM}  Left as it is — HTTPS stays on (start.sh → Security → TLS to change)${NC}"
 else
     echo -e "  ${DIM}  Skipped — dashboard stays on plain HTTP${NC}"
 fi
