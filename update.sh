@@ -170,6 +170,39 @@ if [ -n "$_NODES_BACKUP" ] && [ ! -f "config/nodes.json" ]; then
     echo -e "  ${GREEN}✓ config/nodes.json restored after pull${NC}"
 fi
 
+# ── Fleet state (v1.4.59) ─────────────────────────────────────────────────
+# A fleet master that lost nodes.json (reinstall, fresh clone) came back as a
+# single node and nothing said so. The backend keeps a safety copy outside the
+# install directory; report on both. Never restored from here: this script
+# also runs unattended from the timer, and a fleet removed on purpose must not
+# come back by itself. Silent on installs that never had a fleet.
+_FLEET_COPY="${_REAL_HOME:-$HOME}/.config/mysterium-toolkit/nodes.json"
+_fleet_count() {
+    python3 -c 'import json,sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    print(-1); sys.exit(0)
+n = d if isinstance(d, list) else d.get("nodes", [])
+print(sum(1 for x in n if isinstance(x, str) or (isinstance(x, dict) and (x.get("toolkit_url") or x.get("url")))))' "$1" 2>/dev/null || echo -1
+}
+if [ -f "config/nodes.json" ]; then
+    _FLEET_N=$(_fleet_count "config/nodes.json")
+    if [ "$_FLEET_N" = "-1" ]; then
+        echo -e "  ${YELLOW}⚠ config/nodes.json is not valid JSON — the fleet will not load${NC}"
+    elif [ "$_FLEET_N" -gt 0 ] 2>/dev/null; then
+        echo -e "  ${GREEN}✓ Fleet: $_FLEET_N node(s) in config/nodes.json${NC}"
+    fi
+elif [ -f "$_FLEET_COPY" ]; then
+    _FLEET_COPY_N=$(_fleet_count "$_FLEET_COPY")
+    if [ "$_FLEET_COPY_N" -gt 0 ] 2>/dev/null; then
+        echo -e "  ${YELLOW}⚠ Fleet configuration missing: no config/nodes.json, but a saved copy with $_FLEET_COPY_N node(s) exists${NC}"
+        echo -e "  ${DIM}    This dashboard will start as a single node. To get the fleet back:${NC}"
+        echo -e "  ${DIM}    open the dashboard and press \"Restore fleet\", or run:${NC}"
+        echo -e "  ${DIM}    cp $_FLEET_COPY $TOOLKIT_DIR/config/nodes.json${NC}"
+    fi
+fi
+
 # ── Migrate databases from config/ to backend/databases/ (v1.2.28+) ─────────
 # Copies if src exists and has data, and dst is missing or smaller than src
 _DB_MIGRATED=0

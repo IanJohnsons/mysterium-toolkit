@@ -613,6 +613,89 @@ _nodes_json_path = None
 _nodes_json_mtime = 0
 _node_registry = []  # List of {id, label, url, username, password}
 
+# ── Fleet safety copy (v1.4.59) ──────────────────────────────────────────────
+# A fresh clone, setup's "Fresh install" or an rm -rf of the install directory
+# took nodes.json with it, and the master then came up as a single node with
+# nothing in the log to say a fleet had existed. A copy now lives outside the
+# install directory, so it survives all three; setup offers it back, update.sh
+# reports on it and the dashboard shows a Restore button. Same format as
+# nodes.json itself (a byte copy), mode 600 — it holds the same keys.
+_FLEET_BACKUP_FILE = Path.home() / '.config' / 'mysterium-toolkit' / 'nodes.json'
+_fleet_backup_cache = {'mtime': None, 'info': None}
+
+
+def _fleet_count_nodes(data):
+    """Nodes the loader would accept: an entry with a toolkit_url or a url."""
+    nodes = data if isinstance(data, list) else (data or {}).get('nodes', [])
+    out = []
+    for n in nodes if isinstance(nodes, list) else []:
+        if isinstance(n, str):
+            n = {'url': n}
+        if isinstance(n, dict) and (n.get('toolkit_url') or n.get('url')):
+            out.append(n)
+    return out
+
+
+def _fleet_backup_save(src):
+    """Copy nodes.json to the safety copy. Never raises: a failed copy is logged
+    as a warning (it must not break a save) and reported, not swallowed."""
+    try:
+        src = Path(src)
+        raw = src.read_bytes()
+        try:
+            if _FLEET_BACKUP_FILE.exists() and _FLEET_BACKUP_FILE.read_bytes() == raw:
+                return True
+        except OSError:
+            pass
+        _FLEET_BACKUP_FILE.parent.mkdir(parents=True, exist_ok=True)
+        os.chmod(_FLEET_BACKUP_FILE.parent, 0o700)
+        fd, tmp = tempfile.mkstemp(dir=str(_FLEET_BACKUP_FILE.parent), prefix='.nodes.', suffix='.tmp')
+        try:
+            with os.fdopen(fd, 'wb') as f:
+                f.write(raw)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, _FLEET_BACKUP_FILE)
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+        logger.info(f"Fleet safety copy updated: {_FLEET_BACKUP_FILE}")
+        return True
+    except Exception as e:
+        logger.warning(f"Could not write the fleet safety copy {_FLEET_BACKUP_FILE}: {e} — "
+                       f"a reinstall would lose the fleet configuration")
+        return False
+
+
+def _fleet_restore_info():
+    """What the dashboard needs to offer a restore, or None.
+
+    Offered only when this toolkit runs without a fleet while the safety copy
+    holds at least one node — exactly the state a reinstall leaves behind. A
+    fleet emptied on purpose through the UI writes an empty copy, so it is not
+    offered back."""
+    if MULTI_NODE_MODE:
+        return None
+    try:
+        mtime = _FLEET_BACKUP_FILE.stat().st_mtime
+    except OSError:
+        return None
+    if _fleet_backup_cache['mtime'] != mtime:
+        info = None
+        try:
+            with open(_FLEET_BACKUP_FILE) as f:
+                nodes = _fleet_count_nodes(json.load(f))
+            if nodes:
+                info = {
+                    'nodes':    len(nodes),
+                    'labels':   [str(n.get('label') or n.get('id') or '')[:40] for n in nodes[:6]],
+                    'saved_at': datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M'),
+                    'path':     str(_FLEET_BACKUP_FILE),
+                }
+        except Exception as e:
+            logger.warning(f"Fleet safety copy {_FLEET_BACKUP_FILE} is unreadable: {e}")
+        _fleet_backup_cache.update(mtime=mtime, info=info)
+    return dict(_fleet_backup_cache['info']) if _fleet_backup_cache['info'] else None
+
 
 def _load_nodes_json():
     """Load nodes.json if it exists. Returns list of node dicts or empty list.
@@ -676,6 +759,9 @@ def _load_nodes_json():
                     _nodes_json_path = p
                     _nodes_json_mtime = mtime
                     logger.info(f"Loaded {len(result)} nodes from {p}")
+                    # v1.4.59: keep the safety copy current — also for fleets that
+                    # were written by hand or predate the copy.
+                    _fleet_backup_save(p)
                 else:
                     # v1.4.5: mtime was only recorded when nodes were found, so a file
                     # that is briefly empty or malformed stayed "changed" forever and
@@ -785,6 +871,17 @@ else:
 
 # Try loading nodes.json — overrides all above if found
 reload_node_registry()
+
+# v1.4.59: no fleet, but a safety copy with nodes — a reinstall lost nodes.json.
+# Until now this started as a single node without a single log line about it.
+_restore_at_start = _fleet_restore_info()
+if _restore_at_start:
+    logger.warning(
+        f"Fleet configuration missing: no usable config/nodes.json, but a saved copy with "
+        f"{_restore_at_start['nodes']} node(s) from {_restore_at_start['saved_at']} exists at "
+        f"{_restore_at_start['path']}. Running as a single node until it is restored — use "
+        f"Restore fleet in the dashboard, or copy that file to config/nodes.json."
+    )
 
 # Keep single NODE_API_URL for backward compatibility (first node)
 NODE_API_URL = NODE_API_URLS[0] if NODE_API_URLS else f"http://{node_host}:{node_port}"
@@ -7870,6 +7967,26 @@ def multi_node_background_collector():
         time.sleep(FLEET_POLL_INTERVAL)
 
 
+_fleet_collector_lock = Lock()
+_fleet_collector_started = False
+
+
+def _ensure_fleet_collector(reason=''):
+    """Start the fleet collector once, from whichever path brings a fleet up
+    (startup, the nodes.json watcher, Restore fleet). Returns True if it started
+    it now. v1.4.59: one guard instead of a flag local to the watcher, so a
+    restore and the watcher can never run two collectors side by side."""
+    global _fleet_collector_started
+    with _fleet_collector_lock:
+        if _fleet_collector_started or not MULTI_NODE_MODE:
+            return False
+        _fleet_collector_started = True
+    Thread(target=multi_node_background_collector, daemon=True, name='fleet-collector').start()
+    if reason:
+        log_result(f"Fleet collector started — {reason} ({len(_node_registry)} nodes)")
+    return True
+
+
 def background_collector():
     """Background thread for metric collection — tiered caching.
     Single-node mode only. Multi-node uses multi_node_background_collector."""
@@ -7887,12 +8004,11 @@ def background_collector():
             _now_chk = time.time()
             if not _fleet_started and _now_chk - _last_nodes_check >= 30:
                 _last_nodes_check = _now_chk
-                if _check_nodes_json_changed() and reload_node_registry():
+                if _fleet_collector_started:
+                    _fleet_started = True        # brought up by Restore fleet
+                elif _check_nodes_json_changed() and reload_node_registry():
                     _fleet_started = True
-                    Thread(target=multi_node_background_collector, daemon=True,
-                           name='fleet-collector').start()
-                    log_result(f"nodes.json gained nodes — fleet collector started "
-                               f"({len(_node_registry)} nodes)")
+                    _ensure_fleet_collector('nodes.json gained nodes')
         except Exception as e:
             logger.warning(f"nodes.json watch error: {e}")
 
@@ -8009,6 +8125,7 @@ def _setup_mysterium_forward_chain():
 def start_collector():
     """Start the appropriate background collector thread(s).
     Also launches a one-time startup thread to fetch full session history (all pages)."""
+    global _fleet_collector_started
 
     # Consolidate Mysterium's duplicate FORWARD rules into a dedicated chain.
     # Runs only on iptables systems — skipped on nftables/ufw.
@@ -8078,6 +8195,8 @@ def start_collector():
     if MULTI_NODE_MODE:
         # Multi-node: run fleet collector AND local single-node collector
         fleet_thread = Thread(target=multi_node_background_collector, daemon=True)
+        with _fleet_collector_lock:
+            _fleet_collector_started = True   # v1.4.59: see _ensure_fleet_collector
         fleet_thread.start()
         # Also run local single-node for psutil data (CPU/RAM/tunnels)
         local_thread = Thread(target=background_collector, daemon=True)
@@ -10383,6 +10502,11 @@ def get_all_metrics():
             fleet = {k: copy.deepcopy(v) for k, v in _fleet_aggregate.items() if k != 'nodes'}
             fleet['nodes'] = _fleet_nodes_for_ui(_fleet_aggregate.get('nodes') or [])
         data['fleet'] = fleet
+    else:
+        # v1.4.59: a fleet lost by a reinstall — the dashboard offers it back.
+        _restore = _fleet_restore_info()
+        if _restore:
+            data['fleet_restore'] = {k: _restore[k] for k in ('nodes', 'labels', 'saved_at')}
     return jsonify(data), 200
 
 @app.route('/fast', methods=['GET'])
@@ -10449,6 +10573,49 @@ def get_fleet_nodes():
             'wallet': n.get('earnings', {}).get('wallet_address', ''),
         } for n in _per_node_metrics.values()]
     return jsonify({'nodes': nodes, 'total': len(nodes)}), 200
+
+
+@app.route('/fleet/restore', methods=['POST'])
+@require_auth
+def restore_fleet():
+    """Put the fleet safety copy back as config/nodes.json and start the fleet (v1.4.59).
+
+    Refused while a fleet is loaded: the copy is only for an install that lost
+    its nodes.json. An existing but unusable nodes.json is kept next to it as
+    nodes.json.unusable-<timestamp>, never overwritten silently."""
+    if MULTI_NODE_MODE:
+        return jsonify({'success': False, 'error': 'A fleet is already loaded — nothing to restore'}), 409
+    info = _fleet_restore_info()
+    if not info:
+        return jsonify({'success': False, 'error': f'No usable fleet copy at {_FLEET_BACKUP_FILE}'}), 404
+    target = Path('config/nodes.json')
+    try:
+        raw = _FLEET_BACKUP_FILE.read_bytes()
+        json.loads(raw)   # parsed above already; guards a change in between
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            aside = target.with_name(f'nodes.json.unusable-{datetime.now().strftime("%Y%m%d-%H%M%S")}')
+            target.rename(aside)
+            logger.warning(f"Fleet restore: existing unusable {target} moved to {aside}")
+        fd, tmp = tempfile.mkstemp(dir=str(target.parent), prefix='.nodes.', suffix='.tmp')
+        try:
+            with os.fdopen(fd, 'wb') as f:
+                f.write(raw)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, target)
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+    except Exception as e:
+        logger.error(f"Fleet restore failed: {e}")
+        return jsonify({'success': False, 'error': f'Restore failed: {e}'}), 500
+
+    if not reload_node_registry():
+        logger.error(f"Fleet restore: {target} written but no usable nodes loaded from it")
+        return jsonify({'success': False, 'error': 'The copy was written but no usable nodes were loaded — see the log'}), 500
+    _ensure_fleet_collector('restored from safety copy')
+    logger.info(f"Fleet restored from {_FLEET_BACKUP_FILE}: {len(_node_registry)} nodes")
+    return jsonify({'success': True, 'nodes': len(_node_registry)}), 200
 
 
 @app.route('/fleet/reload', methods=['POST'])
@@ -10580,6 +10747,9 @@ def save_fleet_config():
         config_path.parent.mkdir(parents=True, exist_ok=True)
         with open(config_path, 'w') as f:
             json.dump({'nodes': nodes}, f, indent=2)
+        # v1.4.59: every save updates the safety copy — an emptied fleet too, so
+        # a fleet removed on purpose is not offered back after a reinstall.
+        _fleet_backup_save(config_path)
 
         reload_node_registry()
         return jsonify({'success': True, 'nodes': len(nodes), 'path': str(config_path)}), 200

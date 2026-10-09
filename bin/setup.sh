@@ -519,13 +519,41 @@ fi
 
 # ============ STEP 0.5: STOP RUNNING SERVICE IF ACTIVE ============
 _TOOLKIT_SVC="mysterium-toolkit"
-if systemctl is-active --quiet "$_TOOLKIT_SVC" 2>/dev/null; then
+# v1.4.59: remember whether autostart was on. This step disabled the service and
+# said it would be "re-registered at the end", but nothing re-enabled it — after
+# every re-run of setup the toolkit no longer started at boot, silently.
+_TOOLKIT_WAS_ENABLED=false
+_TOOLKIT_DISABLED_BY_SETUP=false
+if systemctl is-enabled --quiet "$_TOOLKIT_SVC" 2>/dev/null; then
+    _TOOLKIT_WAS_ENABLED=true
+fi
+# "activating" counts too: a unit stuck in a restart loop is not "active", and
+# was left looping underneath the install.
+_TOOLKIT_SVC_STATE=$(systemctl is-active "$_TOOLKIT_SVC" 2>/dev/null)
+if [ "$_TOOLKIT_SVC_STATE" = "active" ] || [ "$_TOOLKIT_SVC_STATE" = "activating" ]; then
     echo -e "${YELLOW}⚠ Toolkit service is currently running — stopping before install...${NC}"
     sudo systemctl stop "$_TOOLKIT_SVC" 2>/dev/null || true
     sudo systemctl disable "$_TOOLKIT_SVC" 2>/dev/null || true
-    echo -e "  ${GREEN}✓ Service stopped and disabled — will be re-registered at the end${NC}"
+    _TOOLKIT_DISABLED_BY_SETUP=true
+    if [ "$_TOOLKIT_WAS_ENABLED" = true ]; then
+        echo -e "  ${GREEN}✓ Service stopped — autostart is switched back on at the end${NC}"
+    else
+        echo -e "  ${GREEN}✓ Service stopped${NC}"
+    fi
     echo
 fi
+
+# Switches autostart back on when this run switched it off. Called on every
+# path that finishes setup; a no-op when autostart was off or no unit exists.
+_restore_autostart() {
+    [ "$_TOOLKIT_WAS_ENABLED" = true ] && [ "$_TOOLKIT_DISABLED_BY_SETUP" = true ] || return 0
+    [ -f "/etc/systemd/system/${_TOOLKIT_SVC}.service" ] || return 0
+    if sudo systemctl enable "$_TOOLKIT_SVC" >/dev/null 2>&1; then
+        echo -e "  ${GREEN}✓ Autostart switched back on (it was on before setup)${NC}"
+    else
+        echo -e "  ${RED}✗ Could not switch autostart back on — run: sudo systemctl enable $_TOOLKIT_SVC${NC}"
+    fi
+}
 
 # ============ STEP 1: KILL OLD PROCESSES ============
 echo "Step 1: Checking for old processes..."
@@ -721,6 +749,7 @@ HTMLEOF
             echo "Step 11.5: Configuring firewall..."
             _apply_firewall_rules
             echo
+            _restore_autostart
             echo "Step 12: Opening menu..."
             sleep 1
             "$TOOLKIT_DIR/bin/start.sh"
@@ -1132,6 +1161,48 @@ echo -e "${DIM}     At 120+ columns it shows full consumer IDs — resize your${
 echo -e "${DIM}     terminal window before launching for the best experience.${NC}"
 echo
 fi  # end _SKIP_WIZARD
+
+# ============ STEP 8.4: PREVIOUS FLEET (v1.4.59) ============
+# The backend keeps a copy of nodes.json outside the install directory. A fresh
+# clone, "Fresh install" or a deleted install directory took the fleet with it,
+# and the master then started as a single node without a word. Offer the copy
+# back — in every setup mode, since a full install can be a fleet master too.
+_FLEET_OWNER="${SUDO_USER:-${USER:-$(id -un)}}"
+_FLEET_OWNER_HOME=$(getent passwd "$_FLEET_OWNER" | cut -d: -f6)
+_FLEET_COPY="${_FLEET_OWNER_HOME:-$HOME}/.config/mysterium-toolkit/nodes.json"
+if [ ! -f "$TOOLKIT_DIR/config/nodes.json" ] && [ -f "$_FLEET_COPY" ]; then
+    _FLEET_COPY_N=$(python3 -c 'import json,sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    print(0); sys.exit(0)
+n = d if isinstance(d, list) else d.get("nodes", [])
+print(sum(1 for x in n if isinstance(x, str) or (isinstance(x, dict) and (x.get("toolkit_url") or x.get("url")))))' "$_FLEET_COPY" 2>/dev/null || echo 0)
+    if [ "$_FLEET_COPY_N" -gt 0 ] 2>/dev/null; then
+        _FLEET_COPY_DATE=$(date -r "$_FLEET_COPY" '+%Y-%m-%d %H:%M' 2>/dev/null)
+        echo "Step 8.4: Previous fleet configuration..."
+        echo
+        echo -e "  ${YELLOW}A fleet of $_FLEET_COPY_N node(s) from a previous install was found${NC} ${DIM}(saved $_FLEET_COPY_DATE)${NC}"
+        echo -e "  ${DIM}  Restoring it brings the fleet view back with the same nodes and keys.${NC}"
+        read -r -p "  Restore it? [Y/n]: " _fleet_restore_ans </dev/tty || _fleet_restore_ans=""
+        case "${_fleet_restore_ans:-Y}" in
+            [nN]|[nN][oO])
+                echo -e "  ${DIM}  Not restored — the copy stays at $_FLEET_COPY${NC}"
+                ;;
+            *)
+                mkdir -p "$TOOLKIT_DIR/config"
+                if cp "$_FLEET_COPY" "$TOOLKIT_DIR/config/nodes.json"; then
+                    chmod 600 "$TOOLKIT_DIR/config/nodes.json" 2>/dev/null || true
+                    chown "$_FLEET_OWNER:" "$TOOLKIT_DIR/config/nodes.json" 2>/dev/null || true
+                    echo -e "  ${GREEN}✓ Fleet restored → config/nodes.json ($_FLEET_COPY_N node(s))${NC}"
+                else
+                    echo -e "  ${RED}✗ Could not copy the fleet back — run: cp $_FLEET_COPY $TOOLKIT_DIR/config/nodes.json${NC}"
+                fi
+                ;;
+        esac
+        echo
+    fi
+fi
 
 # ============ STEP 8.5: FLEET MASTER CONFIGURATION (modus 2 only) ============
 if [ "$SETUP_MODE" = "2" ]; then
@@ -1922,6 +1993,12 @@ if [ -f "$_SERVICE_FILE" ]; then
         fi
     done
     _AFTER_DEPS="network-online.target${_MYST_SVC:+ $_MYST_SVC}"
+    # v1.4.59: this unit carried an ExecStartPre that ran `pkill -9 -f` on the
+    # backend's path. pkill matches full command lines, and the `bash -c '…'`
+    # running that line contains the same path — so the pre-start SIGKILLed itself, systemd
+    # retried every 10 s and port 5000 never opened. v1.1.37 removed the line from
+    # update.sh only. Stray backends are already stopped in steps 0.5 and 1; the
+    # unit is now the one update.sh and start.sh write.
     sudo tee "$_SERVICE_FILE" > /dev/null << UNIT_EOF
 [Unit]
 Description=Mysterium Node Monitoring Toolkit
@@ -1935,7 +2012,6 @@ Type=simple
 User=$_REAL_USER
 WorkingDirectory=$TOOLKIT_DIR
 ExecStartPre=/bin/bash -c 'mkdir -p $TOOLKIT_DIR/logs && touch $TOOLKIT_DIR/logs/backend.log'
-ExecStartPre=/bin/bash -c 'pid=$(ss -tlnp 2>/dev/null | grep ":5000 " | grep -oP "pid=\\K[0-9]+" | head -1); [ -n "$pid" ] && kill -9 $pid 2>/dev/null; pkill -9 -f backend/app.py 2>/dev/null; sleep 1; exit 0'
 ExecStart=$_VENV_PYTHON backend/app.py
 Restart=on-failure
 RestartSec=10
@@ -1949,6 +2025,7 @@ WantedBy=multi-user.target
 UNIT_EOF
     sudo systemctl daemon-reload
     echo -e "  ${GREEN}✓ Systemd service updated → $TOOLKIT_DIR${NC}"
+    _restore_autostart
 
     # Write sudoers.d for health fixes — always rewrite to ensure latest commands are included
     _SUDOERS_FILE="/etc/sudoers.d/mysterium-toolkit"

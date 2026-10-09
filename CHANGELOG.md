@@ -4,6 +4,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.59
+
+- fix: **re-running `setup.sh` no longer leaves the toolkit in a restart loop.** The systemd unit setup writes carried an `ExecStartPre` that ran `pkill -9 -f` on the backend's path. pkill matches full command lines, and the shell running that line contains the same path, so the pre-start killed itself: systemd retried every 10 seconds and port 5000 never opened, without any message. v1.1.37 removed the line from `update.sh` only; setup kept writing it. The unit setup writes is now the one `update.sh` and `start.sh` write. A fresh install was not affected — setup only rewrites a unit that already exists.
+- fix: **setup switches autostart back on.** Setup stops and disables a running service before installing and said it would be "re-registered at the end", but nothing enabled it again, so after every re-run the toolkit no longer started at boot. Setup now remembers whether autostart was on and restores it on every path that finishes. A unit stuck in a restart loop (`activating`) is now stopped before the install as well.
+- feat: **a fleet survives a reinstall.** A fresh clone, setup's "Fresh install" or a deleted install directory took `config/nodes.json` with it, and the fleet master started as a single node without a line in the log. The toolkit now keeps a copy of `nodes.json` outside the install directory (`~/.config/mysterium-toolkit/nodes.json`, mode 600), updated whenever the fleet is loaded or saved; a fleet emptied on purpose is copied empty and never offered back. When a toolkit starts without a fleet while that copy holds nodes: the log says so, the dashboard shows "Fleet configuration missing" with a **Restore fleet** button that brings the fleet back without a restart, setup asks whether to restore it, and `update.sh` reports it. `update.sh` now also reports the number of fleet nodes, or a `nodes.json` that is not valid JSON.
+
 ## v1.4.58
 
 - fix: **a fleet node on localhost with another port is polled, not mistaken for the master.** Any `localhost` / `127.0.0.1` address counted as this toolkit whatever its port, so a node reached through an SSH tunnel or a second toolkit on the same machine showed the master's own data under its name. Only a loopback address on this toolkit's own port counts now.

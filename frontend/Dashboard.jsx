@@ -3161,6 +3161,7 @@ const MysteriumDashboard = () => {
             </div>
           )}
 
+          {!selectedNodeId && <FleetRestoreBanner restore={metrics.fleet_restore} backendUrl={backendUrlRef.current} authHeaders={authHeaderRef.current} />}
           <NodeConfigRestartBanner systemHealth={metrics.systemHealth} backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
             <StatusCard nodeStatus={metrics.nodeStatus} resources={metrics.resources} earnings={metrics.earnings} clients={metrics.clients} activeSessions={metrics.sessions?.active_unique_consumers ?? metrics.sessions?.active ?? 0} backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} fleetNode={metrics._fleet_node} nodeLabel={metrics._node_label} nodeUpdateInfo={nodeUpdateInfo} onNodeUpdated={refreshNodeUpdateInfo} />
@@ -6906,6 +6907,69 @@ const NodeQualityCard = ({ nodeQuality: q, nodeStatus, backendUrl, authHeaders, 
 
       {/* Quality History Sparkline */}
       <QualityHistorySparkline backendUrl={backendUrl} authHeaders={authHeaders} />
+    </div>
+  );
+};
+
+// ─── Fleet restore banner (v1.4.59) ────────────────────────────────────────
+// Shown when this toolkit runs without a fleet while the safety copy outside
+// the install directory still holds nodes — what a reinstall or a fresh clone
+// leaves behind. The backend only sends fleet_restore in that state, so the
+// banner needs no logic of its own. Always talks to this toolkit's own backend,
+// never through the fleet proxy: the copy belongs to this machine.
+const FleetRestoreBanner = ({ restore, backendUrl, authHeaders }) => {
+  const [status, setStatus] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [hidden, setHidden] = useState(false);
+  if (hidden || (!restore && !status)) return null;
+
+  const doRestore = async () => {
+    if (!backendUrl || busy) return;
+    setBusy(true);
+    setStatus('Restoring…');
+    try {
+      const resp = await fetch(backendUrl + '/fleet/restore', { method: 'POST', headers: authHeaders || {} });
+      const data = await resp.json().catch(() => ({}));
+      if (resp.ok && data.success) {
+        setStatus('✓ Fleet restored — ' + data.nodes + ' node(s). The fleet view appears within a few seconds.');
+      } else {
+        setStatus('✗ ' + (data.error || ('HTTP ' + resp.status)));
+        setBusy(false);
+      }
+    } catch (e) {
+      setStatus('✗ ' + e.message);
+      setBusy(false);
+    }
+  };
+
+  const names = restore && Array.isArray(restore.labels) && restore.labels.length
+    ? ' (' + restore.labels.filter(Boolean).join(', ') + (restore.nodes > restore.labels.length ? ', …' : '') + ')'
+    : '';
+
+  return (
+    <div className="mb-4 px-4 py-3 rounded-lg border border-amber-500/40 bg-amber-500/10 flex flex-wrap items-start gap-3 text-xs">
+      <span className="text-amber-400 flex-shrink-0">⚠</span>
+      <div className="flex-1 min-w-0 text-slate-300 leading-relaxed">
+        {restore ? (
+          <span>
+            <span className="text-amber-300 font-semibold">Fleet configuration missing.</span>{' '}
+            This dashboard managed a fleet of {restore.nodes} node{restore.nodes === 1 ? '' : 's'}{names}, but its fleet file is gone — usually after a reinstall. A saved copy from {restore.saved_at} can put it back.
+          </span>
+        ) : null}
+        {status && <span className={'block mt-1 ' + (status.startsWith('✗') ? 'text-rose-400' : 'text-slate-400')}>{status}</span>}
+      </div>
+      <div className="flex items-center gap-2 flex-shrink-0">
+        {restore && (
+          <button onClick={doRestore} disabled={busy}
+            className="px-3 py-1 text-xs bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded hover:bg-amber-500/30 transition disabled:opacity-50">
+            Restore fleet
+          </button>
+        )}
+        <button onClick={() => setHidden(true)} title="Hide until the page is reloaded"
+          className="px-2 py-1 text-xs bg-slate-600/30 text-slate-400 border border-slate-600/30 rounded hover:bg-slate-600/50 transition">
+          ✕
+        </button>
+      </div>
     </div>
   );
 };
