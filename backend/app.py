@@ -4022,6 +4022,32 @@ class EarningsDeltaTracker:
         return result
 
 
+def _refresh_health_uptime(health):
+    """Return health with every check that carries 'started_at' given a current
+    "XhYm" detail (v1.4.61). Builds new dicts for what it changes, so the cached
+    scan it was given is never modified."""
+    if not isinstance(health, dict) or not isinstance(health.get('subsystems'), list):
+        return health
+    now = time.time()
+    subs, changed = [], False
+    for sub in health['subsystems']:
+        checks = sub.get('checks') if isinstance(sub, dict) else None
+        if not isinstance(checks, list) or not any(
+                isinstance(c, dict) and isinstance(c.get('started_at'), (int, float)) for c in checks):
+            subs.append(sub)
+            continue
+        new_checks = []
+        for c in checks:
+            if isinstance(c, dict) and isinstance(c.get('started_at'), (int, float)):
+                up = max(0, int(now - c['started_at']))
+                suffix = ' (recent restart)' if str(c.get('detail', '')).endswith('(recent restart)') else ''
+                c = {**c, 'detail': f'{up // 3600}h{(up % 3600) // 60}m{suffix}'}
+            new_checks.append(c)
+        subs.append({**sub, 'checks': new_checks})
+        changed = True
+    return {**health, 'subsystems': subs} if changed else health
+
+
 class MetricsCollector:
     """Collects all metrics from Mysterium Node"""
 
@@ -7040,6 +7066,14 @@ class MetricsCollector:
                 result['nodeStatus'] = {**_ns, 'uptime': f'{_up // 3600}h{(_up % 3600) // 60}m{_up % 60}s'}
         except Exception as _up_e:
             logger.debug(f'Uptime refresh skipped: {_up_e}')
+        # v1.4.61: the same for the Service health check. The scan runs with the
+        # slow tier, so its "Uptime" read 0h20m for a node up 43 minutes. The scan
+        # now stores the process start time with the check; the text is redone
+        # here from it. Status is left to the next scan.
+        try:
+            result['systemHealth'] = _refresh_health_uptime(result.get('systemHealth'))
+        except Exception as _hu_e:
+            logger.debug(f'Health uptime refresh skipped: {_hu_e}')
         # Ensure nodeQuality always present with safe defaults
         if 'nodeQuality' not in result:
             result['nodeQuality'] = {
@@ -7127,8 +7161,14 @@ class MetricsCollector:
 
     @staticmethod
     def get_payment_errors():
+        # v1.4.61: the teardowns are split by cause. Every "Payment engine error"
+        # used to be presented as a Hermes problem ("N sessions ended early, after
+        # M hermes replies…"), also when M was 0 and the node had simply cut off
+        # a consumer that stopped paying — which it does to protect the operator,
+        # and which every public node sees.
         result = {'available': False, 'window_hours': 24, 'unknown_cause': 0,
-                  'sessions_lost': 0, 'note': ''}
+                  'sessions_lost': 0, 'ended_unpaid': 0, 'ended_hermes': 0,
+                  'ended_other': 0, 'note': ''}
         try:
             import subprocess
             base = ['journalctl', '-u', 'mysterium-node', '--since', '24 hours ago',
@@ -7148,6 +7188,16 @@ class MetricsCollector:
             result['available'] = True
             result['unknown_cause'] = out.count('unknown hermes error encountered')
             result['sessions_lost'] = out.count('Payment engine error')
+            for _line in out.splitlines():
+                if 'Payment engine error' not in _line:
+                    continue
+                _l = _line.lower()
+                if 'did not get paid' in _l:          # consumer did not pay a critical invoice
+                    result['ended_unpaid'] += 1
+                elif 'hermes' in _l or 'promise' in _l:
+                    result['ended_hermes'] += 1
+                else:
+                    result['ended_other'] += 1
         except Exception as e:
             result['note'] = str(e)[:120]
         return result

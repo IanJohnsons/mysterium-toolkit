@@ -917,11 +917,15 @@ class ServiceWatchdog:
                 # — the node simply hasn't had time to run longer yet.
                 system_just_booted = system_uptime < 600
 
+                # v1.4.61: 'started_at' lets the backend recompute the detail when it
+                # serves the result. The scan runs with the slow tier, so the text
+                # alone was up to ten minutes old or more ("0h20m" for a node up 43).
                 if uptime < ServiceWatchdog.MIN_UPTIME_WARN and not system_just_booted:
                     result['checks'].append({
                         'name': 'Uptime',
                         'status': 'warning',
                         'detail': f'{h}h{m}m (recent restart)',
+                        'started_at': proc.info['create_time'],
                     })
                     if result['status'] == 'ok':
                         result['status'] = 'warning'
@@ -930,6 +934,7 @@ class ServiceWatchdog:
                         'name': 'Uptime',
                         'status': 'ok',
                         'detail': f'{h}h{m}m',
+                        'started_at': proc.info['create_time'],
                     })
 
                 mem = proc.info.get('memory_info')
@@ -2987,13 +2992,22 @@ class CpuGovernorHealth:
 
 
 class BbrCongestion:
-    """Enable BBR TCP congestion control for better VPN throughput.
+    """BBR TCP congestion control — informational since v1.4.61.
 
-    BBR (Bottleneck Bandwidth and RTT) is a modern congestion control algorithm
-    developed by Google. Compared to the default CUBIC:
-    - Achieves higher throughput on lossy links (typical consumer internet)
-    - Lower latency under load
-    - Handles packet loss better (doesn't halve window on every drop)
+    BBR (Bottleneck Bandwidth and RTT) is a congestion control algorithm
+    developed by Google. Compared to the default CUBIC it gets more out of lossy
+    links and keeps latency lower under load — for TCP connections that start or
+    end on this machine.
+
+    That is the limit, and it is why this subsystem no longer warns. A node
+    forwards its consumers' traffic: WireGuard (UDP) to the Pi, then routed on.
+    Congestion control is done by the two ends of each TCP connection — the
+    consumer's device and the website — never by a machine forwarding packets in
+    between. BBR here changes the node's own TCP (TequilAPI, Hermes, the broker,
+    the toolkit), not what consumers get through the tunnel. Until v1.4.61 the
+    scan said "bbr gives better VPN throughput" and raised a warning on every
+    node running the kernel default, which sent operators after a gain that does
+    not exist.
 
     Required: Linux 4.9+ kernel (standard on Debian 10+, Ubuntu 18.04+)
 
@@ -3036,14 +3050,16 @@ class BbrCongestion:
                 'detail': 'bbr active',
             })
         else:
-            result['status'] = 'warning'
+            result['status'] = 'info'
             result['checks'].append({
                 'name': 'TCP CC',
-                'status': 'warning',
-                'detail': f'{current_cc} — bbr gives better VPN throughput',
+                'status': 'info',
+                'detail': f'{current_cc} (kernel default) — BBR is optional',
             })
             result['recommendations'].append(
-                'Enable BBR for higher TCP throughput and lower latency under load')
+                'Optional. BBR only changes TCP that starts or ends on this machine (node API, '
+                'Hermes, broker, toolkit). Consumer traffic is forwarded through the tunnel and '
+                'is not affected, so it does not change what the node earns.')
 
         if current_qdisc:
             if current_qdisc == BbrCongestion.TARGET_QDISC:
@@ -3053,21 +3069,26 @@ class BbrCongestion:
                     'detail': 'fq (recommended for BBR)',
                 })
             else:
+                # Since Linux 4.13 BBR paces by itself; fq is the usual pair, not a requirement.
                 result['checks'].append({
                     'name': 'Queue disc',
-                    'status': 'warning' if current_cc == 'bbr' else 'ok',
-                    'detail': f'{current_qdisc} — fq recommended with BBR',
+                    'status': 'info' if current_cc == 'bbr' else 'ok',
+                    'detail': f'{current_qdisc} — fq is the usual pair for BBR'
+                              if current_cc == 'bbr' else current_qdisc,
                 })
                 if current_cc == 'bbr' and result['status'] == 'ok':
-                    result['status'] = 'warning'
+                    result['status'] = 'info'
 
         # Check if bbr module is loaded
         rc, out, _ = _run(['lsmod'])
         bbr_loaded = rc == 0 and 'tcp_bbr' in out
         result['checks'].append({
             'name': 'Module',
-            'status': 'ok' if bbr_loaded else 'warning',
-            'detail': 'tcp_bbr loaded' if bbr_loaded else 'tcp_bbr not loaded',
+            # BBR active without the module means it is built into the kernel.
+            'status': 'ok',
+            'detail': ('tcp_bbr loaded' if bbr_loaded
+                       else 'built into the kernel' if current_cc == 'bbr'
+                       else f'tcp_bbr not loaded (not needed for {current_cc})'),
         })
 
         # Check persistence
@@ -3081,13 +3102,14 @@ class BbrCongestion:
                 pass
         result['checks'].append({
             'name': 'Persistence',
-            'status': 'ok' if persisted else 'warning',
+            'status': 'ok' if (persisted or current_cc != 'bbr') else 'info',
             'detail': 'Persisted in sysctl.d' if persisted
-                      else 'Not persisted (reverts on reboot)',
+                      else ('Not persisted (reverts on reboot)' if current_cc == 'bbr'
+                            else 'Nothing to persist — BBR is not in use'),
         })
         if not persisted and current_cc == 'bbr' and result['status'] == 'ok':
-            result['status'] = 'warning'
-            result['recommendations'].append('Persist BBR to survive reboots')
+            result['status'] = 'info'
+            result['recommendations'].append('Persist BBR if you want it to survive reboots')
 
         return result
 

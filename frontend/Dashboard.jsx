@@ -4455,27 +4455,54 @@ const MysteriumDashboard = () => {
           {/* System Metrics History Card */}
           <SystemMetricsHistoryCard key={`sysmetrics-${nodeKey}`} backendUrl={getNodeAwareUrl()} authHeaders={authHeaderRef.current} />
 
-          {/* Payment errors — v1.4.42. Read-only: the node drops sessions when
-              hermes answers with a cause it does not know, and until now nothing
-              said so. Only shown when there is something to show. */}
-          {paymentErrors && paymentErrors.available && paymentErrors.sessions_lost > 0 && (
-            <div className="mb-6 p-4 bg-slate-800/30 border border-amber-500/20 rounded-lg backdrop-blur">
-              <div className="flex items-center gap-3">
-                <AlertCircle className="w-5 h-5 text-amber-400" />
-                <div className="flex-1">
-                  <h3 className="text-xs font-semibold text-slate-300 tracking-wide mb-1">Payment errors (last 24h)</h3>
-                  <p className="text-sm text-slate-300">
-                    <span className="text-amber-300 font-semibold">{paymentErrors.sessions_lost}</span> session{paymentErrors.sessions_lost !== 1 ? 's' : ''} ended early,
-                    after <span className="text-amber-300 font-semibold">{paymentErrors.unknown_cause}</span> hermes {paymentErrors.unknown_cause === 1 ? 'reply' : 'replies'} the node could not interpret.
-                  </p>
-                  <p className="text-[10px] text-slate-500 mt-1">
-                    This happens inside the node's payment code, not in the toolkit — the toolkit only counts it.
-                    Check with: journalctl -u mysterium-node --since "24 hours ago" | grep "Payment engine error"
-                  </p>
+          {/* Payment errors — v1.4.42, split by cause in v1.4.61. The node ends a
+              session when a payment step fails. Until v1.4.61 every teardown was
+              presented as a Hermes problem; most are a consumer that stopped
+              paying, which the node cuts off to protect the operator. Older
+              backends (fleet nodes not yet updated) send no split: old wording. */}
+          {paymentErrors && paymentErrors.available && paymentErrors.sessions_lost > 0 && (() => {
+            const pe = paymentErrors;
+            const split = typeof pe.ended_unpaid === 'number';
+            const plural = (n, one, many) => (n === 1 ? one : many);
+            const alarming = !split || (pe.ended_hermes || 0) + (pe.ended_other || 0) > 0;
+            return (
+              <div className={`mb-6 p-4 bg-slate-800/30 border rounded-lg backdrop-blur ${alarming ? 'border-amber-500/20' : 'border-sky-500/20'}`}>
+                <div className="flex items-center gap-3">
+                  <AlertCircle className={`w-5 h-5 ${alarming ? 'text-amber-400' : 'text-sky-400'}`} />
+                  <div className="flex-1">
+                    <h3 className="text-xs font-semibold text-slate-300 tracking-wide mb-1">Payment errors (last 24h)</h3>
+                    {!split && (
+                      <p className="text-sm text-slate-300">
+                        <span className="text-amber-300 font-semibold">{pe.sessions_lost}</span> {plural(pe.sessions_lost, 'session', 'sessions')} ended early,
+                        after <span className="text-amber-300 font-semibold">{pe.unknown_cause}</span> hermes {plural(pe.unknown_cause, 'reply', 'replies')} the node could not interpret.
+                      </p>
+                    )}
+                    {split && pe.ended_unpaid > 0 && (
+                      <p className="text-sm text-slate-300">
+                        <span className="text-sky-300 font-semibold">{pe.ended_unpaid}</span> {plural(pe.ended_unpaid, 'session', 'sessions')} cut off because the consumer stopped paying.
+                        <span className="text-slate-500"> The node does this to protect you; it is normal on a public node. What was paid before the cut-off is yours.</span>
+                      </p>
+                    )}
+                    {split && pe.ended_hermes > 0 && (
+                      <p className="text-sm text-slate-300">
+                        <span className="text-amber-300 font-semibold">{pe.ended_hermes}</span> {plural(pe.ended_hermes, 'session', 'sessions')} ended after Hermes payment errors
+                        {pe.unknown_cause > 0 && <> — <span className="text-amber-300 font-semibold">{pe.unknown_cause}</span> {plural(pe.unknown_cause, 'reply', 'replies')} the node could not interpret</>}.
+                      </p>
+                    )}
+                    {split && pe.ended_other > 0 && (
+                      <p className="text-sm text-slate-300">
+                        <span className="text-amber-300 font-semibold">{pe.ended_other}</span> {plural(pe.ended_other, 'session', 'sessions')} ended with another payment error.
+                      </p>
+                    )}
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      This happens inside the node's payment code, not in the toolkit — the toolkit only counts it.
+                      Check with: journalctl -u mysterium-node --since "24 hours ago" | grep "Payment engine error"
+                    </p>
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* System Health Card — full width, inline expand */}
           <div className="mb-6">
