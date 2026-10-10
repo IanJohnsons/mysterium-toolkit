@@ -1,8 +1,26 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import fs from 'node:fs'
+import path from 'node:path'
+
+// v1.4.65: write the toolkit version into the build. The Toolkit health check
+// compared file dates — dist/index.html against VERSION — and a `git pull` or
+// branch switch after a good build made VERSION newer, which read as a failed
+// build. It now compares this file with the running version.
+const buildVersion = () => ({
+  name: 'toolkit-build-version',
+  closeBundle() {
+    try {
+      const v = fs.readFileSync(path.resolve('VERSION'), 'utf8').trim()
+      if (v) fs.writeFileSync(path.resolve('dist', 'BUILD_VERSION'), v + '\n')
+    } catch (e) {
+      // No VERSION next to the config (a build outside the toolkit directory).
+    }
+  },
+})
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), buildVersion()],
 
   // Production build output
   build: {

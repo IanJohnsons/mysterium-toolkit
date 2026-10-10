@@ -1253,6 +1253,41 @@ else:
 
 CORS(app)
 
+
+# ── gzip for JSON answers — v1.4.65 ───────────────────────────────────────────
+# The dashboard polls /metrics every few seconds and a fleet master fetches
+# /peer/data from every node; both are JSON that compresses about 7:1 (measured:
+# /peer/data 145 KB -> 19 KB). requests and every browser ask for gzip and unpack
+# it themselves. Only JSON is compressed: static files and the event streams pass
+# through untouched, and small answers are not worth the CPU.
+_GZIP_MIN_BYTES = 1024
+
+
+@app.after_request
+def _gzip_json(response):
+    try:
+        if (response.direct_passthrough or response.is_streamed
+                or response.status_code < 200 or response.status_code >= 300
+                or 'Content-Encoding' in response.headers
+                or response.mimetype != 'application/json'
+                or 'gzip' not in (request.headers.get('Accept-Encoding') or '').lower()):
+            return response
+        body = response.get_data()
+        if len(body) < _GZIP_MIN_BYTES:
+            return response
+        import gzip as _gzip
+        packed = _gzip.compress(body, compresslevel=5)
+        response.set_data(packed)
+        response.headers['Content-Encoding'] = 'gzip'
+        response.headers['Content-Length'] = str(len(packed))
+        vary = response.headers.get('Vary', '')
+        if 'accept-encoding' not in vary.lower():
+            response.headers['Vary'] = (vary + ', ' if vary else '') + 'Accept-Encoding'
+    except Exception as e:
+        logger.debug(f'gzip skipped: {e}')
+    return response
+
+
 # Metrics storage
 metrics_cache = {}
 metrics_lock = Lock()
@@ -1676,6 +1711,76 @@ def _log_auth_failure(reason):
     logger.warning(f"Auth failed from {_client_ip()} — {reason}")
 
 
+# ── Login lockout — v1.4.65 ───────────────────────────────────────────────────
+# The dashboard had no limit of its own on wrong passwords: without fail2ban an
+# address could keep guessing for ever, slowed only by scrypt. After
+# auth_lockout_attempts wrong credentials within auth_lockout_minutes, that
+# address gets 429 for auth_lockout_minutes, without checking the password —
+# which also spares the CPU the scrypt work. A missing Authorization header is
+# not counted: the dashboard sends one before anyone has logged in. A successful
+# login clears the count. 0 attempts in setup.json switches it off.
+_auth_fail_times = {}      # ip -> [timestamps of wrong credentials]
+_auth_blocked_until = {}   # ip -> unix time
+_auth_lock = Lock()
+
+
+def _auth_lockout_settings():
+    try:
+        attempts = int(setup_config.get('auth_lockout_attempts', 5))
+        minutes = float(setup_config.get('auth_lockout_minutes', 15))
+    except (TypeError, ValueError):
+        attempts, minutes = 5, 15.0
+    return max(attempts, 0), max(minutes, 1.0)
+
+
+def _auth_blocked_for(ip):
+    """Seconds this address is still locked out, 0 when it is not."""
+    with _auth_lock:
+        until = _auth_blocked_until.get(ip, 0)
+        left = until - time.time()
+        if left <= 0:
+            _auth_blocked_until.pop(ip, None)
+            return 0
+        return int(left) + 1
+
+
+def _auth_record_failure(ip):
+    attempts, minutes = _auth_lockout_settings()
+    if attempts <= 0:
+        return
+    now = time.time()
+    window = minutes * 60
+    with _auth_lock:
+        times = [t for t in _auth_fail_times.get(ip, []) if now - t < window]
+        times.append(now)
+        if len(times) >= attempts:
+            _auth_blocked_until[ip] = now + window
+            _auth_fail_times.pop(ip, None)
+            logger.warning(f"Auth lockout: {ip} blocked for {minutes:g} min after "
+                           f"{attempts} wrong logins")
+        else:
+            _auth_fail_times[ip] = times
+        # Keep the tables small: drop addresses with nothing recent.
+        if len(_auth_fail_times) > 5000:
+            for k in [k for k, v in _auth_fail_times.items() if not v or now - v[-1] >= window]:
+                _auth_fail_times.pop(k, None)
+        if len(_auth_blocked_until) > 5000:
+            for k in [k for k, v in _auth_blocked_until.items() if v <= now]:
+                _auth_blocked_until.pop(k, None)
+
+
+def _auth_record_success(ip):
+    with _auth_lock:
+        _auth_fail_times.pop(ip, None)
+
+
+def _auth_wrong(reason, message):
+    """Log, count and answer a wrong credential."""
+    _log_auth_failure(reason)
+    _auth_record_failure(_client_ip())
+    return jsonify({'error': message}), 401
+
+
 def require_auth(f):
     """Decorator for API authentication.
     Local requests (127.0.0.1, ::1) always bypass auth — this is a local monitoring tool.
@@ -1686,6 +1791,15 @@ def require_auth(f):
         if is_local_request():
             return f(*args, **kwargs)
 
+        ip = _client_ip()
+        left = _auth_blocked_for(ip)
+        if left:
+            resp = jsonify({'error': f'Too many wrong logins from this address — try again in '
+                                     f'{max(1, round(left / 60))} min',
+                            'retry_after': left})
+            resp.headers['Retry-After'] = str(left)
+            return resp, 429
+
         auth = request.headers.get('Authorization')
         if not auth:
             _log_auth_failure('missing Authorization header')
@@ -1695,9 +1809,9 @@ def require_auth(f):
         if auth.startswith('Bearer '):
             token = auth.split(' ', 1)[1]
             if API_KEY and token == API_KEY:
+                _auth_record_success(ip)
                 return f(*args, **kwargs)
-            _log_auth_failure('invalid API key')
-            return jsonify({'error': 'Invalid API key'}), 401
+            return _auth_wrong('invalid API key', 'Invalid API key')
 
         # Basic Auth
         if auth.startswith('Basic '):
@@ -1705,14 +1819,13 @@ def require_auth(f):
                 credentials = base64.b64decode(auth.split(' ', 1)[1]).decode('utf-8')
                 user, pwd = credentials.split(':', 1)
                 if _basic_auth_ok(user, pwd):
+                    _auth_record_success(ip)
                     return f(*args, **kwargs)
             except Exception as e:
                 logger.warning(f"Basic auth error: {e}")
-            _log_auth_failure('invalid username or password')
-            return jsonify({'error': 'Invalid credentials'}), 401
+            return _auth_wrong('invalid username or password', 'Invalid credentials')
 
-        _log_auth_failure('unrecognised Authorization scheme')
-        return jsonify({'error': 'Invalid authorization'}), 401
+        return _auth_wrong('unrecognised Authorization scheme', 'Invalid authorization')
 
     return decorated_function
 
@@ -14114,7 +14227,24 @@ def _toolkit_health():
                                   'detail': 'no dist/ — the dashboard has no built frontend'})
             sub['recommendations'].append('Run ./update.sh and read its "Rebuilding frontend" output.')
             statuses.append('warning')
+        elif (_dist_dir / 'BUILD_VERSION').exists():
+            # v1.4.65: the build writes the version it was built from. File dates
+            # gave a false "did not finish building" after a plain git pull or
+            # branch switch, which rewrites VERSION without changing the code.
+            built_for = (_dist_dir / 'BUILD_VERSION').read_text().strip()
+            if built_for == APP_VERSION:
+                sub['checks'].append({'name': 'Frontend build', 'status': 'ok',
+                                      'detail': f'current with v{APP_VERSION}'})
+            else:
+                sub['checks'].append({'name': 'Frontend build', 'status': 'warning',
+                                      'detail': (f'dist/ was built for v{built_for}, the toolkit is '
+                                                 f'v{APP_VERSION} — the last update did not finish '
+                                                 f'building the dashboard')})
+                sub['recommendations'].append('Run ./update.sh and read its "Rebuilding frontend" output; '
+                                              'the npm log is in logs/npm_install.log.')
+                statuses.append('warning')
         elif ver.exists() and idx.stat().st_mtime < ver.stat().st_mtime - 120:
+            # Builds from before v1.4.65 carry no BUILD_VERSION: file dates.
             built = datetime.fromtimestamp(idx.stat().st_mtime).strftime('%Y-%m-%d %H:%M')
             sub['checks'].append({'name': 'Frontend build', 'status': 'warning',
                                   'detail': (f'dist/ built {built}, older than v{APP_VERSION} — the last '

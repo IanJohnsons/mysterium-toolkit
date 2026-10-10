@@ -1570,6 +1570,15 @@ const MysteriumDashboard = () => {
         const method = cfg?.dashboard_auth_method || 'apikey';
         setSetupMode(method === 'userpass' ? 'userpass_input' : 'apikey_input');
         return false;
+      } else if (response.status === 429) {
+        // v1.4.65: too many wrong logins from this address — stay on the login
+        // screen and say how long, instead of "is the toolkit running?".
+        const d = await response.json().catch(() => ({}));
+        setConnectionError(d.error || 'Too many wrong logins from this address — try again later.');
+        const cfg = await fetch('/config/setup.json').then(r=>r.ok?r.json():null).catch(()=>null);
+        const method = cfg?.dashboard_auth_method || 'apikey';
+        setSetupMode(method === 'userpass' ? 'userpass_input' : 'apikey_input');
+        return false;
       } else {
         setConnectionError(`Backend returned HTTP ${response.status}. Is the toolkit running?`);
         setSetupMode('no_config');
@@ -5228,7 +5237,8 @@ const MysteriumDashboard = () => {
                   <p className="text-slate-400">
                     The Security tab (scroll down or click 🛡 Security) has three sections: <strong className="text-slate-300">fail2ban</strong>, <strong className="text-slate-300">Tailscale</strong>, and <strong className="text-slate-300">UFW firewall rules</strong>.<br/><br/>
 
-                    <strong className="text-slate-300">fail2ban</strong> — protects port 5000 against brute force login attempts. The toolkit manages one jail: <code className="bg-slate-800 px-1 rounded">mysterium-dashboard</code>. No other jails are created or touched — existing jails from other tools (sshd, nginx, etc.) are shown read-only and never modified.<br/><br/>
+                    <strong className="text-slate-300">Login lockout</strong> — built in since v1.4.65: after 5 wrong logins within 15 minutes an address is locked out for 15 minutes (HTTP 429), on every install. Change or switch it off with <code className="bg-slate-800 px-1 rounded">auth_lockout_attempts</code> / <code className="bg-slate-800 px-1 rounded">auth_lockout_minutes</code> in setup.json (0 attempts = off).<br/><br/>
+                    <strong className="text-slate-300">fail2ban</strong> — an extra on top of the lockout: bans in the firewall and survives restarts; mainly useful when port 5000 is reachable from the internet. Protects port 5000 against brute force login attempts. The toolkit manages one jail: <code className="bg-slate-800 px-1 rounded">mysterium-dashboard</code>. No other jails are created or touched — existing jails from other tools (sshd, nginx, etc.) are shown read-only and never modified.<br/><br/>
 
                     <strong className="text-slate-300">Toolkit managed toggle</strong> — turn this OFF to make the toolkit read-only: it shows jail status but writes nothing. Leaving it on is safe even when another tool manages fail2ban, because the toolkit only ever writes its own file.<br/><br/>
 
