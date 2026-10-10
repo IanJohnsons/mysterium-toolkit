@@ -629,6 +629,9 @@ _fleet_backup_cache = {'mtime': None, 'info': None}
 # at files that no longer existed and those nodes failed on TLS.
 _FLEET_BACKUP_PEERS = _FLEET_BACKUP_FILE.parent / 'peers'
 _PEER_CERT_DIR = Path('config/tls/peers')
+# Its own root: the fleet is loaded — and this copy made — at import time,
+# before _toolkit_root further down exists.
+_FLEET_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _fleet_peer_certs(data):
@@ -642,10 +645,10 @@ def _fleet_peer_certs(data):
             continue
         p = Path(cert)
         if not p.is_absolute():
-            p = _toolkit_root / p
+            p = _FLEET_ROOT / p
         try:
             p = p.resolve()
-            p.relative_to((_toolkit_root / _PEER_CERT_DIR).resolve())
+            p.relative_to((_FLEET_ROOT / _PEER_CERT_DIR).resolve())
         except (ValueError, OSError):
             continue
         out.append(p)
