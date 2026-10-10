@@ -4,6 +4,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.63
+
+- fix: **the Public card can store the running mode without a restart.** On two nodes Public ran Open while the node config held `wireguard.access-policies = mysterium` — written by the Verified button before v1.4.62, which never restarted the service — so the next node restart would have brought Public back as Verified. v1.4.62 showed the warning, but correcting it took two switches and two restarts. While the warning is shown, the active button now reads **Save Open** or **Save Verified** and stores the running mode in the node config; nothing restarts and no confirmation is asked. The warning names the setting the mode comes from. For Open it says when saving cannot help: the node falls back to the general `access-policy.list` whenever the Public setting is empty, and the toolkit does not change that setting.
+- fix: **the node config editor writes through the node API and checks the result.** Saving or resetting the payout threshold ran `myst config set`, first with `sudo -n` (no sudoers entry allows it) and then without. The CLI always talks to `127.0.0.1:4050`, whatever node the toolkit is configured for, and a 0 exit code was taken as proof. It now posts to TequilAPI `/config/user` on the node the panel reads, reads the value back, and reports a mismatch. The error hint no longer suggests adding `myst` to sudoers.
+- fix: **the identity lock note is information, not a warning.** It says no action is needed on this machine, yet it turned the Mysterium Service card amber and counted as "1 health issue detected". It stays visible, in blue.
+- fix: **the earnings legend uses the service names of the node UI** — "B2B Data Scraping" and "B2B VPN and data transfer" instead of "B2B Scraping" and "B2B Data".
+- docs: the Public card and Help say that the node's own web UI always describes Public as open, also when the service runs as Verified.
+
 ## v1.4.62
 
 - fix: **the Public (wireguard) mode buttons work.** Off answered "Config write failed: HTTP 404": the toolkit posted to `/config`, a route TequilAPI does not have (config is written through `/config/user`). HTTPS, TLS or Tailscale played no part. Open and Verified reported ✓ but changed nothing on the running service: the node reads the access policy only when a service starts, and the restart the toolkit attempted went through the same missing route without checking the answer. Now Off stops the Public service (the node itself keeps it off after a restart), and Open and Verified store the policy in the node config through `/config/user`, then restart the Public service with that policy. A change is reported as done only when the node lists the service in the requested state; a start that fails says Public is now off and why.

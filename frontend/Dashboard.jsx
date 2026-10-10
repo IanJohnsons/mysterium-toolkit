@@ -5139,7 +5139,7 @@ const MysteriumDashboard = () => {
                   <h4 className="text-emerald-400 font-semibold mb-1">Node Analytics</h4>
                   <p className="text-slate-400"><strong className="text-slate-300">API cache row</strong> (grey) — live session data. Earnings are low because Mysterium zeroes token values after settlement. <strong className="text-slate-300">Archive row</strong> (green) — from sessions_history.db. Token values are frozen at fetch time before zeroing, giving accurate historical earnings. Includes service type breakdown and consumer origin. The <strong className="text-slate-300">Consumers</strong> tab, top earners and paying-consumer count also use these frozen values, so a real consumer whose sessions already settled still shows their true earnings instead of zero.</p>
                   <p className="text-slate-400 mt-1"><strong className="text-slate-300">Service types</strong> — reported directly by the Mysterium TequilAPI. <strong className="text-slate-300">B2B VPN and data transfer</strong> = B2B streaming/data traffic (access policy: mysterium). <strong className="text-slate-300">B2B Data Scraping</strong> = B2B scraping traffic including QUIC variant (access policy: mysterium). <strong className="text-slate-300">VPN</strong> = Mysterium VPN app users (access policy: mysterium). <strong className="text-slate-300">Public</strong> = wireguard service with configurable access mode — see below. <strong className="text-slate-300">Monitoring</strong> = Mysterium network probe sessions, excluded from analytics.</p>
-                  <p className="text-slate-400 mt-2"><strong className="text-slate-300">Public service modes</strong> — the access policy of the Public (<code className="bg-slate-800 px-1 rounded">wireguard</code>) service. <strong className="text-slate-300 text-emerald-400">Open</strong> = no access policy: anyone can connect, including Mysterium Dark and 3rd party apps. <strong className="text-amber-400">Verified</strong> = access policy <code className="bg-slate-800 px-1 rounded">mysterium</code>: only Mysterium-registered consumers. <strong className="text-slate-400">Off</strong> = the Public service is stopped; the other services keep running and the node keeps Public off after a restart. The card shows the policy of the service the node is running, not a config value. The node reads the policy only when the service starts, so switching between Open and Verified restarts the Public service, and Off stops it: in both cases the Public sessions active at that moment end. The toolkit also stores the policy in the node config (<code className="bg-slate-800 px-1 rounded">wireguard.access-policies</code>) so a node restart keeps the mode; when the node config would bring Public back in another mode, the card says so. Individual consumer blocking is not possible at the node API level; use Verified mode to restrict to the Mysterium identity network.</p>
+                  <p className="text-slate-400 mt-2"><strong className="text-slate-300">Public service modes</strong> — the access policy of the Public (<code className="bg-slate-800 px-1 rounded">wireguard</code>) service. <strong className="text-slate-300 text-emerald-400">Open</strong> = no access policy: anyone can connect, including Mysterium Dark and 3rd party apps. <strong className="text-amber-400">Verified</strong> = access policy <code className="bg-slate-800 px-1 rounded">mysterium</code>: only Mysterium-registered consumers. <strong className="text-slate-400">Off</strong> = the Public service is stopped; the other services keep running and the node keeps Public off after a restart. The card shows the policy of the service the node is running, not a config value. The node's own web UI always describes Public as open to the whole network, also when the service runs as Verified — trust this card for what is enforced. The node reads the policy only when the service starts, so switching between Open and Verified restarts the Public service, and Off stops it: in both cases the Public sessions active at that moment end. The toolkit also stores the policy in the node config (<code className="bg-slate-800 px-1 rounded">wireguard.access-policies</code>) so a node restart keeps the mode; when the node config would bring Public back in another mode, the card says so and the active button turns into <strong className="text-slate-300">Save</strong>, which stores the running mode in the config without restarting anything. That is not possible for Open while the general node setting <code className="bg-slate-800 px-1 rounded">access-policy.list</code> is set: the node falls back to that list whenever the Public setting is empty. Individual consumer blocking is not possible at the node API level; use Verified mode to restrict to the Mysterium identity network.</p>
                   <p className="text-slate-400 mt-2"><strong className="text-slate-300">How consumers pay</strong> — the node sends invoices during a session; the consumer answers each with a signed promise to pay, which the node later redeems through Hermes. The first invoice is 1 wei, and the tunnel only opens once it is answered. The node accepts a correctly signed promise before Hermes has confirmed it, so when Hermes does not honour a consumer's promises the node keeps serving while it retries, and only ends the session after repeated failures. A consumer can therefore receive data without paying. The toolkit does not guess why: it shows those consumers under <strong className="text-slate-300">Never paid this node</strong> in the Consumers tab, with the traffic they received.</p>
                 </div>
 
@@ -5488,12 +5488,13 @@ const EarningsEfficiencyChart = ({ backendUrl, authHeaders }) => {
 
   const DAY_OPTIONS = [7, 30, 90, 365];
 
-  // Service type display config — matches SERVICE_COLORS
+  // Service type display config — matches SERVICE_COLORS. v1.4.63: the names
+  // the node's own web UI uses, as everywhere else in the dashboard.
   const SVC_DISPLAY = {
-    wireguard:     { label: 'Public',        hex: 'rgb(52,211,153)'  },
-    dvpn:          { label: 'VPN',           hex: 'rgb(251,191,36)'  },
-    scraping:      { label: 'B2B Scraping',  hex: 'rgb(56,189,248)'  },
-    data_transfer: { label: 'B2B Data',      hex: 'rgb(99,102,241)'  },
+    wireguard:     { label: 'Public',                    hex: 'rgb(52,211,153)'  },
+    dvpn:          { label: 'VPN',                       hex: 'rgb(251,191,36)'  },
+    scraping:      { label: 'B2B Data Scraping',         hex: 'rgb(56,189,248)'  },
+    data_transfer: { label: 'B2B VPN and data transfer', hex: 'rgb(99,102,241)'  },
   };
 
   const load = useCallback(() => {
@@ -7265,7 +7266,7 @@ const NodeConfigModal = ({ backendUrl, authHeaders, onClose }) => {
 
               <div className="space-y-1">
                 <p className="text-slate-300 font-semibold uppercase tracking-wider text-[10px]">How changes are applied</p>
-                <p>Written via <code className="bg-slate-800 px-1 rounded">myst config set</code> to <code className="bg-slate-800 px-1 rounded">{tomlPath}</code>. <strong className="text-amber-300">Requires a node restart to take effect</strong> — use the Restart button after applying.</p>
+                <p>Written through the node API (<code className="bg-slate-800 px-1 rounded">/config/user</code>), which stores it in <code className="bg-slate-800 px-1 rounded">{tomlPath}</code>, and read back before it is reported as saved. <strong className="text-amber-300">Requires a node restart to take effect</strong> — use the Restart button after applying.</p>
               </div>
 
               {/* Scroll sentinel */}
@@ -8120,10 +8121,15 @@ const WireguardModeSelector = ({ backendUrl, authHeaders, isRunning, onChanged }
 
   useEffect(() => { loadMode(); }, [backendUrl]);
 
+  // v1.4.63: when the node config would bring Public back in another mode, the
+  // active button stores the running mode in the config. The service already
+  // runs in that mode, so nothing restarts and no confirmation is needed.
+  const canSave = !!(info && info.restart_saveable && info.restart_note);
   const applyMode = async (newMode) => {
-    if (busy || mode === newMode) return;
-    // Every change stops or restarts the Public service, so always confirm.
-    if (confirm !== newMode) {
+    const saveOnly = mode === newMode;
+    if (busy || (saveOnly && !canSave)) return;
+    // Every real change stops or restarts the Public service, so always confirm.
+    if (!saveOnly && confirm !== newMode) {
       setConfirm(newMode);
       setTimeout(() => setConfirm(c => (c === newMode ? null : c)), 5000);
       return;
@@ -8186,8 +8192,12 @@ const WireguardModeSelector = ({ backendUrl, authHeaders, isRunning, onChanged }
           {busy && <span className="text-xs text-slate-400">applying…</span>}
           {(['open','verified','off']).map(m => (
             <button key={m} onClick={() => applyMode(m)} disabled={busy}
-              className={btnCls(m)} title={confirm === m ? 'Click again to confirm' : modeConfig[m].desc}>
-              {confirm === m ? `✓ ${modeConfig[m].label}` : modeConfig[m].label}
+              className={btnCls(m)}
+              title={confirm === m ? 'Click again to confirm'
+                : (mode === m && canSave) ? 'Store this mode in the node config — nothing restarts'
+                : modeConfig[m].desc}>
+              {confirm === m ? `✓ ${modeConfig[m].label}`
+                : (mode === m && canSave) ? `Save ${modeConfig[m].label}` : modeConfig[m].label}
             </button>
           ))}
         </div>
@@ -8195,13 +8205,16 @@ const WireguardModeSelector = ({ backendUrl, authHeaders, isRunning, onChanged }
       {/* Context line — what the node is running right now */}
       <div className="text-[10px] text-slate-600 leading-relaxed">
         {mode === 'open' && '● Open — all consumers, including Mysterium Dark and 3rd party apps. Running service has no access policy.'}
-        {mode === 'verified' && '● Verified — Mysterium network consumers only. Running service has access policy "mysterium".'}
+        {mode === 'verified' && '● Verified — Mysterium network consumers only. Running service has access policy "mysterium". The node\'s own web UI still describes Public as open to everyone; this card shows what the service enforces.'}
         {mode === 'custom' && `● Custom — the running service has access policy "${policyText}". Pick Open or Verified to replace it.`}
         {mode === 'off' && '● Off — the Public service is stopped. The node keeps it off after a restart.'}
         {mode === null && 'Loading…'}
       </div>
       {info && info.restart_note && (
-        <div className="text-[10px] text-amber-400/80 leading-relaxed">⚠ {info.restart_note}</div>
+        <div className="text-[10px] text-amber-400/80 leading-relaxed">
+          ⚠ {info.restart_note}
+          {canSave && mode && modeConfig[mode] && (' Click Save ' + modeConfig[mode].label + ' to store the running mode — nothing restarts.')}
+        </div>
       )}
       {status && (
         <div className={`text-[10px] leading-relaxed ${status.ok ? 'text-emerald-400' : 'text-red-400'}`}>

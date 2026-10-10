@@ -12069,11 +12069,21 @@ def _wg_cfg_value(data, key):
     return node
 
 
-def _wg_restart_ids(node_url, headers):
-    """Policy ids the node will use for Public after a node restart.
+def _wg_split_ids(raw):
+    if isinstance(raw, (list, tuple)):
+        parts = [str(x) for x in raw]
+    else:
+        parts = str(raw or '').split(',')
+    return sorted({p.strip() for p in parts if p.strip()})
+
+
+def _wg_restart_state(node_url, headers):
+    """What the node will use for Public after a node restart, and where it comes from.
 
     Mirrors the node's own getPolicies(): wireguard.access-policies, and when
-    that is empty, access-policy.list. Returns None when the config can't be read.
+    that is empty, access-policy.list. Returns None when the config can't be read,
+    else {'ids', 'key', 'list_ids'} — key is the setting the ids come from (None
+    when neither is set), list_ids what access-policy.list holds.
     """
     try:
         r = requests.get(f'{node_url}/config', headers=headers, timeout=5)
@@ -12082,26 +12092,39 @@ def _wg_restart_ids(node_url, headers):
         data = (r.json() or {}).get('data') or {}
     except Exception:
         return None
-    raw = _wg_cfg_value(data, 'wireguard.access-policies')
-    if raw is None or str(raw).strip() == '':
-        raw = _wg_cfg_value(data, 'access-policy.list')
-    if isinstance(raw, (list, tuple)):
-        parts = [str(x) for x in raw]
-    else:
-        parts = str(raw or '').split(',')
-    return sorted({p.strip() for p in parts if p.strip()})
+    wg_ids = _wg_split_ids(_wg_cfg_value(data, 'wireguard.access-policies'))
+    list_ids = _wg_split_ids(_wg_cfg_value(data, 'access-policy.list'))
+    if wg_ids:
+        return {'ids': wg_ids, 'key': 'wireguard.access-policies', 'list_ids': list_ids}
+    return {'ids': list_ids, 'key': 'access-policy.list' if list_ids else None, 'list_ids': list_ids}
 
 
-def _wg_restart_note(restart_ids, live_mode):
+def _wg_restart_saveable(state, live_mode):
+    """Whether storing live_mode through wireguard.access-policies would make a node
+    restart keep it. Open cannot override a non-empty access-policy.list: the node
+    falls back to that list whenever wireguard.access-policies is empty."""
+    if not state or live_mode not in ('open', 'verified'):
+        return False
+    return live_mode == 'verified' or not state['list_ids']
+
+
+def _wg_restart_note(state, live_mode):
     """Text when the node would come back in another mode after a restart, else ''."""
-    if restart_ids is None or live_mode == 'off':
+    if state is None or live_mode == 'off':
         return ''
-    restart_mode = _wg_mode_for_ids(restart_ids)
+    restart_mode = _wg_mode_for_ids(state['ids'])
     if restart_mode == live_mode:
         return ''
-    shown = ','.join(restart_ids) if restart_ids else 'none'
-    return (f'After a node restart Public would start as {restart_mode} '
-            f'(access policy in the node config: {shown}).')
+    shown = ','.join(state['ids']) if state['ids'] else 'none'
+    note = (f'After a node restart Public would start as {restart_mode} '
+            f'({state["key"]} = {shown} in the node config')
+    if state['key'] == 'access-policy.list':
+        note += '; the node uses it when wireguard.access-policies is empty'
+    note += ').'
+    if not _wg_restart_saveable(state, live_mode):
+        note += (' Saving from here cannot change that: access-policy.list is a general '
+                 'node setting the toolkit does not change.')
+    return note
 
 
 def _wg_provider_id(node_url, headers, svc):
@@ -12170,14 +12193,16 @@ def get_wireguard_mode():
                 running = bool(svc) and svc.get('status') == 'Running'
                 ids = _wg_policy_ids(svc) if running else []
                 mode = _wg_mode_for_ids(ids) if running else 'off'
-                restart_ids = _wg_restart_ids(node_url, headers)
+                restart = _wg_restart_state(node_url, headers)
                 return jsonify({
                     'success': True, 'mode': mode,
                     'wg_running': running, 'wg_id': (svc or {}).get('id'),
                     'wg_status': (svc or {}).get('status'),
                     'policies': ids,
-                    'restart_policies': restart_ids,
-                    'restart_note': _wg_restart_note(restart_ids, mode),
+                    'restart_policies': restart['ids'] if restart else None,
+                    'restart_note': _wg_restart_note(restart, mode),
+                    'restart_saveable': bool(_wg_restart_note(restart, mode))
+                                        and _wg_restart_saveable(restart, mode),
                 }), 200
             except Exception as e:
                 return jsonify({'success': False, 'error': str(e)}), 200
@@ -12234,10 +12259,14 @@ def _wg_apply_mode(node_url, headers, mode):
 
     # 2. Already running with the right policy: nothing to restart.
     if running and _wg_policy_ids(svc) == want_ids:
-        restart_note = _wg_restart_note(_wg_restart_ids(node_url, headers), mode)
+        restart_note = _wg_restart_note(_wg_restart_state(node_url, headers), mode)
+        # v1.4.63: this is also the "save to config" path of the card — the
+        # service already runs in this mode, so only the config is written.
         msg = f'Public is {mode}.'
         if persist_err or restart_note:
             msg += ' ' + (persist_err or restart_note)
+        else:
+            msg += ' Stored in the node config — a node restart keeps it. Nothing was restarted.'
         return jsonify({'success': True, 'mode': mode, 'message': msg,
                         'warning': persist_err or restart_note or None}), 200
 
@@ -12279,7 +12308,7 @@ def _wg_apply_mode(node_url, headers, mode):
         return jsonify({'success': False,
                         'error': f'Start was accepted but the node does not show Public as {mode} ({seen}).'}), 200
 
-    restart_note = _wg_restart_note(_wg_restart_ids(node_url, headers), mode)
+    restart_note = _wg_restart_note(_wg_restart_state(node_url, headers), mode)
     label = 'verified consumers only' if mode == 'verified' else 'open to everyone'
     msg = f'Public restarted as {mode} — {label}.'
     warning = persist_err or restart_note
@@ -13581,22 +13610,38 @@ def _seconds_to_duration(seconds):
         return str(seconds)
 
 
-def _run_myst_config_set(key, value):
-    """Run myst config set KEY VALUE. Returns (success, method, error)."""
-    # Try sudo -n first (passwordless sudo configured)
-    for cmd_prefix in (['sudo', '-n'], []):
-        try:
-            cmd = cmd_prefix + ['myst', 'config', 'set', key, str(value)]
-            result = subprocess.run(cmd, capture_output=True, timeout=15, text=True)
-            if result.returncode == 0:
-                return True, 'myst-subprocess', None
-        except FileNotFoundError:
-            continue
-        except subprocess.TimeoutExpired:
-            return False, None, 'myst config set timed out'
-        except Exception as e:
-            continue
-    return False, None, 'myst binary not found or sudo permission denied'
+def _node_config_write(key, value):
+    """Write one payment key to the node's user config. Returns (success, method, error).
+
+    v1.4.63: through TequilAPI POST /config/user on NODE_API_URL — the node the
+    panel reads from — and verified by reading the config back. It ran
+    `myst config set`, first with `sudo -n` (which no sudoers entry allows) and
+    then without: the CLI posts to the same route, but always on the default
+    address 127.0.0.1:4050, whatever node the toolkit is configured for, and a
+    200 was taken as proof. The value is sent as a string, as the CLI did."""
+    try:
+        resp = requests.post(f'{NODE_API_URL}/config/user',
+                             headers={**MetricsCollector.get_tequilapi_headers(),
+                                      'Content-Type': 'application/json'},
+                             json={'data': {key: str(value)}}, timeout=10)
+    except Exception as e:
+        return False, None, f'node API not reachable ({type(e).__name__})'
+    if resp.status_code != 200:
+        return False, None, f'node API answered HTTP {resp.status_code}: {resp.text[:120]}'
+    after = _node_config_inspect(NODE_API_URL)
+    if not after['ok']:
+        return False, None, f'written, but the result could not be verified: {after["error"]}'
+    got = after['values'].get(key.lower())
+    try:
+        same = got is not None and float(got) == float(value)
+    except (TypeError, ValueError):
+        same = got is not None and str(got) == str(value)
+    if not same:
+        return False, None, f'the node reports {key} = {got!r} after writing {value!r}'
+    with _node_config_lock:
+        after['checked_at'] = datetime.now(timezone.utc).isoformat()
+        _node_config_state[NODE_API_URL] = after
+    return True, 'tequilapi', None
 
 
 # ── Node config hygiene — v1.4.44 ─────────────────────────────────────────────
@@ -14364,17 +14409,23 @@ def set_node_config():
         results = []
 
         # Primary write
-        ok, method, err = _run_myst_config_set(key, value)
+        ok, method, err = _node_config_write(key, value)
         results.append({'key': key, 'value': value, 'success': ok, 'error': err})
 
         # Generic companion write (no current key defines dual_key)
         if ok and meta.get('dual_key'):
             dual_key = meta['dual_key']
             dual_value = _seconds_to_duration(value)
-            ok2, _, err2 = _run_myst_config_set(dual_key, dual_value)
+            ok2, _, err2 = _node_config_write(dual_key, dual_value)
             results.append({'key': dual_key, 'value': dual_value, 'success': ok2, 'error': err2})
 
         overall_success = all(r['success'] for r in results)
+        try:
+            _refresh_node_config_health()
+        except Exception as e:
+            logger.warning(f'Node config health refresh failed: {e}')
+        if not overall_success:
+            logger.warning(f'Node config: set {key} failed — {results}')
 
         return jsonify({
             'success': overall_success,
@@ -14382,8 +14433,8 @@ def set_node_config():
             'results': results,
             'restart_required': True,
             'hint': '' if overall_success else
-                    'Ensure myst is in PATH and sudo NOPASSWD is set for myst. '
-                    'Run: sudo visudo  →  add: your_user ALL=(ALL) NOPASSWD: /usr/bin/myst'
+                    'The node API did not accept or confirm the value. Check that the '
+                    'node is running and that the toolkit reaches it (Node API in Health).'
         }), 200 if overall_success else 500
 
     except Exception as e:
@@ -14409,16 +14460,22 @@ def reset_node_config():
         for k in keys_to_reset:
             meta = NODE_CONFIG_KEYS[k]
             default_val = meta['node_default']
-            ok, method, err = _run_myst_config_set(k, default_val)
+            ok, method, err = _node_config_write(k, default_val)
             results.append({'key': k, 'value': default_val, 'success': ok, 'error': err})
 
             # Generic companion write (no current key defines dual_key)
             if ok and meta.get('dual_key'):
                 dual_val = _seconds_to_duration(default_val)
-                ok2, _, err2 = _run_myst_config_set(meta['dual_key'], dual_val)
+                ok2, _, err2 = _node_config_write(meta['dual_key'], dual_val)
                 results.append({'key': meta['dual_key'], 'value': dual_val, 'success': ok2, 'error': err2})
 
         overall = all(r['success'] for r in results)
+        try:
+            _refresh_node_config_health()
+        except Exception as e:
+            logger.warning(f'Node config health refresh failed: {e}')
+        if not overall:
+            logger.warning(f'Node config: reset {key} failed — {results}')
         return jsonify({
             'success': overall,
             'results': results,
