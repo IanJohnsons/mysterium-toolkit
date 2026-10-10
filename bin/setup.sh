@@ -2035,80 +2035,13 @@ UNIT_EOF
 # Disable use_pty so sudo works from systemd timers and non-interactive shells (e.g. Parrot OS)
 Defaults:$_REAL_USER !use_pty
 #
-# Each entry is the minimum needed for a specific subsystem:
-#   sysctl          — kernel network tuning (conntrack, buffers, BBR)
-#   ethtool         — NIC interrupt coalescing and checksum offload
-#   conntrack       — read connection tracking table
-#   modprobe        — load kernel modules (tcp_bbr, nf_conntrack)
-#   bash            — write config files to /etc/sysctl.d/, /usr/local/bin/, /etc/systemd/
-#   tee             — write to specific system paths
-#   cat             — read persisted sysctl config
-#   systemctl       — manage mysterium-* and irqbalance services
-#   cpupower        — set CPU frequency governor
-#   update-alternatives — switch iptables backend (nftables vs legacy)
-#   fallocate/dd    — create swapfile
-#   chmod/mkswap/swapon/rm — configure and activate swap
-#   iptables/ip6tables/nft — read firewall rules
+# v1.4.64: every root action of the dashboard goes through the toolkit helper,
+# a root-owned copy with a closed list of actions (see bin/toolkit-helper.sh).
+# The update scripts are the two other entries.
 $_REAL_USER ALL=(ALL) NOPASSWD: \
+  ${TOOLKIT_DIR}/update.sh, \
   ${TOOLKIT_DIR}/bin/node_update.sh, \
-  /usr/local/lib/mysterium-toolkit/toolkit-helper, \
-  /sbin/sysctl, \
-  /usr/sbin/ethtool, \
-  /usr/sbin/conntrack, \
-  /usr/bin/wg show*, /usr/sbin/wg show*, \
-  /sbin/modprobe, /usr/sbin/modprobe, \
-  /bin/bash, /usr/bin/bash, \
-  /bin/cat, /usr/bin/cat, \
-  /usr/bin/tee /etc/sysctl.d/*, \
-  /usr/bin/tee /usr/local/bin/*, \
-  /usr/bin/tee /etc/systemd/system/mysterium-*.service, \
-  /usr/bin/tee /etc/systemd/system/mysterium-*.timer, \
-  /usr/bin/tee /etc/modules-load.d/*, \
-  /usr/bin/tee /etc/default/cpupower, \
-  /usr/bin/tee /etc/default/cpufrequtils, \
-  /bin/systemctl start mysterium-*, \
-  /bin/systemctl stop mysterium-*, \
-  /bin/systemctl restart mysterium-*, \
-  /bin/systemctl enable mysterium-*, \
-  /bin/systemctl disable mysterium-*, \
-  /bin/systemctl enable irqbalance, \
-  /bin/systemctl start irqbalance, \
-  /bin/systemctl daemon-reload, \
-  /bin/systemctl reset-failed mysterium-toolkit, \
-  /usr/bin/systemctl start mysterium-*, \
-  /usr/bin/systemctl stop mysterium-*, \
-  /usr/bin/systemctl restart mysterium-*, \
-  /usr/bin/systemctl enable mysterium-*, \
-  /usr/bin/systemctl disable mysterium-*, \
-  /usr/bin/systemctl enable irqbalance, \
-  /usr/bin/systemctl start irqbalance, \
-  /usr/bin/systemctl daemon-reload, \
-  /usr/bin/systemctl reset-failed mysterium-toolkit, \
-  /usr/bin/cpupower frequency-set, \
-  /usr/bin/update-alternatives --set iptables *, \
-  /usr/bin/update-alternatives --set ip6tables *, \
-  /usr/bin/fallocate, \
-  /bin/dd if=/dev/zero *, \
-  /usr/bin/chmod 600 *, \
-  /sbin/mkswap *, /usr/sbin/mkswap *, \
-  /sbin/swapon *, /usr/bin/swapon *, \
-  /bin/rm /swapfile, /usr/bin/rm /swapfile, \
-  /usr/sbin/ufw, \
-  /usr/sbin/iptables, /sbin/iptables, \
-  /usr/sbin/iptables-legacy, /sbin/iptables-legacy, \
-  /usr/sbin/iptables-nft, \
-  /usr/sbin/ip6tables, /sbin/ip6tables, \
-  /usr/sbin/nft, /sbin/nft, \
-  /usr/bin/tee /sys/devices/system/cpu/*/cpufreq/scaling_governor, \
-  /usr/bin/tee /sys/class/net/*/queues/rx-*/rps_cpus, \
-  /usr/bin/cpupower, \
-  /usr/bin/fail2ban-client, /usr/local/bin/fail2ban-client, /bin/fail2ban-client, \
-  /usr/bin/tee /etc/fail2ban/jail.d/mysterium-toolkit.conf, \
-  /usr/bin/tee /etc/fail2ban/filter.d/*, \
-  /usr/bin/tee /etc/sudoers.d/mysterium-toolkit, \
-  /usr/bin/chmod 440 /etc/sudoers.d/mysterium-toolkit, \
-  /usr/sbin/visudo -c -f /etc/sudoers.d/mysterium-toolkit, \
-  /usr/bin/rm -f /etc/sudoers.d/mysterium-toolkit
+  /usr/local/lib/mysterium-toolkit/toolkit-helper
 SUDOERS_EOF
     sudo chmod 440 "$_SUDOERS_FILE"
     if sudo visudo -c -f "$_SUDOERS_FILE" >/dev/null 2>&1; then

@@ -6143,8 +6143,8 @@ class MetricsCollector:
                 fw_type = 'firewalld'
                 fw_status = 'active'
                 # Read firewalld rules via firewall-cmd --list-all
-                for cmd in [['sudo', '-n', 'firewall-cmd', '--list-all'],
-                            ['firewall-cmd', '--list-all']]:
+                # No sudoers entry covers firewall-cmd; read it as the toolkit user.
+                for cmd in [['firewall-cmd', '--list-all']]:
                     try:
                         fd = subprocess.run(cmd, capture_output=True, timeout=5, text=True)
                         if fd.returncode == 0 and fd.stdout.strip():
@@ -6206,15 +6206,15 @@ class MetricsCollector:
             if found_rules:
                 break
             for cmd in [
-                ['sudo', '-n', iptables_bin, '-w', '5', '-L', '-n', '-v'],
+                [_priv.ROOT, iptables_bin, '-w', '5', '-L', '-n', '-v'],
                 [iptables_bin, '-w', '5', '-L', '-n', '-v'],
-                ['sudo', '-n', iptables_bin, '-L', '-n', '-v'],
+                [_priv.ROOT, iptables_bin, '-L', '-n', '-v'],
                 [iptables_bin, '-L', '-n', '-v'],
-                ['sudo', '-n', iptables_bin, '-L', '-n'],
+                [_priv.ROOT, iptables_bin, '-L', '-n'],
                 [iptables_bin, '-L', '-n'],
             ]:
                 try:
-                    result = subprocess.run(cmd, capture_output=True, timeout=5, text=True)
+                    result = _priv.run_read(cmd, timeout=5)
                     if result.returncode == 0 and result.stdout.strip():
                         fw_status = 'active'
                         current_chain = ''
@@ -6277,10 +6277,7 @@ class MetricsCollector:
         # Also check ufw if available
         ufw_rules = []
         try:
-            result = subprocess.run(
-                ['sudo', '-n', 'ufw', 'status', 'verbose'],
-                capture_output=True, timeout=5, text=True
-            )
+            result = _priv.run_read([_priv.ROOT, 'ufw', 'status', 'verbose'], timeout=5)
             if result.returncode != 0:
                 result = subprocess.run(
                     ['ufw', 'status', 'verbose'],
@@ -6306,8 +6303,8 @@ class MetricsCollector:
         # nft fallback — Debian 12/13 uses nftables, iptables may show nothing
         if fw_status != 'active' or not rules_list:
             try:
-                for nft_cmd in [['sudo', '-n', 'nft', 'list', 'ruleset'], ['nft', 'list', 'ruleset']]:
-                    nft_r = subprocess.run(nft_cmd, capture_output=True, timeout=5, text=True)
+                for nft_cmd in [[_priv.ROOT, 'nft', 'list', 'ruleset'], ['nft', 'list', 'ruleset']]:
+                    nft_r = _priv.run_read(nft_cmd, timeout=5)
                     if nft_r.returncode == 0 and nft_r.stdout.strip():
                         fw_status = 'active'
                         for line in nft_r.stdout.split('\n'):
@@ -6356,8 +6353,7 @@ class MetricsCollector:
         LEGACY_PORTS = [('1194', 'udp'), ('1194', 'tcp'), ('51820', 'udp')]
         try:
             # Check ufw first
-            ufw_status_r = subprocess.run(['sudo', '-n', 'ufw', 'status'],
-                                          capture_output=True, timeout=3, text=True)
+            ufw_status_r = _priv.run_read([_priv.ROOT, 'ufw', 'status'], timeout=3)
             if ufw_status_r.returncode != 0:
                 ufw_status_r = subprocess.run(['ufw', 'status'],
                                               capture_output=True, timeout=3, text=True)
@@ -6370,10 +6366,9 @@ class MetricsCollector:
         try:
             # Check iptables-legacy INPUT rules for explicit legacy port allows
             for ipt in ['iptables-legacy', 'iptables']:
-                for pfx in [['sudo', '-n'], []]:
+                for pfx in [[_priv.ROOT], []]:
                     try:
-                        r = subprocess.run(pfx + [ipt, '-L', 'INPUT', '-n'],
-                                           capture_output=True, timeout=5, text=True)
+                        r = _priv.run_read(pfx + [ipt, '-L', 'INPUT', '-n'], timeout=5)
                         if r.returncode == 0:
                             for port, proto in LEGACY_PORTS:
                                 if f'dpt:{port}' in r.stdout and proto in r.stdout:
@@ -6398,12 +6393,9 @@ class MetricsCollector:
                 # Check if running
                 _ping_ok = False
                 _f2b_pfx = []
-                for _pfx in [[], ['sudo', '-n']]:
+                for _pfx in [[], [_priv.ROOT]]:
                     try:
-                        r = subprocess.run(
-                            _pfx + ['fail2ban-client', 'ping'],
-                            capture_output=True, timeout=3, text=True
-                        )
+                        r = _priv.run_read(_pfx + ['fail2ban-client', 'ping'], timeout=3)
                         if r.returncode == 0 and 'pong' in r.stdout.lower():
                             _ping_ok = True
                             _f2b_pfx = _pfx
@@ -6413,10 +6405,7 @@ class MetricsCollector:
                 if _ping_ok:
                     fail2ban['running'] = True
                     # Get list of jails
-                    r2 = subprocess.run(
-                        _f2b_pfx + ['fail2ban-client', 'status'],
-                        capture_output=True, timeout=5, text=True
-                    )
+                    r2 = _priv.run_read(_f2b_pfx + ['fail2ban-client', 'status'], timeout=5)
                     jail_names = []
                     if r2.returncode == 0:
                         for line in r2.stdout.splitlines():
@@ -6426,10 +6415,7 @@ class MetricsCollector:
                     # Get per-jail stats
                     for jail in jail_names:
                         try:
-                            r3 = subprocess.run(
-                                _f2b_pfx + ['fail2ban-client', 'status', jail],
-                                capture_output=True, timeout=5, text=True
-                            )
+                            r3 = _priv.run_read(_f2b_pfx + ['fail2ban-client', 'status', jail], timeout=5)
                             if r3.returncode == 0:
                                 active_bans, total_bans, banned_ips = 0, 0, []
                                 for line in r3.stdout.splitlines():
@@ -6579,8 +6565,7 @@ class MetricsCollector:
         """
         try:
             import subprocess as _sp
-            r = _sp.run(['sudo', '-n', 'wg', 'show', 'all', 'latest-handshakes'],
-                        capture_output=True, text=True, timeout=5)
+            r = _priv.run_read([_priv.ROOT, 'wg', 'show', 'all', 'latest-handshakes'], timeout=5)
             if r.returncode != 0 or not r.stdout.strip():
                 return None
             now = time.time()
@@ -8127,7 +8112,7 @@ def _setup_mysterium_forward_chain():
 
         def _ipt(*args):
             argv = [ipt_bin] + list(args)
-            rc, out, _ = _priv.firewall(argv, legacy=[['sudo', '-n'] + argv, argv], timeout=5)
+            rc, out, _ = _priv.firewall(argv, timeout=5)
             return rc == 0, out
 
         # Read current FORWARD rules
@@ -8361,12 +8346,9 @@ def autoupdate_toggle():
     args = ['enable', '--now', _AUTOUPDATE_TIMER] if want else ['disable', '--now', _AUTOUPDATE_TIMER]
     errors = []
     ok = False
-    # Both systemctl paths are covered by sudoers; try each so a hardened distro
-    # that only lists one of them still works.
+    # Through the helper, which runs systemctl as root.
     _rc, _out, _err = _priv.run('systemctl', 'enable-now' if want else 'disable-now',
-                                _AUTOUPDATE_TIMER, timeout=15,
-                                legacy=[['sudo', '-n', b] + args
-                                        for b in ('/usr/bin/systemctl', '/bin/systemctl', 'systemctl')])
+                                _AUTOUPDATE_TIMER, timeout=15)
     ok = _rc == 0
     if not ok:
         errors.append((_err or _out or '').strip()[:120])
@@ -8842,8 +8824,9 @@ def node_update():
 
     try:
         # Invoked directly, not via `sudo bash <script>`: the sudoers entry names
-        # this script by path, and going through bash would match the far broader
-        # /bin/bash rule instead. update.sh sets the executable bit, which a file
+        # this script by path, and bash itself is not in sudoers (since v1.4.64
+        # nothing is but the helper and the two update scripts). update.sh sets
+        # the executable bit, which a file
         # copied by hand out of a download would otherwise be missing.
         proc = subprocess.run(
             ['sudo', '-n', str(script), version],
@@ -8886,8 +8869,8 @@ def node_update():
 def system_update():
     """Trigger a toolkit self-update.
     Root installs (VPS): runs full update.sh (pip, npm build, restart).
-    Non-root installs: git pull + sudo systemctl restart mysterium-toolkit.
-    systemctl restart is already NOPASSWD from initial setup — no extra sudoers needed.
+    Non-root installs: update.sh re-runs itself through sudo (v1.4.64; sudoers
+    names it), so the same full update runs.
     """
     import subprocess
     try:
@@ -8945,9 +8928,9 @@ def system_update():
             # Root install (VPS): run full update.sh — handles git pull, pip, npm build, restart
             cmd = f'sleep 1 && cd {toolkit_dir} && bash {update_script} >> {log_file} 2>&1'
         else:
-            # Non-root: run update.sh without outer sudo
-            # The script uses $SUDO internally for privileged commands.
-            # git pull runs as the real user with their SSH key.
+            # Non-root: run update.sh as the operator. Since v1.4.64 it re-runs
+            # itself through `sudo -n` (sudoers names it), and does git, pip and
+            # npm as the operator again (_as_user), with their SSH key.
             cmd = f'sleep 1 && cd {toolkit_dir} && bash {update_script} >> {log_file} 2>&1'
 
         # Use systemd-run --scope to run update.sh in its own cgroup.
@@ -9083,12 +9066,12 @@ def remove_legacy_ports():
 
         def _run(*args):
             argv = list(args)
-            return _priv.firewall(argv, legacy=[['sudo', '-n'] + argv, argv], timeout=5)[0] == 0
+            return _priv.firewall(argv, timeout=5)[0] == 0
 
         # Try ufw first
         ufw_active = False
         try:
-            r = subprocess.run(['sudo', '-n', 'ufw', 'status'], capture_output=True, timeout=3, text=True)
+            r = _priv.run_read([_priv.ROOT, 'ufw', 'status'], timeout=3)
             if r.returncode != 0:
                 r = subprocess.run(['ufw', 'status'], capture_output=True, timeout=3, text=True)
             ufw_active = r.returncode == 0 and 'active' in r.stdout.lower()
@@ -9112,7 +9095,7 @@ def remove_legacy_ports():
                     # Check and delete all matching INPUT rules
                     for _ in range(10):
                         _lst = [ipt, '-L', 'INPUT', '-n', '--line-numbers']
-                        ok, output = (True, _priv.firewall(_lst, legacy=[['sudo', '-n'] + _lst],
+                        ok, output = (True, _priv.firewall(_lst,
                                                            timeout=5)[1]), None
                         found = False
                         for line in ok[1].split('\n'):
@@ -9174,7 +9157,7 @@ def firewall_cleanup():
 
         def _ipt(*args):
             argv = [ipt_bin] + list(args)
-            rc, out, _ = _priv.firewall(argv, legacy=[['sudo', '-n'] + argv, argv], timeout=5)
+            rc, out, _ = _priv.firewall(argv, timeout=5)
             return rc == 0, out
 
         actions = []
@@ -9271,8 +9254,7 @@ def fail2ban_unban():
         if not _re.match(r'^[\d\.:a-fA-F]+$', ip):
             return jsonify({'ok': False, 'error': 'invalid IP address'}), 200
         _cmd = ['fail2ban-client', 'set', jail, 'unbanip', ip]
-        if _priv.run('f2b-set', jail, 'unbanip', ip, timeout=5,
-                     legacy=[_cmd, ['sudo', '-n'] + _cmd])[0] == 0:
+        if _priv.run('f2b-set', jail, 'unbanip', ip, timeout=5)[0] == 0:
             logger.info(f"fail2ban: unbanned {ip} from {jail}")
             return jsonify({'ok': True, 'message': f'Unbanned {ip} from {jail}'}), 200
         return jsonify({'ok': False, 'error': 'fail2ban-client unban failed'}), 200
@@ -9341,10 +9323,8 @@ def _f2b_cleanup_legacy_jail_local():
         cleaned = (raw[:bi].rstrip('\n') + '\n' + raw[ei:].lstrip('\n')).strip() + '\n'
         if not cleaned.strip():
             cleaned = ''  # file had only our block — leave it empty
-        # The helper strips the block itself; `cleaned` only feeds the fallback.
-        if _priv.run('f2b-jail-local-strip', input_data=cleaned, timeout=5,
-                     legacy=[['tee', TOOLKIT_JAIL_LOCAL],
-                             ['sudo', '-n', 'tee', TOOLKIT_JAIL_LOCAL]])[0] == 0:
+        # The helper strips the block itself.
+        if _priv.run('f2b-jail-local-strip', timeout=5)[0] == 0:
             logger.info('fail2ban: migrated — removed legacy toolkit block from jail.local')
             return
     except Exception as e:
@@ -9457,10 +9437,9 @@ def _f2b_health():
         return result
 
     out, rc = None, 1
-    for pfx in ([], ['sudo', '-n']):
+    for pfx in ([], [_priv.ROOT]):
         try:
-            r = subprocess.run(pfx + ['fail2ban-client', 'status'],
-                               capture_output=True, timeout=5, text=True)
+            r = _priv.run_read(pfx + ['fail2ban-client', 'status'], timeout=5)
             rc, out = r.returncode, (r.stdout or '') + (r.stderr or '')
             if rc == 0:
                 break
@@ -9659,10 +9638,9 @@ def _f2b_all_jails():
     # PRIMARY: get active jail list from fail2ban-client
     jail_names = []
     used_pfx = []
-    for pfx in [[], ['sudo', '-n']]:
+    for pfx in [[], [_priv.ROOT]]:
         try:
-            r = subprocess.run(pfx + ['fail2ban-client', 'status'],
-                               capture_output=True, timeout=5, text=True)
+            r = _priv.run_read(pfx + ['fail2ban-client', 'status'], timeout=5)
             if r.returncode == 0:
                 for line in r.stdout.splitlines():
                     if 'Jail list:' in line:
@@ -9680,10 +9658,7 @@ def _f2b_all_jails():
         maxretry, bantime, findtime = 5, 3600, 600
         for setting, default, target in [('maxretry',5,'maxretry'),('bantime',3600,'bantime'),('findtime',600,'findtime')]:
             try:
-                rs = subprocess.run(
-                    used_pfx + ['fail2ban-client', 'get', jname, setting],
-                    capture_output=True, timeout=3, text=True
-                )
+                rs = _priv.run_read(used_pfx + ['fail2ban-client', 'get', jname, setting], timeout=3)
                 if rs.returncode == 0:
                     v = int(rs.stdout.strip())
                     if target == 'maxretry': maxretry = v
@@ -9820,8 +9795,7 @@ def _f2b_cleanup_legacy_file():
         if 'Mysterium Toolkit — managed jail file' not in head:
             logger.info(f'{old} exists but has no toolkit header — left in place')
             return
-        if _priv.run('remove', str(old), timeout=5,
-                     legacy=[['rm', '-f', str(old)], ['sudo', '-n', 'rm', '-f', str(old)]])[0] == 0:
+        if _priv.run('remove', str(old), timeout=5)[0] == 0:
             logger.info(f'Removed legacy jail file {old}')
             return
         logger.warning(f'Could not remove legacy jail file {old} — '
@@ -9905,39 +9879,12 @@ def _f2b_write_toolkit_conf(jails_data):
             logger.error(f"fail2ban: refusing to write jail {jail.get('name')!r}: {_err}")
             return False
 
-    lines = [
-        '# Mysterium Toolkit — managed jail file.\n',
-        '# This entire file is owned by the toolkit; edit jails via the dashboard.\n',
-        '# The toolkit never touches sshd, recidive or any system jail.\n\n',
-    ]
-    for jail in safe_jails:
-        lines.append(f'[{jail["name"]}]\n')
-        lines.append(f'enabled  = {"true" if jail.get("enabled", True) else "false"}\n')
-        if jail.get('port'):
-            lines.append(f'port     = {jail["port"]}\n')
-        filter_val = jail.get('filter') or jail['name']
-        lines.append(f'filter   = {filter_val}\n')
-        # Write the backend explicitly, always. fail2ban merges every [DEFAULT]
-        # section it finds across jail.conf, jail.d/*.conf and jail.local, so any
-        # other tool writing `backend = systemd` there silently changes where our
-        # jail reads from. On one VPS ServerGuardian did exactly that: the jail
-        # loaded, monitored no file, had no journalmatch to fall back on, and sat
-        # at zero bans while 22 failed logins were sitting in backend.log. An
-        # omitted setting is an invitation for someone else to decide it.
-        if jail.get('backend_type') == 'systemd':
-            lines.append('backend  = systemd\n')
-        else:
-            lines.append('backend  = auto\n')
-            if jail.get('logpath'):
-                lines.append(f'logpath  = {jail["logpath"]}\n')
-        lines.append(f'maxretry = {jail.get("maxretry", 5)}\n')
-        lines.append(f'bantime  = {jail.get("bantime", 3600)}\n')
-        lines.append(f'findtime = {jail.get("findtime", 600)}\n')
-        lines.append('\n')
-    content = ''.join(lines)
+    # The helper builds the file from these values and nothing else — a jail
+    # file can name an action, and fail2ban runs actions as root. It always
+    # writes `backend` explicitly: fail2ban merges every [DEFAULT] it finds, so
+    # another tool writing `backend = systemd` there once left this jail reading
+    # no file at all, at zero bans with 22 failed logins in backend.log.
 
-    # v1.4.60: the helper writes the file from these values and nothing else —
-    # a jail file can name an action, and fail2ban runs actions as root.
     if not safe_jails:
         _args = ['none']
     elif len(safe_jails) == 1:
@@ -9949,10 +9896,11 @@ def _f2b_write_toolkit_conf(jails_data):
                  _j.get('logpath') or '-',
                  _j.get('maxretry', 5), _j.get('bantime', 3600), _j.get('findtime', 600)]
     else:
-        _args = ['more-than-one-jail']   # the helper refuses; the fallback writes it
-    return _priv.run('f2b-jail-write', *_args, input_data=content, timeout=5,
-                     legacy=[['tee', TOOLKIT_JAIL_FILE],
-                             ['sudo', '-n', 'tee', TOOLKIT_JAIL_FILE]])[0] == 0
+        # Only one toolkit jail exists (TOOLKIT_JAIL_NAMES); two entries for it
+        # are a caller error, not something to write.
+        logger.error(f'fail2ban: refusing to write {len(safe_jails)} toolkit jails — expected one')
+        return False
+    return _priv.run('f2b-jail-write', *_args, timeout=5)[0] == 0
 
 def _f2b_apply_live(jails_data):
     """Apply jail settings to the running fail2ban daemon.
@@ -9985,8 +9933,7 @@ def _f2b_apply_live(jails_data):
             applied = False
             last = ''
             _cmd = ['fail2ban-client', 'set', name, param, val]
-            _rc, _out, _err = _priv.run('f2b-set', name, param, val, timeout=5,
-                                        legacy=[_cmd, ['sudo', '-n'] + _cmd])
+            _rc, _out, _err = _priv.run('f2b-set', name, param, val, timeout=5)
             if _rc == 0:
                 applied = True
             else:
@@ -10000,9 +9947,7 @@ def _f2b_apply_live(jails_data):
 
 
 def _f2b_reload():
-    return _priv.run('f2b', 'reload', timeout=10,
-                     legacy=[['fail2ban-client', 'reload'],
-                             ['sudo', '-n', 'fail2ban-client', 'reload']])[0] == 0
+    return _priv.run('f2b', 'reload', timeout=10)[0] == 0
 
 
 @app.route('/firewall/fail2ban/jails', methods=['GET'])
@@ -10026,9 +9971,9 @@ def fail2ban_get_jails():
         running = False
         try:
             running = False
-            for _pfx in [[], ['sudo', '-n']]:
+            for _pfx in [[], [_priv.ROOT]]:
                 try:
-                    rp = subprocess.run(_pfx + ['fail2ban-client', 'ping'], capture_output=True, timeout=3, text=True)
+                    rp = _priv.run_read(_pfx + ['fail2ban-client', 'ping'], timeout=3)
                     if rp.returncode == 0 and 'pong' in rp.stdout.lower():
                         running = True
                         break
@@ -10042,11 +9987,8 @@ def fail2ban_get_jails():
             if running:
                 try:
                     _status_out = None
-                    for _spfx in [[], ['sudo', '-n']]:
-                        rs = subprocess.run(
-                            _spfx + ['fail2ban-client', 'status', jail['name']],
-                            capture_output=True, timeout=5, text=True
-                        )
+                    for _spfx in [[], [_priv.ROOT]]:
+                        rs = _priv.run_read(_spfx + ['fail2ban-client', 'status', jail['name']], timeout=5)
                         if rs.returncode == 0:
                             _status_out = rs.stdout
                             break
@@ -10157,8 +10099,7 @@ def fail2ban_install():
 
         # Install
         _cmd = ['apt-get', 'install', '-y', '-qq', 'fail2ban']
-        if _priv.run('pkg-install', 'fail2ban', timeout=120,
-                     legacy=[_cmd, ['sudo', '-n'] + _cmd])[0] != 0:
+        if _priv.run('pkg-install', 'fail2ban', timeout=120)[0] != 0:
             return jsonify({'ok': False, 'error': 'apt-get install failed — check permissions'}), 200
 
         toolkit_dir = str(Path(__file__).parent.parent)
@@ -10171,8 +10112,7 @@ def fail2ban_install():
         filter_content = ('[Definition]\n'
                           'failregex = ^.*Auth failed from <HOST>\\s.*$\n'
                           'ignoreregex =\n')
-        _priv.run('f2b-filter-write', input_data=filter_content, timeout=5,
-                  legacy=[['tee', f2b_filter], ['sudo', '-n', 'tee', f2b_filter]])
+        _priv.run('f2b-filter-write', timeout=5)   # the helper writes the same filter
         # Migration: strip the old toolkit block from jail.local (older versions
         # wrote there). We now use the standalone jail.d file instead.
         _f2b_cleanup_legacy_jail_local()
@@ -10189,8 +10129,7 @@ def fail2ban_install():
 
         for _act in ('enable', 'start'):
             _cmd = ['systemctl', _act, 'fail2ban']
-            _priv.run('systemctl', _act, 'fail2ban', timeout=15,
-                      legacy=[_cmd, ['sudo', '-n'] + _cmd])
+            _priv.run('systemctl', _act, 'fail2ban', timeout=15)
 
         logger.info('fail2ban installed and configured')
         return jsonify({'ok': True, 'message': 'fail2ban installed and started'}), 200
@@ -10219,7 +10158,7 @@ def fail2ban_start():
         # Try fail2ban-client first (in sudoers NOPASSWD), fall back to systemctl
         for _hargs, _cmd in ((('f2b', 'start'), ['fail2ban-client', 'start']),
                              (('systemctl', 'start', 'fail2ban'), ['systemctl', 'start', 'fail2ban'])):
-            if _priv.run(*_hargs, timeout=15, legacy=[_cmd, ['sudo', '-n'] + _cmd])[0] == 0:
+            if _priv.run(*_hargs, timeout=15)[0] == 0:
                 return jsonify({'ok': True, 'message': 'fail2ban started'}), 200
         return jsonify({'ok': False, 'error': 'Could not start fail2ban'}), 200
     except Exception as e:
@@ -10234,7 +10173,7 @@ def fail2ban_stop():
         # Try fail2ban-client first (in sudoers NOPASSWD), fall back to systemctl
         for _hargs, _cmd in ((('f2b', 'stop'), ['fail2ban-client', 'stop']),
                              (('systemctl', 'stop', 'fail2ban'), ['systemctl', 'stop', 'fail2ban'])):
-            if _priv.run(*_hargs, timeout=15, legacy=[_cmd, ['sudo', '-n'] + _cmd])[0] == 0:
+            if _priv.run(*_hargs, timeout=15)[0] == 0:
                 return jsonify({'ok': True, 'message': 'fail2ban stopped'}), 200
         return jsonify({'ok': False, 'error': 'Could not stop fail2ban'}), 200
     except Exception as e:
@@ -10262,7 +10201,7 @@ def ufw_add_rule():
         if not _re.match(r'^(allow|deny|reject|limit)\s(from\s)?[\w/:,\.\-]+$', rule):
             return jsonify({'ok': False, 'error': f'Invalid rule: {rule}'}), 200
         _cmd = ['ufw'] + rule.split()
-        if _priv.firewall(_cmd, legacy=[_cmd, ['sudo', '-n'] + _cmd])[0] == 0:
+        if _priv.firewall(_cmd)[0] == 0:
             logger.info(f"UFW: added rule '{rule}'")
             return jsonify({'ok': True, 'message': f'Rule added: {rule}'}), 200
         return jsonify({'ok': False, 'error': 'ufw command failed — check sudo permissions'}), 200
@@ -10297,7 +10236,7 @@ def ufw_delete_rule():
             cmd = ['ufw', '--force', 'delete'] + rule_str.split()
         else:
             return jsonify({'ok': False, 'error': 'rule or num required'}), 200
-        if _priv.firewall(cmd, legacy=[cmd, ['sudo', '-n'] + cmd])[0] == 0:
+        if _priv.firewall(cmd)[0] == 0:
             logger.info(f"UFW: deleted rule '{rule_str or rule_num}'")
             return jsonify({'ok': True, 'message': 'Rule deleted'}), 200
         return jsonify({'ok': False, 'error': 'ufw delete failed'}), 200
@@ -13032,8 +12971,7 @@ def restart_node():
             }), 409
 
         # Strategy 1: systemctl (most common — bare-metal/VM installs)
-        _rc, _, _ = _priv.run('systemctl', 'restart', 'mysterium-node', timeout=30,
-                              legacy=[['sudo', '-n', 'systemctl', 'restart', 'mysterium-node']])
+        _rc, _, _ = _priv.run('systemctl', 'restart', 'mysterium-node', timeout=30)
         if _rc == 0:
             actions.append('Restarted via systemctl')
             # systemctl returns 0 once systemd accepts the job, not once the node
@@ -13146,7 +13084,8 @@ def restart_node():
             'error': 'Could not restart — sudo permission required',
             'actions': clean_actions,
             'hint': (docker_hint +
-                     'Fix: run "sudo visudo" and add: your_user ALL=(ALL) NOPASSWD: /bin/systemctl restart mysterium-node\n'
+                     'Fix: run ./update.sh on this machine — it installs the toolkit helper '
+                     'and the sudoers entry the restart goes through.\n'
                      'Or manually: sudo systemctl restart mysterium-node\n'
                      'For Docker: docker restart myst | docker-compose restart')
         }), 500
