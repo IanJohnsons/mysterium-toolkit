@@ -5139,7 +5139,7 @@ const MysteriumDashboard = () => {
                   <h4 className="text-emerald-400 font-semibold mb-1">Node Analytics</h4>
                   <p className="text-slate-400"><strong className="text-slate-300">API cache row</strong> (grey) — live session data. Earnings are low because Mysterium zeroes token values after settlement. <strong className="text-slate-300">Archive row</strong> (green) — from sessions_history.db. Token values are frozen at fetch time before zeroing, giving accurate historical earnings. Includes service type breakdown and consumer origin. The <strong className="text-slate-300">Consumers</strong> tab, top earners and paying-consumer count also use these frozen values, so a real consumer whose sessions already settled still shows their true earnings instead of zero.</p>
                   <p className="text-slate-400 mt-1"><strong className="text-slate-300">Service types</strong> — reported directly by the Mysterium TequilAPI. <strong className="text-slate-300">B2B VPN and data transfer</strong> = B2B streaming/data traffic (access policy: mysterium). <strong className="text-slate-300">B2B Data Scraping</strong> = B2B scraping traffic including QUIC variant (access policy: mysterium). <strong className="text-slate-300">VPN</strong> = Mysterium VPN app users (access policy: mysterium). <strong className="text-slate-300">Public</strong> = wireguard service with configurable access mode — see below. <strong className="text-slate-300">Monitoring</strong> = Mysterium network probe sessions, excluded from analytics.</p>
-                  <p className="text-slate-400 mt-2"><strong className="text-slate-300">Public service modes</strong> (wireguard.access-policies config flag): <strong className="text-slate-300 text-emerald-400">Open</strong> = anyone can connect, including Mysterium Dark and 3rd party apps — flag = <code className="bg-slate-800 px-1 rounded">""</code>. <strong className="text-amber-400">Verified</strong> = only Mysterium-registered consumers with on-chain identity and MYST stake — flag = <code className="bg-slate-800 px-1 rounded">"mysterium"</code>. <strong className="text-slate-400">Off</strong> = Public stops accepting new connections. On nodes that manage WireGuard via active-services (the standard multi-service setup, where Public shares one subnet with VPN/scraping/monitoring), Off removes only wireguard from active-services so monitoring and the other services keep running — it no longer tears down the shared subnet. Existing WireGuard tunnels stay active until consumers disconnect naturally — this is WireGuard kernel behavior, not a toolkit limitation. Individual consumer blocking is not possible at the node API level; use Verified mode to restrict to the Mysterium identity network.</p>
+                  <p className="text-slate-400 mt-2"><strong className="text-slate-300">Public service modes</strong> — the access policy of the Public (<code className="bg-slate-800 px-1 rounded">wireguard</code>) service. <strong className="text-slate-300 text-emerald-400">Open</strong> = no access policy: anyone can connect, including Mysterium Dark and 3rd party apps. <strong className="text-amber-400">Verified</strong> = access policy <code className="bg-slate-800 px-1 rounded">mysterium</code>: only Mysterium-registered consumers. <strong className="text-slate-400">Off</strong> = the Public service is stopped; the other services keep running and the node keeps Public off after a restart. The card shows the policy of the service the node is running, not a config value. The node reads the policy only when the service starts, so switching between Open and Verified restarts the Public service, and Off stops it: in both cases the Public sessions active at that moment end. The toolkit also stores the policy in the node config (<code className="bg-slate-800 px-1 rounded">wireguard.access-policies</code>) so a node restart keeps the mode; when the node config would bring Public back in another mode, the card says so. Individual consumer blocking is not possible at the node API level; use Verified mode to restrict to the Mysterium identity network.</p>
                   <p className="text-slate-400 mt-2"><strong className="text-slate-300">How consumers pay</strong> — the node sends invoices during a session; the consumer answers each with a signed promise to pay, which the node later redeems through Hermes. The first invoice is 1 wei, and the tunnel only opens once it is answered. The node accepts a correctly signed promise before Hermes has confirmed it, so when Hermes does not honour a consumer's promises the node keeps serving while it retries, and only ends the session after repeated failures. A consumer can therefore receive data without paying. The toolkit does not guess why: it shows those consumers under <strong className="text-slate-300">Never paid this node</strong> in the Consumers tab, with the traffic they received.</p>
                 </div>
 
@@ -8099,25 +8099,33 @@ const SettlementHistoryCard = ({ backendUrl, authHeaders }) => {
 };
 
 const WireguardModeSelector = ({ backendUrl, authHeaders, isRunning, onChanged }) => {
-  const [mode, setMode] = useState(null);   // null=loading, 'open'|'verified'|'off'
+  // v1.4.62: the mode shown is the policy of the service the node is running,
+  // not a config value, and a change only reports ✓ once the node confirms it.
+  const [info, setInfo] = useState(null);      // GET /services/wireguard-mode response
   const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState(null);
+  const [status, setStatus] = useState(null);  // { ok, text }
   const [confirm, setConfirm] = useState(null); // mode pending confirmation
+  const mode = info ? info.mode : null;          // 'open'|'verified'|'custom'|'off'
 
-  useEffect(() => {
-    if (!backendUrl) return;
-    fetch(`${backendUrl}/services/wireguard-mode`, { headers: authHeaders || {} })
+  const loadMode = () => {
+    if (!backendUrl) return Promise.resolve();
+    return fetch(`${backendUrl}/services/wireguard-mode`, { headers: authHeaders || {} })
       .then(r => r.json())
-      .then(d => { if (d.success) setMode(d.mode); })
+      .then(d => {
+        if (d.success) setInfo(d);
+        else setStatus({ ok: false, text: d.error || 'Could not read the Public mode' });
+      })
       .catch(e => console.warn('/services/wireguard-mode failed:', e?.message || e));
-  }, [backendUrl]);
+  };
+
+  useEffect(() => { loadMode(); }, [backendUrl]);
 
   const applyMode = async (newMode) => {
-    if (busy) return;
-    // Stopping or switching from open→verified needs confirmation
-    if ((newMode === 'off' || newMode === 'verified') && mode !== newMode && confirm !== newMode) {
+    if (busy || mode === newMode) return;
+    // Every change stops or restarts the Public service, so always confirm.
+    if (confirm !== newMode) {
       setConfirm(newMode);
-      setTimeout(() => setConfirm(null), 4000);
+      setTimeout(() => setConfirm(c => (c === newMode ? null : c)), 5000);
       return;
     }
     setConfirm(null);
@@ -8131,17 +8139,17 @@ const WireguardModeSelector = ({ backendUrl, authHeaders, isRunning, onChanged }
       });
       const d = await r.json();
       if (d.success) {
-        setMode(newMode);
-        setStatus('✓');
+        setStatus({ ok: !d.warning, text: d.message || '✓' });
         if (onChanged) onChanged();
       } else {
-        setStatus(`✗ ${d.error || 'failed'}`);
+        setStatus({ ok: false, text: d.error || 'failed' });
       }
     } catch (e) {
-      setStatus(`✗ ${e.message}`);
+      setStatus({ ok: false, text: e.message });
     }
+    await loadMode();
     setBusy(false);
-    setTimeout(() => setStatus(null), 4000);
+    setTimeout(() => setStatus(null), 10000);
   };
 
   const modeConfig = {
@@ -8159,6 +8167,8 @@ const WireguardModeSelector = ({ backendUrl, authHeaders, isRunning, onChanged }
     return `px-3 py-1 text-xs rounded border font-semibold bg-slate-800/40 border-slate-700 text-slate-500 hover:text-slate-300 hover:border-slate-500 transition`;
   };
 
+  const policyText = info && info.policies && info.policies.length ? info.policies.join(',') : 'none';
+
   return (
     <div className="flex flex-col gap-1.5 px-4 py-3 rounded border bg-slate-800/30 border-slate-700/50">
       <div className="flex items-start justify-between gap-2 flex-wrap">
@@ -8168,12 +8178,12 @@ const WireguardModeSelector = ({ backendUrl, authHeaders, isRunning, onChanged }
           {mode && <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
             mode === 'off' ? 'text-slate-500 border-slate-600 bg-slate-800/40'
             : mode === 'verified' ? 'text-amber-400 border-amber-500/30 bg-amber-500/10'
+            : mode === 'custom' ? 'text-sky-400 border-sky-500/30 bg-sky-500/10'
             : 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10'
           }`}>{mode === 'off' ? 'Stopped' : 'Running'}</span>}
-          {status && <span className={`text-xs ${status.startsWith('✓') ? 'text-emerald-400' : 'text-red-400'}`}>{status}</span>}
         </div>
         <div className="flex items-center gap-1 flex-wrap">
-          {busy && <span className="text-xs text-slate-400">…</span>}
+          {busy && <span className="text-xs text-slate-400">applying…</span>}
           {(['open','verified','off']).map(m => (
             <button key={m} onClick={() => applyMode(m)} disabled={busy}
               className={btnCls(m)} title={confirm === m ? 'Click again to confirm' : modeConfig[m].desc}>
@@ -8182,17 +8192,27 @@ const WireguardModeSelector = ({ backendUrl, authHeaders, isRunning, onChanged }
           ))}
         </div>
       </div>
-      {/* Context line */}
+      {/* Context line — what the node is running right now */}
       <div className="text-[10px] text-slate-600 leading-relaxed">
-        {mode === 'open' && '● Open — all consumers including Mysterium Dark and 3rd party apps. Core flag: wireguard.access-policies = ""'}
-        {mode === 'verified' && '● Verified — Mysterium network consumers only (on-chain registered identities). Core flag: wireguard.access-policies = "mysterium"'}
-        {mode === 'off' && '● Off — no new Public connections. Existing WireGuard tunnels stay active until consumers disconnect naturally.'}
+        {mode === 'open' && '● Open — all consumers, including Mysterium Dark and 3rd party apps. Running service has no access policy.'}
+        {mode === 'verified' && '● Verified — Mysterium network consumers only. Running service has access policy "mysterium".'}
+        {mode === 'custom' && `● Custom — the running service has access policy "${policyText}". Pick Open or Verified to replace it.`}
+        {mode === 'off' && '● Off — the Public service is stopped. The node keeps it off after a restart.'}
         {mode === null && 'Loading…'}
       </div>
+      {info && info.restart_note && (
+        <div className="text-[10px] text-amber-400/80 leading-relaxed">⚠ {info.restart_note}</div>
+      )}
+      {status && (
+        <div className={`text-[10px] leading-relaxed ${status.ok ? 'text-emerald-400' : 'text-red-400'}`}>
+          {status.ok ? '✓ ' : '✗ '}{status.text}
+        </div>
+      )}
       {confirm && (
         <div className="text-[10px] text-amber-400 mt-0.5">
-          {confirm === 'off' && '⚠ Stopping Public will block new connections but existing tunnels stay active. Click Confirm Off again to proceed.'}
-          {confirm === 'verified' && '⚠ Switching to Verified will reject new connections from unregistered consumers. Click Confirm Verified again to proceed.'}
+          {confirm === 'off'
+            ? '⚠ Stopping Public ends the Public sessions that are active now. Click Off again to proceed.'
+            : `⚠ Switching to ${modeConfig[confirm].label} restarts the Public service — active Public sessions are dropped. Click ${modeConfig[confirm].label} again to proceed.`}
         </div>
       )}
     </div>
