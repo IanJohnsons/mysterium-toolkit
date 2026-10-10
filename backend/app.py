@@ -11848,65 +11848,6 @@ def get_session_db_stats():
         return jsonify({'error': str(e)}), 200
 
 
-def _update_node_active_services(node_url, headers, service_type, enable):
-    """Persist active-services config on the node after a start/stop toggle.
-
-    Fetches current config, adds or removes service_type (and quic_scraping when
-    toggling scraping), then writes back via POST /config.  Silent on error —
-    the runtime toggle already succeeded; this is best-effort persistence.
-
-    NOTE: wireguard (Public) is NEVER in active-services — the node manages it
-    separately at startup via the `myst service` command. Do not touch it here.
-    monitoring and noop are internal node-managed types — never toggle via API.
-    """
-    NEVER_IN_CONFIG = {'wireguard', 'monitoring', 'noop'}
-    if service_type in NEVER_IN_CONFIG:
-        logger.debug(f"active-services: skipping config update for {service_type} (node-managed)")
-        return
-
-    SCRAPING_PAIR = {'scraping', 'quic_scraping'}
-    try:
-        cr = requests.get(f'{node_url}/config', headers=headers, timeout=5)
-        if cr.status_code != 200:
-            return
-        cfg = cr.json()
-        # active-services lives under 'data' key in the response
-        active_raw = cfg.get('data', {}).get('active-services') or cfg.get('active-services', '')
-        active = [s.strip() for s in active_raw.split(',') if s.strip()] if active_raw else []
-
-        # When toggling scraping, always keep scraping + quic_scraping in sync
-        to_toggle = SCRAPING_PAIR if service_type in SCRAPING_PAIR else {service_type}
-        # Never add wireguard or internal types to active-services
-        to_toggle = {t for t in to_toggle if t not in NEVER_IN_CONFIG}
-
-        if enable:
-            for t in to_toggle:
-                if t not in active:
-                    active.append(t)
-        else:
-            active = [s for s in active if s not in to_toggle]
-
-        new_active = ','.join(active)
-        wr = requests.post(
-            f'{node_url}/config',
-            headers={**headers, 'Content-Type': 'application/json'},
-            json={'data': {'active-services': new_active}},
-            timeout=5,
-        )
-        # Verify write by reading back
-        if wr.status_code == 200:
-            vr = requests.get(f'{node_url}/config', headers=headers, timeout=5)
-            if vr.status_code == 200:
-                written = (vr.json().get('data', {}).get('active-services') or '')
-                if written != new_active:
-                    logger.warning(f"active-services config mismatch after write: wanted '{new_active}', got '{written}'")
-                else:
-                    logger.debug(f"active-services verified: {new_active}")
-        logger.debug(f"active-services updated: {new_active} ({'enabled' if enable else 'disabled'} {service_type})")
-    except Exception as e:
-        logger.warning(f"active-services config update skipped: {e}")
-
-
 @app.route('/services/<service_id>/stop', methods=['POST'])
 @require_auth
 def stop_service(service_id):
@@ -11924,34 +11865,6 @@ def stop_service(service_id):
         headers = MetricsCollector.get_tequilapi_headers()
         for node_url in NODE_API_URLS:
             try:
-                # Public (wireguard) owns the shared WireGuard subnet that monitoring and the
-                # other services ride on. A blunt DELETE tears that subnet down and kills
-                # monitoring. So when wireguard is managed via active-services, stop it the
-                # safe way — remove it from the list and let the node reconcile (mirrors the
-                # Off mode toggle). Only fall through to a direct stop when wireguard is
-                # managed separately (not in active-services).
-                if service_type == 'wireguard':
-                    try:
-                        cr = requests.get(f'{node_url}/config', headers=headers, timeout=5)
-                        active = []
-                        if cr.status_code == 200:
-                            active_raw = (cr.json().get('data', {}) or {}).get('active-services') or ''
-                            active = [s.strip() for s in active_raw.split(',') if s.strip()]
-                        if 'wireguard' in active:
-                            new_active = ','.join([s for s in active if s != 'wireguard'])
-                            wr = requests.post(
-                                f'{node_url}/config',
-                                headers={**headers, 'Content-Type': 'application/json'},
-                                json={'data': {'active-services': new_active}}, timeout=10)
-                            if wr.status_code not in (200, 202, 204):
-                                return jsonify({'success': False,
-                                                'error': f'Config write failed: HTTP {wr.status_code}'}), 200
-                            return jsonify({'success': True,
-                                            'message': 'Public disabled via active-services — monitoring stays running.'}), 200
-                        # wireguard managed separately → fall through to the normal stop below
-                    except Exception as _e:
-                        return jsonify({'success': False, 'error': f'Public stop failed: {_e}'}), 200
-
                 # Fetch current running services to resolve fresh UUIDs
                 current = {}
                 try:
@@ -11988,9 +11901,7 @@ def stop_service(service_id):
                         do_stop(linked_id)
 
                 if ok:
-                    # Persist: remove from active-services so service stays off after node restart
-                    if service_type:
-                        _update_node_active_services(node_url, headers, service_type, enable=False)
+                    # The node rewrites active-services itself on every stop.
                     return jsonify({'success': True, 'message': f'Service stopped'}), 200
                 else:
                     return jsonify({'success': False, 'error': err_msg or f'Stop failed for {target_id}'}), 200
@@ -12011,7 +11922,7 @@ def start_service():
 
     NOTE: access_policies are NOT sent in the payload — the node reads them
     from its own config (wireguard.access-policies, access-policy.list flags).
-    wireguard (Public) is started by the node at boot and managed separately.
+    Public (wireguard) is switched through /services/wireguard-mode.
     """
     LINKED = {'scraping': 'quic_scraping', 'quic_scraping': 'scraping'}
     INTERNAL_TYPES = {'monitoring', 'noop'}
@@ -12064,8 +11975,7 @@ def start_service():
                     do_start(LINKED[service_type])
 
                 if ok:
-                    # Persist: add to active-services so service survives node restart
-                    _update_node_active_services(node_url, headers, service_type, enable=True)
+                    # The node adds it to active-services itself on every start.
                     return jsonify({'success': True, 'message': f'Service {service_type} started'}), 200
                 else:
                     return jsonify({'success': False, 'error': err_msg or f'Start failed for {service_type}'}), 200
@@ -12077,41 +11987,198 @@ def start_service():
         return jsonify({'success': False, 'error': str(e)}), 200
 
 
+# ── Public (wireguard) access mode — v1.4.62 ──────────────────────────────────
+#
+# Everything here goes through TequilAPI routes that exist in the node
+# (checked against node 1.39.x source):
+#   GET    /services                 running services; the policy the Public
+#                                    service actually enforces is in
+#                                    proposal.access_policies = [{id, source}]
+#   DELETE /services/{id}            stop; the node itself then rewrites
+#                                    active-services, so it stays off after
+#                                    a node restart
+#   POST   /services                 start with an explicit access_policies
+#                                    list; the node adds it to active-services
+#   GET    /config                   merged config (defaults + user + CLI)
+#   POST   /config/user              persist wireguard.access-policies
+# There is no POST /config — that was the HTTP 404. The node reads the access
+# policy only when a service starts, so a policy change means a service restart,
+# and that drops the Public sessions that are active at that moment.
+
+_WG_VERIFIED_POLICY = 'mysterium'
+_WG_MODE_LOCK = Lock()
+
+
+def _wg_err_text(resp):
+    try:
+        body = resp.json()
+        msg = body.get('message') or body.get('error') or ''
+        if isinstance(msg, dict):
+            msg = msg.get('message') or str(msg)
+        if msg:
+            return f'HTTP {resp.status_code}: {msg}'
+    except Exception:
+        pass
+    return f'HTTP {resp.status_code}'
+
+
+def _wg_find_service(node_url, headers):
+    """The wireguard service entry from GET /services, or None. Raises on API failure."""
+    r = requests.get(f'{node_url}/services', headers=headers, timeout=5)
+    if r.status_code != 200:
+        raise RuntimeError(f'GET /services failed: {_wg_err_text(r)}')
+    for svc in (r.json() or []):
+        if isinstance(svc, dict) and svc.get('type') == 'wireguard':
+            return svc
+    return None
+
+
+def _wg_policy_ids(svc):
+    """Sorted access-policy ids the running service enforces ([] = open)."""
+    pols = ((svc or {}).get('proposal') or {}).get('access_policies') or []
+    ids = set()
+    for p in pols:
+        if isinstance(p, dict) and str(p.get('id') or '').strip():
+            ids.add(str(p['id']).strip())
+    return sorted(ids)
+
+
+def _wg_mode_for_ids(ids):
+    if not ids:
+        return 'open'
+    if ids == [_WG_VERIFIED_POLICY]:
+        return 'verified'
+    return 'custom'
+
+
+def _wg_ids_for_mode(mode):
+    return [_WG_VERIFIED_POLICY] if mode == 'verified' else []
+
+
+def _wg_cfg_value(data, key):
+    """Read a dotted key from the node's nested config map (also accepts flat keys)."""
+    if not isinstance(data, dict):
+        return None
+    if key in data:
+        return data[key]
+    node = data
+    for seg in key.split('.'):
+        if not isinstance(node, dict) or seg not in node:
+            return None
+        node = node[seg]
+    return node
+
+
+def _wg_restart_ids(node_url, headers):
+    """Policy ids the node will use for Public after a node restart.
+
+    Mirrors the node's own getPolicies(): wireguard.access-policies, and when
+    that is empty, access-policy.list. Returns None when the config can't be read.
+    """
+    try:
+        r = requests.get(f'{node_url}/config', headers=headers, timeout=5)
+        if r.status_code != 200:
+            return None
+        data = (r.json() or {}).get('data') or {}
+    except Exception:
+        return None
+    raw = _wg_cfg_value(data, 'wireguard.access-policies')
+    if raw is None or str(raw).strip() == '':
+        raw = _wg_cfg_value(data, 'access-policy.list')
+    if isinstance(raw, (list, tuple)):
+        parts = [str(x) for x in raw]
+    else:
+        parts = str(raw or '').split(',')
+    return sorted({p.strip() for p in parts if p.strip()})
+
+
+def _wg_restart_note(restart_ids, live_mode):
+    """Text when the node would come back in another mode after a restart, else ''."""
+    if restart_ids is None or live_mode == 'off':
+        return ''
+    restart_mode = _wg_mode_for_ids(restart_ids)
+    if restart_mode == live_mode:
+        return ''
+    shown = ','.join(restart_ids) if restart_ids else 'none'
+    return (f'After a node restart Public would start as {restart_mode} '
+            f'(access policy in the node config: {shown}).')
+
+
+def _wg_provider_id(node_url, headers, svc):
+    if svc and svc.get('provider_id'):
+        return svc['provider_id']
+    try:
+        r = requests.get(f'{node_url}/identities', headers=headers, timeout=5)
+        if r.status_code == 200:
+            ids = (r.json() or {}).get('identities') or []
+            if ids:
+                return ids[0].get('id') or None
+    except Exception:
+        pass
+    return None
+
+
+def _wg_wait(node_url, headers, want_ids=None, want_gone=False, timeout=12.0):
+    """Poll GET /services until the wireguard service is gone, or runs with want_ids.
+
+    Returns (ok, svc_or_None).
+    """
+    deadline = time.time() + timeout
+    svc = None
+    while True:
+        try:
+            svc = _wg_find_service(node_url, headers)
+        except Exception:
+            svc = None
+        if want_gone and svc is None:
+            return True, None
+        if (not want_gone and svc is not None and svc.get('status') == 'Running'
+                and _wg_policy_ids(svc) == want_ids):
+            return True, svc
+        if time.time() >= deadline:
+            return False, svc
+        time.sleep(0.5)
+
+
+def _wg_persist_policy(node_url, headers, mode):
+    """Write wireguard.access-policies through POST /config/user. Returns error text or ''."""
+    value = _WG_VERIFIED_POLICY if mode == 'verified' else None   # None = remove the key
+    try:
+        r = requests.post(f'{node_url}/config/user',
+                          headers={**headers, 'Content-Type': 'application/json'},
+                          json={'data': {'wireguard.access-policies': value}}, timeout=10)
+        if r.status_code not in (200, 201, 202, 204):
+            return f'Config write failed: {_wg_err_text(r)}'
+    except Exception as e:
+        return f'Config write failed: {e}'
+    return ''
+
+
 @app.route('/services/wireguard-mode', methods=['GET'])
 @require_auth
 def get_wireguard_mode():
-    """Return current wireguard mode: 'open', 'verified', or 'off'.
-    off      = wireguard service not running
-    open     = running + access_policies empty (anyone can connect)
-    verified = running + access_policies = 'mysterium' (verified consumers only)
+    """Current Public mode, read from the service the node is actually running.
+
+    mode: 'off' (not running), 'open' (no access policy), 'verified'
+    (policy 'mysterium'), or 'custom' (any other policy list).
     """
     try:
         headers = MetricsCollector.get_tequilapi_headers()
         for node_url in NODE_API_URLS:
             try:
-                wg_running, wg_id = False, None
-                sr = requests.get(f'{node_url}/services', headers=headers, timeout=5)
-                if sr.status_code == 200:
-                    for svc in sr.json():
-                        if svc.get('type') == 'wireguard' and svc.get('status') == 'Running':
-                            wg_running, wg_id = True, svc.get('id')
-
-                access_policy = ''
-                cr = requests.get(f'{node_url}/config', headers=headers, timeout=5)
-                if cr.status_code == 200:
-                    cfg = cr.json()
-                    # Config response uses nested structure: data.wireguard.access-policies
-                    access_policy = (
-                        cfg.get('data', {}).get('wireguard', {}).get('access-policies')
-                        or cfg.get('data', {}).get('wireguard.access-policies')
-                        or cfg.get('userConfig', {}).get('wireguard', {}).get('access-policies')
-                        or cfg.get('userConfig', {}).get('wireguard.access-policies')
-                        or ''
-                    )
-
-                mode = 'off' if not wg_running else ('verified' if 'mysterium' in str(access_policy).lower() else 'open')
-                return jsonify({'success': True, 'mode': mode, 'wg_running': wg_running,
-                                'wg_id': wg_id, 'access_policy_raw': access_policy}), 200
+                svc = _wg_find_service(node_url, headers)
+                running = bool(svc) and svc.get('status') == 'Running'
+                ids = _wg_policy_ids(svc) if running else []
+                mode = _wg_mode_for_ids(ids) if running else 'off'
+                restart_ids = _wg_restart_ids(node_url, headers)
+                return jsonify({
+                    'success': True, 'mode': mode,
+                    'wg_running': running, 'wg_id': (svc or {}).get('id'),
+                    'wg_status': (svc or {}).get('status'),
+                    'policies': ids,
+                    'restart_policies': restart_ids,
+                    'restart_note': _wg_restart_note(restart_ids, mode),
+                }), 200
             except Exception as e:
                 return jsonify({'success': False, 'error': str(e)}), 200
         return jsonify({'success': False, 'error': 'No node available'}), 200
@@ -12122,265 +12189,103 @@ def get_wireguard_mode():
 @app.route('/services/wireguard-mode', methods=['POST'])
 @require_auth
 def set_wireguard_mode():
-    """Set wireguard mode: 'open', 'verified', or 'off'.
-    open     → wireguard running, wireguard.access-policies = '' (everyone)
-    verified → wireguard running, wireguard.access-policies = 'mysterium' (verified only)
-    off      → stop wireguard (existing WireGuard tunnels persist until natural disconnect)
-    Config change applies to new connections immediately.
-    """
+    """Set Public to 'open', 'verified' or 'off', and only report success once
+    GET /services shows the service in that state."""
+    body = request.get_json(silent=True) or {}
+    mode = str(body.get('mode', '')).lower()
+    if mode not in ('open', 'verified', 'off'):
+        return jsonify({'success': False, 'error': "mode must be 'open', 'verified', or 'off'"}), 200
+    if not _WG_MODE_LOCK.acquire(blocking=False):
+        return jsonify({'success': False, 'error': 'A Public mode change is already running'}), 200
     try:
-        body = request.get_json() or {}
-        mode = body.get('mode', '').lower()
-        if mode not in ('open', 'verified', 'off'):
-            return jsonify({'success': False, 'error': "mode must be 'open', 'verified', or 'off'"}), 200
-
         headers = MetricsCollector.get_tequilapi_headers()
-        headers['Content-Type'] = 'application/json'
-
         for node_url in NODE_API_URLS:
             try:
-                # Current wireguard state
-                wg_running, wg_id, provider_id = False, None, None
-                sr = requests.get(f'{node_url}/services', headers=headers, timeout=5)
-                if sr.status_code == 200:
-                    for svc in sr.json():
-                        if svc.get('type') == 'wireguard':
-                            if svc.get('status') == 'Running':
-                                wg_running, wg_id = True, svc.get('id')
-                            provider_id = svc.get('provider_id')
-
-                if not provider_id:
-                    try:
-                        ir = requests.get(f'{node_url}/identities', headers=headers, timeout=5)
-                        if ir.status_code == 200:
-                            ids = ir.json().get('identities', [])
-                            if ids:
-                                provider_id = ids[0].get('id', '')
-                    except Exception:
-                        pass
-
-                if mode == 'off':
-                    # Node-aware Off. In the standard multi-service setup, wireguard, dvpn,
-                    # scraping, data_transfer and monitoring all share ONE WireGuard subnet
-                    # and wireguard is listed in active-services. A blunt DELETE of the
-                    # wireguard service tears down that shared subnet and takes monitoring
-                    # (and the other services) down with it. So when wireguard is managed via
-                    # active-services, remove ONLY wireguard from the list and let the node's
-                    # service manager reconcile gracefully — monitoring keeps running. Only
-                    # fall back to a direct service stop when wireguard is NOT in
-                    # active-services (nodes that manage it separately).
-                    active = []
-                    wg_in_active = False
-                    try:
-                        cr = requests.get(f'{node_url}/config', headers=headers, timeout=5)
-                        if cr.status_code == 200:
-                            active_raw = (cr.json().get('data', {}) or {}).get('active-services') or ''
-                            active = [s.strip() for s in active_raw.split(',') if s.strip()]
-                            wg_in_active = 'wireguard' in active
-                    except Exception:
-                        active = []
-
-                    if wg_in_active:
-                        new_active = ','.join([s for s in active if s != 'wireguard'])
-                        try:
-                            wr = requests.post(
-                                f'{node_url}/config',
-                                headers={**headers, 'Content-Type': 'application/json'},
-                                json={'data': {'active-services': new_active}},
-                                timeout=10,
-                            )
-                            if wr.status_code not in (200, 202, 204):
-                                return jsonify({'success': False,
-                                                'error': f'Config write failed: HTTP {wr.status_code}'}), 200
-                        except Exception as _e:
-                            return jsonify({'success': False, 'error': f'Config write failed: {_e}'}), 200
-                    else:
-                        # Legacy fallback: wireguard managed separately → stop the service directly.
-                        if wg_running and wg_id:
-                            dr = requests.delete(f'{node_url}/services/{wg_id}', headers=headers, timeout=10)
-                            if dr.status_code not in (200, 202, 204):
-                                return jsonify({'success': False, 'error': f'Stop failed: HTTP {dr.status_code}'}), 200
-                    # Initialised before the try: a failure inside it must not turn
-                    # into a NameError on the very path that reports the failure.
-                    _cfg_written = False
-                    _cfg_error = ''
-                    # Clear access-policies via myst CLI (POST /config returns 404 for nested keys)
-                    try:
-                        import subprocess as _sp
-                        _r = _sp.run(['myst', 'config', 'set', 'wireguard.access-policies', ''],
-                                timeout=10, capture_output=True, text=True)
-                        if _r.returncode == 0:
-                            # The CLI is the primary route; the file edit below is
-                            # only a fallback for when it fails.
-                            _cfg_written = True
-                        elif _priv.run('node-access-policy', 'remove', timeout=10)[0] == 0:
-                            # v1.4.60: the helper edits the file; the loop below
-                            # is the previous route, kept as the fallback.
-                            _cfg_written = True
-                        else:
-                            for _cfg_path in ['/etc/mysterium-node/config.toml', '/etc/mysterium-node/config-mainnet.toml']:
-                                try:
-                                    import os as _os, re as _re
-                                    if not _os.path.exists(_cfg_path): continue
-                                    with open(_cfg_path, 'r') as _f:
-                                        _c = _f.read()
-                                    _c = _re.sub(r'^\s*access-policies\s*=.*$', '', _c, flags=_re.MULTILINE)
-                                    _wr = _sp.run(['sudo', '-n', 'tee', _cfg_path],
-                                                  input=_c, capture_output=True, text=True, timeout=5)
-                                    if _wr.returncode == 0:
-                                        _cfg_written = True
-                                        break
-                                    _cfg_error = (_wr.stderr or '').strip()[:200]
-                                except Exception as _e:
-                                    _cfg_error = str(_e)[:200]
-                    except Exception as _e:
-                        _cfg_error = str(_e)[:200]
-
-                    # Reporting success here regardless of the write was the bug:
-                    # the UI said Public was disabled while the node config still
-                    # carried access-policies, and nothing was logged either.
-                    if not _cfg_written:
-                        logger.error(f'wireguard-mode off: failed to update node config — {_cfg_error}')
-                        return jsonify({
-                            'success': False,
-                            'error': 'Could not write the node config'
-                                     + (f' — {_cfg_error}' if _cfg_error else '')
-                                     + '. The service may still advertise its access policy.',
-                        }), 200
-
-                    _off_msg = ('Public disabled via active-services — monitoring and other services keep running.'
-                                if wg_in_active else
-                                'Public service stopped. Existing tunnels persist until natural disconnect.')
-                    return jsonify({'success': True, 'mode': 'off', 'message': _off_msg}), 200
-
-                # open / verified: set config via myst CLI (POST /config returns 404 for nested keys)
-                # then cycle the wireguard service so new access-policies takes effect
-                policy_value = 'mysterium' if mode == 'verified' else ''
-                try:
-                    import subprocess as _sp
-                    result = _sp.run(
-                        ['myst', 'config', 'set', 'wireguard.access-policies', policy_value],
-                        timeout=10, capture_output=True, text=True
-                    )
-                    if result.returncode != 0:
-                        logger.warning(f"myst config set returned {result.returncode}: {result.stderr}")
-                    if result.returncode != 0 and _priv.run('node-access-policy', 'set', policy_value,
-                                                            timeout=10)[0] == 0:
-                        logger.info("Wrote wireguard.access-policies to the node config through the helper")
-                    elif result.returncode != 0:
-                        # Fallback: write directly to system config file (needed on non-root installs
-                        # where daemon runs as mysterium-node and cannot write system config itself)
-                        _cfg_paths = [
-                            '/etc/mysterium-node/config.toml',
-                            '/etc/mysterium-node/config-mainnet.toml',
-                        ]
-                        for _cfg_path in _cfg_paths:
-                            try:
-                                import os as _os
-                                if not _os.path.exists(_cfg_path):
-                                    continue
-                                with open(_cfg_path, 'r') as _f:
-                                    _cfg_content = _f.read()
-                                import re as _re
-                                # Remove any existing wireguard.access-policies line
-                                _cfg_content = _re.sub(
-                                    r'^\s*access-policies\s*=.*$', '',
-                                    _cfg_content, flags=_re.MULTILINE
-                                )
-                                # Add wireguard section with access-policies if not present
-                                if '[wireguard]' not in _cfg_content:
-                                    _cfg_content += f'\n[wireguard]\n  access-policies = "{policy_value}"\n'
-                                else:
-                                    # Insert after [wireguard]
-                                    _cfg_content = _re.sub(
-                                        r'(\[wireguard\])',
-                                        f'\\1\n  access-policies = "{policy_value}"',
-                                        _cfg_content, count=1
-                                    )
-                                # Write via sudo tee
-                                _wr = _sp.run(
-                                    ['sudo', '-n', 'tee', _cfg_path],
-                                    input=_cfg_content, capture_output=True,
-                                    text=True, timeout=5
-                                )
-                                if _wr.returncode == 0:
-                                    logger.info(f"Wrote wireguard.access-policies to {_cfg_path} via sudo tee")
-                                    break
-                            except Exception as _e:
-                                logger.warning(f"Config write fallback error for {_cfg_path}: {_e}")
-                except Exception as e:
-                    logger.warning(f"myst config set failed: {e}")
-
-                # Determine whether wireguard is managed via active-services. On the standard
-                # multi-service setup, wireguard, dvpn, scraping, data_transfer and monitoring
-                # share ONE WireGuard subnet and wireguard is listed in active-services. A blunt
-                # DELETE of the wireguard service tears down that shared subnet and takes the B2B
-                # services + monitoring down with it (they only recover on a full node restart).
-                # So when wireguard is in active-services, cycle it via the active-services list
-                # (remove → re-add) and let the node's service manager reconcile gracefully — the
-                # restart applies the new access-policy without destroying the shared subnet.
-                wg_in_active = False
-                act = []
-                try:
-                    cr2 = requests.get(f'{node_url}/config', headers=headers, timeout=5)
-                    if cr2.status_code == 200:
-                        act_raw = (cr2.json().get('data', {}) or {}).get('active-services') or ''
-                        act = [s.strip() for s in act_raw.split(',') if s.strip()]
-                        wg_in_active = 'wireguard' in act
-                except Exception as _e:
-                    logger.debug(f"active-services read skipped: {_e}")
-
-                if wg_in_active:
-                    # Cycle wireguard through active-services so the new policy applies without
-                    # a service DELETE. Remove wireguard, let the node stop it, then re-add it.
-                    import time as _time
-                    try:
-                        if wg_running:
-                            requests.post(
-                                f'{node_url}/config',
-                                headers={**headers, 'Content-Type': 'application/json'},
-                                json={'data': {'active-services': ','.join([s for s in act if s != 'wireguard'])}},
-                                timeout=10,
-                            )
-                            _time.sleep(1)
-                        requests.post(
-                            f'{node_url}/config',
-                            headers={**headers, 'Content-Type': 'application/json'},
-                            json={'data': {'active-services': ','.join([s for s in act if s != 'wireguard'] + ['wireguard'])}},
-                            timeout=10,
-                        )
-                    except Exception as _e:
-                        logger.warning(f"wireguard active-services cycle skipped: {_e}")
-                    label = 'verified consumers only (Mysterium network)' if mode == 'verified' else 'open to everyone'
-                    return jsonify({'success': True, 'mode': mode,
-                                    'message': f'Public service set to {mode} — {label}. Applied via active-services so the shared subnet (and B2B services) stay up.'}), 200
-
-                # wireguard managed separately (not in active-services): safe to cycle the
-                # service directly without affecting a shared subnet.
-                if wg_running and wg_id:
-                    requests.delete(f'{node_url}/services/{wg_id}', headers=headers, timeout=10)
-                    import time as _time; _time.sleep(1)
-
-                payload = {'type': 'wireguard'}
-                if provider_id:
-                    payload['provider_id'] = provider_id
-                pr = requests.post(f'{node_url}/services', headers=headers, json=payload, timeout=10)
-                if pr.status_code not in (200, 201):
-                    try:
-                        err = pr.json().get('message') or pr.json().get('error') or f'HTTP {pr.status_code}'
-                    except Exception:
-                        err = f'HTTP {pr.status_code}'
-                    if 'already' not in err.lower():
-                        return jsonify({'success': False, 'error': f'Restart failed: {err}'}), 200
-
-                label = 'verified consumers only (Mysterium network)' if mode == 'verified' else 'open to everyone'
-                return jsonify({'success': True, 'mode': mode,
-                                'message': f'Public service set to {mode} — {label}. Service restarted to apply new access policy.'}), 200
+                return _wg_apply_mode(node_url, headers, mode)
             except Exception as e:
+                logger.warning(f'wireguard-mode {mode}: {e}')
                 return jsonify({'success': False, 'error': str(e)}), 200
         return jsonify({'success': False, 'error': 'No node available'}), 200
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 200
+    finally:
+        _WG_MODE_LOCK.release()
+
+
+def _wg_apply_mode(node_url, headers, mode):
+    svc = _wg_find_service(node_url, headers)
+    running = bool(svc) and svc.get('status') == 'Running'
+
+    if mode == 'off':
+        if not svc:
+            return jsonify({'success': True, 'mode': 'off', 'message': 'Public was already off.'}), 200
+        dr = requests.delete(f'{node_url}/services/{svc.get("id")}', headers=headers, timeout=10)
+        if dr.status_code not in (200, 202, 204):
+            return jsonify({'success': False, 'error': f'Stop failed: {_wg_err_text(dr)}'}), 200
+        ok, _ = _wg_wait(node_url, headers, want_gone=True)
+        if not ok:
+            return jsonify({'success': False,
+                            'error': 'Stop was accepted but the node still lists the Public service.'}), 200
+        return jsonify({'success': True, 'mode': 'off',
+                        'message': 'Public stopped. The node keeps it off after a restart.'}), 200
+
+    want_ids = _wg_ids_for_mode(mode)
+
+    # 1. Persist the policy, so a node restart starts Public in the same mode.
+    persist_err = _wg_persist_policy(node_url, headers, mode)
+
+    # 2. Already running with the right policy: nothing to restart.
+    if running and _wg_policy_ids(svc) == want_ids:
+        restart_note = _wg_restart_note(_wg_restart_ids(node_url, headers), mode)
+        msg = f'Public is {mode}.'
+        if persist_err or restart_note:
+            msg += ' ' + (persist_err or restart_note)
+        return jsonify({'success': True, 'mode': mode, 'message': msg,
+                        'warning': persist_err or restart_note or None}), 200
+
+    provider_id = _wg_provider_id(node_url, headers, svc)
+    if not provider_id:
+        return jsonify({'success': False, 'error': 'No provider identity found on the node.'}), 200
+
+    # 3. The node reads the policy only at service start: stop, then start with it.
+    #    ignore_user_config on the stop keeps wireguard in active-services, so if
+    #    the start below fails, a node restart still brings Public back.
+    if svc:
+        dr = requests.delete(f'{node_url}/services/{svc.get("id")}?ignore_user_config=true',
+                             headers=headers, timeout=10)
+        if dr.status_code not in (200, 202, 204):
+            return jsonify({'success': False, 'error': f'Stop failed: {_wg_err_text(dr)}'}), 200
+        _wg_wait(node_url, headers, want_gone=True, timeout=10)
+
+    payload = {'provider_id': provider_id, 'type': 'wireguard',
+               'access_policies': {'ids': want_ids}}
+    deadline = time.time() + 15
+    while True:
+        pr = requests.post(f'{node_url}/services',
+                           headers={**headers, 'Content-Type': 'application/json'},
+                           json=payload, timeout=15)
+        if pr.status_code in (200, 201):
+            break
+        # 422 = the old instance is still shutting down; give it a moment.
+        if pr.status_code == 422 and time.time() < deadline:
+            time.sleep(1)
+            continue
+        state = 'Public is now OFF' if svc else 'Public was not started'
+        return jsonify({'success': False,
+                        'error': f'{state} — start failed: {_wg_err_text(pr)}'}), 200
+
+    ok, new_svc = _wg_wait(node_url, headers, want_ids=want_ids)
+    if not ok:
+        seen = (f'{(new_svc or {}).get("status")}, policy '
+                f'{",".join(_wg_policy_ids(new_svc)) or "none"}') if new_svc else 'not listed'
+        return jsonify({'success': False,
+                        'error': f'Start was accepted but the node does not show Public as {mode} ({seen}).'}), 200
+
+    restart_note = _wg_restart_note(_wg_restart_ids(node_url, headers), mode)
+    label = 'verified consumers only' if mode == 'verified' else 'open to everyone'
+    msg = f'Public restarted as {mode} — {label}.'
+    warning = persist_err or restart_note
+    if warning:
+        msg += ' ' + warning
+    return jsonify({'success': True, 'mode': mode, 'message': msg, 'warning': warning or None}), 200
 
 
 @app.route('/analytics/service-split', methods=['GET'])

@@ -4,6 +4,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.62
+
+- fix: **the Public (wireguard) mode buttons work.** Off answered "Config write failed: HTTP 404": the toolkit posted to `/config`, a route TequilAPI does not have (config is written through `/config/user`). HTTPS, TLS or Tailscale played no part. Open and Verified reported ✓ but changed nothing on the running service: the node reads the access policy only when a service starts, and the restart the toolkit attempted went through the same missing route without checking the answer. Now Off stops the Public service (the node itself keeps it off after a restart), and Open and Verified store the policy in the node config through `/config/user`, then restart the Public service with that policy. A change is reported as done only when the node lists the service in the requested state; a start that fails says Public is now off and why.
+- fix: **the card shows the mode the node is running.** It read `wireguard.access-policies` from the config, so after a failed switch it showed a mode the service did not have. It now reads the access policy of the running service, shows "Custom" for any policy other than none or `mysterium`, and warns when the node config would bring Public back in another mode after a node restart — for example when `access-policy.list` is set, which the node falls back to.
+- fix: **the card and Help say what a switch does to active sessions.** They said existing tunnels stay active after Off. Stopping or restarting the Public service ends the Public sessions active at that moment; every switch now asks for a second click and says so.
+- removed: the `myst config set` call and the direct edit of the node's TOML file for the access policy, and the toolkit's own writes of `active-services` after a service start or stop — the node keeps that list itself, and the toolkit's writes went to the same missing route.
+- note: the removal of the previous sudoers grants announced for v1.4.61 moves to v1.4.63.
+
 ## v1.4.61
 
 - fix: **the payment errors card names the cause of each ended session.** It presented every `Payment engine error` as a Hermes problem — "3 sessions ended early, after 0 hermes replies the node could not interpret" — in amber. On the node where this was found all three were `did not get paid for critical invoice`: a consumer that stopped paying, which the node cuts off to protect the operator and which every public node sees. The card now counts per cause: consumer stopped paying (blue, with what it means), Hermes payment errors (amber, with the replies the node could not interpret), any other payment error (amber). A fleet node on an older version sends no split and keeps the old wording.
