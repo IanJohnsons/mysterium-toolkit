@@ -1121,10 +1121,13 @@ class ServiceWatchdog:
                 # logs more of them.
                 _detail = (f'{locked}x since startup — originates in the node, '
                            f'not in this machine\'s configuration')
+                # v1.4.63: information, not a warning. The text below says no
+                # action is needed on this machine; an amber card and a "1 health
+                # issue detected" toast for it said the opposite. It stays visible.
                 if result['status'] == 'ok':
-                    result['status'] = 'warning'
+                    result['status'] = 'info'
                 result['checks'].append({
-                    'name': 'Identity lock', 'status': 'warning', 'detail': _detail,
+                    'name': 'Identity lock', 'status': 'info', 'detail': _detail,
                 })
                 # The dashboard wording below is deliberately unchanged: it states
                 # the mechanism and that no local setting affects it, which holds.
