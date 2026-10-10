@@ -213,7 +213,7 @@ Since v1.4.64, `setup.sh` and `update.sh` write `/etc/sudoers.d/mysterium-toolki
 
 Earlier versions granted `bash`, `cat`, `tee` on wildcard paths, `systemctl … mysterium-*`, `fail2ban-client`, `iptables` and more without argument limits. A `*` in sudoers also matches `/`, `..` and spaces, so together that was passwordless root for the toolkit user. All of that is gone.
 
-Both update scripts sit in the install directory, which your user can edit; making them root-owned copies like the helper is planned.
+**Where this stops.** The two update scripts sit in the install directory, which your user can edit, and every update installs code from the repository as root — the helper, the systemd units, the update itself. So the toolkit user is trusted: anyone who can change files in the install directory can become root through the next update, root-owned copies or not. Closing that needs updates that install only verified code (signed releases), which is a separate piece of work. What the helper does close is the realistic attack on a dashboard: values typed into or sent to the web interface can no longer reach a root command line, a file path or file content.
 
 To regenerate after an update: `./update.sh`
 
@@ -371,6 +371,8 @@ Thread count defaults to 30, or 10 when `pi_mode` is enabled. Override with `ser
 
 Cheroot is a production server in its own right; nothing needs to sit in front of it.
 
+JSON answers of 1 KB or more are sent gzip-compressed when the client asks for it, which browsers, the fleet master and the CLI all do (v1.4.65). `/peer/data` shrinks from about 145 KB to about 19 KB. With `curl`, add `--compressed`.
+
 ---
 
 ---
@@ -401,7 +403,20 @@ After installing fail2ban, configure it via the **🛡 Security** tab in the das
 
 The **Security** tab (scroll down in the dashboard, or click the 🛡 Security link) covers three areas: fail2ban brute force protection, Tailscale VPN access, and UFW firewall rules.
 
+### Login lockout
+
+The dashboard locks out an address after 5 wrong logins within 15 minutes, for 15 minutes (v1.4.65). It answers `429` with the time left and does not check passwords from that address meanwhile; a correct login resets the count. Opening the dashboard before logging in does not count. This works on every install, with or without fail2ban, and is kept in memory, so a toolkit restart clears it. Change it in `config/setup.json`:
+
+```json
+"auth_lockout_attempts": 5,
+"auth_lockout_minutes": 15
+```
+
+`"auth_lockout_attempts": 0` switches it off. Logins from this machine itself (and from your LAN in `toolkit_mode: local`) need no password and are never counted.
+
 ### fail2ban
+
+fail2ban is an extra on top of the lockout: it blocks an address in the firewall, for every port, and keeps the ban across toolkit restarts. It matters mostly where port 5000 is reachable from the internet; behind Tailscale or on a LAN it adds little.
 
 fail2ban protects port 5000 (toolkit dashboard) against brute force login attempts. The toolkit creates and manages one jail: `mysterium-dashboard`. This jail monitors login failures on port 5000 and bans IPs after repeated failures.
 
