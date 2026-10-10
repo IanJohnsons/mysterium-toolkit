@@ -2051,6 +2051,7 @@ Defaults:$_REAL_USER !use_pty
 #   iptables/ip6tables/nft — read firewall rules
 $_REAL_USER ALL=(ALL) NOPASSWD: \
   ${TOOLKIT_DIR}/bin/node_update.sh, \
+  /usr/local/lib/mysterium-toolkit/toolkit-helper, \
   /sbin/sysctl, \
   /usr/sbin/ethtool, \
   /usr/sbin/conntrack, \
@@ -2115,6 +2116,23 @@ SUDOERS_EOF
     else
         sudo rm -f "$_SUDOERS_FILE"
         echo -e "  ${YELLOW}⚠ Sudoers config failed — health fixes will require password${NC}"
+    fi
+fi
+
+# ============ STEP 12.1: PRIVILEGED HELPER (v1.4.60) ============
+# Every change the toolkit makes as root goes through this helper. sudo runs the
+# root-owned copy, never the file in this directory, which the toolkit user can
+# edit. See bin/toolkit-helper.sh.
+_HELPER_SRC="$TOOLKIT_DIR/bin/toolkit-helper.sh"
+_HELPER_DST="/usr/local/lib/mysterium-toolkit/toolkit-helper"
+if [ -f "$_HELPER_SRC" ]; then
+    if cmp -s "$_HELPER_SRC" "$_HELPER_DST" 2>/dev/null; then
+        echo -e "  ${DIM}  Privileged helper unchanged${NC}"
+    elif sudo install -d -o root -g root -m 0755 /usr/local/lib/mysterium-toolkit \
+         && sudo install -o root -g root -m 0755 "$_HELPER_SRC" "$_HELPER_DST"; then
+        echo -e "  ${GREEN}✓ Privileged helper installed → $_HELPER_DST${NC}"
+    else
+        echo -e "  ${YELLOW}⚠ Could not install the privileged helper — health fixes use the previous sudo route${NC}"
     fi
 fi
 

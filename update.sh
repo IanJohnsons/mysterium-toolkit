@@ -582,6 +582,21 @@ fi
 # ── Sudoers update — always runs, regardless of autostart ─────────────────
 # Runs unconditionally so fail2ban and other new permissions reach all users
 _REAL_USER="${SUDO_USER:-${USER:-$(id -un)}}"
+# ── Privileged helper (v1.4.60) ──────────────────────────────────────────
+# Every change the toolkit makes as root goes through this helper. sudo runs the
+# root-owned copy, never the file in the repository, which the toolkit user can
+# edit. Copied only when it changed, so an unchanged update asks for nothing.
+_HELPER_SRC="$TOOLKIT_DIR/bin/toolkit-helper.sh"
+_HELPER_DST="/usr/local/lib/mysterium-toolkit/toolkit-helper"
+if [ -f "$_HELPER_SRC" ] && ! cmp -s "$_HELPER_SRC" "$_HELPER_DST" 2>/dev/null; then
+    if $SUDO install -d -o root -g root -m 0755 /usr/local/lib/mysterium-toolkit \
+       && $SUDO install -o root -g root -m 0755 "$_HELPER_SRC" "$_HELPER_DST"; then
+        echo -e "  ${GREEN}✓ Privileged helper updated${NC}"
+    else
+        echo -e "  ${YELLOW}⚠ Could not install the privileged helper — health fixes use the previous sudo route${NC}"
+    fi
+fi
+
 _SUDOERS_FILE="/etc/sudoers.d/mysterium-toolkit"
 # Write sudoers via heredoc — multi-line format required for Parrot OS and
 # other security-hardened Debian distros that reject single-line sudoers content.
@@ -597,6 +612,7 @@ Defaults:${_REAL_USER} !use_pty
 ${_REAL_USER} ALL=(ALL) NOPASSWD: \
   ${TOOLKIT_DIR}/update.sh, \
   ${TOOLKIT_DIR}/bin/node_update.sh, \
+  /usr/local/lib/mysterium-toolkit/toolkit-helper, \
   /sbin/sysctl, /usr/sbin/sysctl, \
   /usr/sbin/ethtool, \
   /usr/sbin/conntrack, \
