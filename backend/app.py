@@ -624,6 +624,73 @@ _node_registry = []  # List of {id, label, url, username, password}
 # nodes.json itself (a byte copy), mode 600 — it holds the same keys.
 _FLEET_BACKUP_FILE = Path.home() / '.config' / 'mysterium-toolkit' / 'nodes.json'
 _fleet_backup_cache = {'mtime': None, 'info': None}
+# v1.4.66: the certificates pinned for https:// nodes (config/tls/peers/<id>.pem)
+# were not in the copy. After a reinstall and Restore fleet, nodes.json pointed
+# at files that no longer existed and those nodes failed on TLS.
+_FLEET_BACKUP_PEERS = _FLEET_BACKUP_FILE.parent / 'peers'
+_PEER_CERT_DIR = Path('config/tls/peers')
+
+
+def _fleet_peer_certs(data):
+    """Pinned certificate files a nodes.json names, limited to config/tls/peers/ —
+    the only place the toolkit writes them. Relative to the install directory."""
+    nodes = data if isinstance(data, list) else (data or {}).get('nodes', [])
+    out = []
+    for n in nodes if isinstance(nodes, list) else []:
+        cert = n.get('tls_cert') if isinstance(n, dict) else None
+        if not cert:
+            continue
+        p = Path(cert)
+        if not p.is_absolute():
+            p = _toolkit_root / p
+        try:
+            p = p.resolve()
+            p.relative_to((_toolkit_root / _PEER_CERT_DIR).resolve())
+        except (ValueError, OSError):
+            continue
+        out.append(p)
+    return out
+
+
+def _fleet_backup_certs(data):
+    """Copy the pinned certificates next to the safety copy. Returns how many are
+    stored; never raises."""
+    stored = 0
+    for p in _fleet_peer_certs(data):
+        try:
+            raw = p.read_bytes()
+        except OSError:
+            continue
+        dst = _FLEET_BACKUP_PEERS / p.name
+        try:
+            if not (dst.exists() and dst.read_bytes() == raw):
+                _FLEET_BACKUP_PEERS.mkdir(parents=True, exist_ok=True)
+                os.chmod(_FLEET_BACKUP_PEERS, 0o700)
+                dst.write_bytes(raw)
+                os.chmod(dst, 0o600)
+            stored += 1
+        except OSError as e:
+            logger.warning(f"Could not copy pinned certificate {p.name} to {_FLEET_BACKUP_PEERS}: {e}")
+    return stored
+
+
+def _fleet_restore_certs(data):
+    """Put pinned certificates back from the safety copy where they are missing.
+    Returns (restored, missing names)."""
+    restored, missing = 0, []
+    for p in _fleet_peer_certs(data):
+        if p.exists():
+            continue
+        src = _FLEET_BACKUP_PEERS / p.name
+        try:
+            raw = src.read_bytes()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(raw)
+            os.chmod(p, 0o600)
+            restored += 1
+        except OSError:
+            missing.append(p.name)
+    return restored, missing
 
 
 def _fleet_count_nodes(data):
@@ -644,6 +711,10 @@ def _fleet_backup_save(src):
     try:
         src = Path(src)
         raw = src.read_bytes()
+        try:
+            _fleet_backup_certs(json.loads(raw))
+        except Exception as e:
+            logger.warning(f"Pinned certificates not copied with the fleet safety copy: {e}")
         try:
             if _FLEET_BACKUP_FILE.exists() and _FLEET_BACKUP_FILE.read_bytes() == raw:
                 return True
@@ -9088,6 +9159,11 @@ def system_update_status():
         return jsonify({'log': recent, 'done': done}), 200
     except Exception as e:
         return jsonify({'log': str(e), 'done': True}), 200
+
+
+# v1.4.66: the decorator was lost in v1.0.10, so /health answered 404 while a
+# lightweight node still names it in its own index answer.
+@app.route('/health', methods=['GET'])
 def health():
     """Health check - no auth required"""
     with metrics_lock:
@@ -9097,7 +9173,8 @@ def health():
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
         'node_connected': node_status['connected'],
-        'node_error': node_status['error'],
+        # node_error left out: the route answers without credentials, and the
+        # error text can carry internal addresses.
         'has_metrics': has_cache
     }), 200
 
@@ -10635,12 +10712,18 @@ def restore_fleet():
         logger.error(f"Fleet restore failed: {e}")
         return jsonify({'success': False, 'error': f'Restore failed: {e}'}), 500
 
+    certs_restored, certs_missing = _fleet_restore_certs(json.loads(raw))
+    if certs_missing:
+        logger.warning(f"Fleet restore: pinned certificate(s) not in the safety copy: "
+                       f"{', '.join(certs_missing)} — fetch them again in the fleet form")
     if not reload_node_registry():
         logger.error(f"Fleet restore: {target} written but no usable nodes loaded from it")
         return jsonify({'success': False, 'error': 'The copy was written but no usable nodes were loaded — see the log'}), 500
     _ensure_fleet_collector('restored from safety copy')
-    logger.info(f"Fleet restored from {_FLEET_BACKUP_FILE}: {len(_node_registry)} nodes")
-    return jsonify({'success': True, 'nodes': len(_node_registry)}), 200
+    logger.info(f"Fleet restored from {_FLEET_BACKUP_FILE}: {len(_node_registry)} nodes, "
+                f"{certs_restored} pinned certificate(s)")
+    return jsonify({'success': True, 'nodes': len(_node_registry),
+                    'certs_restored': certs_restored, 'certs_missing': certs_missing}), 200
 
 
 @app.route('/fleet/reload', methods=['POST'])
@@ -10648,6 +10731,7 @@ def restore_fleet():
 def reload_fleet():
     """Force reload nodes.json without restarting."""
     if reload_node_registry():
+        _ensure_fleet_collector('fleet reloaded')
         return jsonify({'success': True, 'nodes': len(_node_registry)}), 200
     return jsonify({'success': False, 'error': 'No nodes.json found or empty'}), 400
 
@@ -10776,7 +10860,10 @@ def save_fleet_config():
         # a fleet removed on purpose is not offered back after a reinstall.
         _fleet_backup_save(config_path)
 
-        reload_node_registry()
+        # v1.4.66: start the collector now. A toolkit without a fleet so far left
+        # it to the nodes.json watcher, up to 30 seconds later.
+        if reload_node_registry():
+            _ensure_fleet_collector('fleet saved')
         return jsonify({'success': True, 'nodes': len(nodes), 'path': str(config_path)}), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500

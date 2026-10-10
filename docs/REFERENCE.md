@@ -109,6 +109,10 @@ Polling: the master asks all nodes at the same time — ten at once by default, 
 
 Each node reports its own update status — whether its branch has a newer version — so the **↑ Update** badge on a card always refers to that node's branch.
 
+### Safety copy of the fleet
+
+Every time the fleet is loaded or saved, the toolkit copies `config/nodes.json` to `~/.config/mysterium-toolkit/nodes.json` (mode 600), outside the install directory, together with the certificates pinned for https:// nodes (`~/.config/mysterium-toolkit/peers/`, since v1.4.66). After a reinstall or a fresh clone the dashboard offers **Restore fleet**, and `setup.sh` asks whether to restore it; both put the certificates back as well. A fleet emptied on purpose is copied empty and never offered back.
+
 ### Fleet Update Manager
 
 The fleet dashboard shows a version badge per node and an **↑ Update** button when a newer version is available on GitHub. Clicking it triggers a remote update on that node. An **↑ Update All** button updates all nodes in parallel.

@@ -4,6 +4,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.66
+
+- fix: **the fleet safety copy includes the pinned certificates.** The copy in `~/.config/mysterium-toolkit/` held `nodes.json` only, while the certificates pinned for https:// nodes live in `config/tls/peers/<id>.pem` inside the install directory. After a reinstall and **Restore fleet**, `nodes.json` pointed at files that no longer existed and those nodes failed on TLS. The certificates are now copied next to the safety copy (`peers/`, mode 600) and put back by Restore fleet and by `setup.sh` wherever they are missing; an existing pin is never overwritten. When the copy lacks one, the restore says which and points to **Fetch certificate**.
+- fix: **saving the fleet starts collecting straight away.** The fleet form and `/fleet/reload` loaded the nodes but left starting the fleet collector to the `nodes.json` watcher, up to 30 seconds later on a toolkit that had no fleet yet.
+- fix: **`/health` answers again.** Its route decorator was lost in v1.0.10, so the health check returned 404, while a lightweight node still points to it. It answers without credentials and reports only status, time and whether the node is connected; the node's error text, which can carry internal addresses, is left out.
+- docs: `docs/REFERENCE.md` describes the fleet safety copy.
+
 ## v1.4.65
 
 - security: **the dashboard locks out an address after repeated wrong logins.** Without fail2ban there was no limit: an address could keep guessing, slowed only by scrypt. After 5 wrong logins within 15 minutes the address gets `429` with the time left, for 15 minutes, and its passwords are not checked meanwhile. A correct login resets the count; opening the dashboard before logging in is not counted; logins that need no password (this machine, and the LAN in `toolkit_mode: local`) never are. The login screen shows the message instead of "Is the toolkit running?". Change it with `auth_lockout_attempts` and `auth_lockout_minutes` in `config/setup.json`; 0 attempts switches it off. fail2ban stays available on top of it, for a ban in the firewall that survives restarts.

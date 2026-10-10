@@ -212,6 +212,7 @@ elif [ -f "$_FLEET_COPY" ]; then
         echo -e "  ${DIM}    This dashboard will start as a single node. To get the fleet back:${NC}"
         echo -e "  ${DIM}    open the dashboard and press \"Restore fleet\", or run:${NC}"
         echo -e "  ${DIM}    cp $_FLEET_COPY $TOOLKIT_DIR/config/nodes.json${NC}"
+        echo -e "  ${DIM}    (Restore fleet also puts back the certificates pinned for https:// nodes)${NC}"
     fi
 fi
 

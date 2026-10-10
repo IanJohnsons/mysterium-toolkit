@@ -6969,7 +6969,11 @@ const FleetRestoreBanner = ({ restore, backendUrl, authHeaders }) => {
       const resp = await fetch(backendUrl + '/fleet/restore', { method: 'POST', headers: authHeaders || {} });
       const data = await resp.json().catch(() => ({}));
       if (resp.ok && data.success) {
-        setStatus('✓ Fleet restored — ' + data.nodes + ' node(s). The fleet view appears within a few seconds.');
+        const missing = (data.certs_missing || []).length;
+        setStatus('✓ Fleet restored — ' + data.nodes + ' node(s)'
+          + (data.certs_restored ? ', ' + data.certs_restored + ' pinned certificate(s)' : '')
+          + '. The fleet view appears within a few seconds.'
+          + (missing ? ' ' + missing + ' pinned certificate(s) were not in the copy — use Fetch certificate in the fleet form for those nodes.' : ''));
       } else {
         setStatus('✗ ' + (data.error || ('HTTP ' + resp.status)));
         setBusy(false);

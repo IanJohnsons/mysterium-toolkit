@@ -1195,6 +1195,21 @@ print(sum(1 for x in n if isinstance(x, str) or (isinstance(x, dict) and (x.get(
                     chmod 600 "$TOOLKIT_DIR/config/nodes.json" 2>/dev/null || true
                     chown "$_FLEET_OWNER:" "$TOOLKIT_DIR/config/nodes.json" 2>/dev/null || true
                     echo -e "  ${GREEN}✓ Fleet restored → config/nodes.json ($_FLEET_COPY_N node(s))${NC}"
+                    # v1.4.66: the certificates pinned for https:// nodes are kept
+                    # next to the copy; put back any that are missing.
+                    _FLEET_PEERS="$(dirname "$_FLEET_COPY")/peers"
+                    if [ -d "$_FLEET_PEERS" ]; then
+                        _peer_n=0
+                        mkdir -p "$TOOLKIT_DIR/config/tls/peers"
+                        for _pem in "$_FLEET_PEERS"/*.pem; do
+                            [ -f "$_pem" ] || continue
+                            _dst="$TOOLKIT_DIR/config/tls/peers/$(basename "$_pem")"
+                            [ -e "$_dst" ] && continue
+                            cp "$_pem" "$_dst" && chmod 600 "$_dst" && _peer_n=$((_peer_n + 1))
+                        done
+                        chown -R "$_FLEET_OWNER:" "$TOOLKIT_DIR/config/tls" 2>/dev/null || true
+                        if [ "$_peer_n" -gt 0 ]; then echo -e "  ${GREEN}✓ $_peer_n pinned certificate(s) restored → config/tls/peers/${NC}"; fi
+                    fi
                 else
                     echo -e "  ${RED}✗ Could not copy the fleet back — run: cp $_FLEET_COPY $TOOLKIT_DIR/config/nodes.json${NC}"
                 fi
