@@ -1,5 +1,5 @@
 #!/bin/bash
-# Mysterium Node Toolkit — privileged helper (v1.4.60)
+# Mysterium Node Toolkit — privileged helper (v1.4.60; the only sudo route since v1.4.64)
 #
 # Every change the toolkit makes as root goes through this one script, with a
 # closed list of actions. Each action validates its arguments and builds any file
@@ -10,8 +10,10 @@
 # paths and `systemctl … mysterium-*`. A `*` in a sudoers argument also matches
 # "/", ".." and spaces, so `tee /etc/sysctl.d/*` wrote anywhere and
 # `systemctl start mysterium-*` started any unit. Together that was passwordless
-# root for the toolkit user. This helper is what the sudoers entry will name
-# instead (v1.4.61 removes the old grants; v1.4.60 adds this alongside them).
+# root for the toolkit user. v1.4.60 added this helper alongside the old grants;
+# v1.4.64 removed them. Apart from this helper, sudoers now names only update.sh
+# and bin/node_update.sh. Reads that need root (firewall listings, fail2ban
+# status, WireGuard handshakes) are read actions below and are not logged.
 #
 # Installed by setup.sh / update.sh as root to
 #   /usr/local/lib/mysterium-toolkit/toolkit-helper   (root:root 0755)
@@ -33,6 +35,7 @@ ACTION="${1:-}"
 log() { command -v logger >/dev/null 2>&1 && logger -t mysterium-toolkit-helper -- "$*" 2>/dev/null; return 0; }
 refuse() { echo "refused: $*" >&2; log "refused: $ACTION — $*"; exit "$EX_REFUSED"; }
 done_rc() { local rc=$1; log "$ACTION $ARGS_FOR_LOG → rc=$rc"; exit "$rc"; }
+quiet_rc() { exit "$1"; }   # read actions: polled, nothing changed, nothing to log
 ARGS_FOR_LOG="$*"
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -398,6 +401,18 @@ f2b)                                     # reload|start|stop
     [ $# -eq 1 ] && in_list "$1" reload start stop || refuse "usage: f2b reload|start|stop"
     fail2ban-client "$1"; done_rc $? ;;
 
+# Read-only. `fail2ban-client` itself is no longer in sudoers: its `set` can
+# name an action, and fail2ban runs actions as root.
+f2b-read)                                # ping | status [JAIL] | get JAIL maxretry|bantime|findtime
+    case "${1:-}:$#" in
+        ping:1|status:1) ;;
+        status:2) [[ "$2" =~ ^[A-Za-z0-9_-]{1,64}$ ]] || refuse "jail: $2" ;;
+        get:3) [[ "$2" =~ ^[A-Za-z0-9_-]{1,64}$ ]] || refuse "jail: $2"
+               in_list "$3" maxretry bantime findtime || refuse "setting: $3" ;;
+        *) refuse "usage: f2b-read ping | status [JAIL] | get JAIL SETTING" ;;
+    esac
+    fail2ban-client "$@"; quiet_rc $? ;;
+
 # ── Firewall ─────────────────────────────────────────────────────────────────
 # ufw: "<allow|deny|reject|limit> [from] SPEC", "delete <that>", "delete N",
 # each optionally preceded by --force. No other option is passed through.
@@ -410,6 +425,20 @@ ufw)
     else refuse "ufw rule not allowed: $*"; fi
     ufw "$@"; done_rc $? ;;
 
+ufw-status)                              # [verbose] — read-only
+    { [ $# -eq 0 ] || { [ $# -eq 1 ] && [ "$1" = verbose ]; }; } || refuse "usage: ufw-status [verbose]"
+    ufw status "$@"; quiet_rc $? ;;
+
+nft-list)                                # read-only
+    [ $# -eq 0 ] || refuse "usage: nft-list"
+    nft list ruleset; quiet_rc $? ;;
+
+# Latest handshake per peer. Not `wg show*`: that also matched `wg showconf`,
+# which prints the node's private keys.
+wg-handshakes)
+    [ $# -eq 0 ] || refuse "usage: wg-handshakes"
+    wg show all latest-handshakes; quiet_rc $? ;;
+
 # iptables: any table operation the dashboard performs, but never --modprobe,
 # which makes iptables execute a program of the caller's choosing.
 ipt)                                     # BINARY ARGS...
@@ -420,39 +449,19 @@ ipt)                                     # BINARY ARGS...
         [[ "$a" =~ ^[A-Za-z0-9_.:/,!=-]{1,64}$ ]] || refuse "argument: $a"
         [[ "$a" == --modprobe* || "$a" == -M ]] && refuse "argument: $a"
     done
+    # A listing changes nothing and is polled by the dashboard: run it unlogged.
+    writes=0
+    for a in "$@"; do
+        case "$a" in
+            -A|-I|-D|-R|-F|-Z|-N|-X|-P|-E|--append|--insert|--delete|--replace|--flush|--zero|\
+            --new-chain|--delete-chain|--policy|--rename-chain) writes=1 ;;
+        esac
+    done
+    if [ "$writes" = 0 ]; then "$bin" "$@"; quiet_rc $?; fi
     "$bin" "$@"; done_rc $? ;;
 
-# ── Node configuration file ──────────────────────────────────────────────────
-# Fallback for when `myst config set wireguard.access-policies` fails: edits the
-# first node config file that exists. remove = drop the key; set VALUE = drop it
-# and write it under [wireguard].
-node-access-policy)                      # remove | set "" | set mysterium
-    case "${1:-}:$#" in
-        remove:1) value="" ;;
-        set:2) in_list "$2" "" mysterium || refuse "policy not allowed: $2"; value="$2" ;;
-        *) refuse "usage: node-access-policy remove | set \"\"|mysterium" ;;
-    esac
-    cfg=""
-    for c in /etc/mysterium-node/config.toml /etc/mysterium-node/config-mainnet.toml; do
-        [ -f "$c" ] && { cfg="$c"; break; }
-    done
-    [ -n "$cfg" ] || { echo "no node config file" >&2; done_rc 1; }
-    stripped="$(sed -E 's/^[[:space:]]*access-policies[[:space:]]*=.*$//' "$cfg")"
-    if [ "$1" = remove ]; then
-        printf '%s\n' "$stripped" | atomic_write "$cfg" 0644; done_rc $?
-    fi
-    if printf '%s\n' "$stripped" | grep -qF '[wireguard]'; then
-        printf '%s\n' "$stripped" | awk -v v="$value" '
-            !done && index($0, "[wireguard]") { print; print "  access-policies = \"" v "\""; done=1; next } { print }' \
-            | atomic_write "$cfg" 0644
-    else
-        { printf '%s\n' "$stripped"; printf '\n[wireguard]\n  access-policies = "%s"\n' "$value"; } \
-            | atomic_write "$cfg" 0644
-    fi
-    done_rc $? ;;
-
 version)
-    echo "toolkit-helper 1.4.60"; exit 0 ;;
+    echo "toolkit-helper 1.4.64"; exit 0 ;;
 
 *)
     refuse "unknown action: ${ACTION:-<none>}" ;;

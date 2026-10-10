@@ -164,11 +164,8 @@ def _sysctl_get(key):
 
 
 def _sysctl_set(key, value):
-    """Set a sysctl value through the helper; the old sudo and direct calls are
-    the fallback until v1.4.61."""
-    rc, _, _ = _priv.run('sysctl-set', key, value,
-                         legacy=[['sudo', '-n', 'sysctl', '-w', f'{key}={value}'],
-                                 ['sysctl', '-w', f'{key}={value}']])
+    """Set a sysctl value through the helper."""
+    rc, _, _ = _priv.run('sysctl-set', key, value)
     return rc == 0
 
 
@@ -186,8 +183,7 @@ def _write_file(path, value):
         Path(path).write_text(str(value))
         return True
     except PermissionError:
-        rc, _, _ = _priv.run('sys-write', path, value,
-                             legacy=[['sudo', '-n', 'tee', path]], input_data=str(value) + '\n')
+        rc, _, _ = _priv.run('sys-write', path, value)
         return rc == 0
     except Exception:
         return False
@@ -224,20 +220,11 @@ def _install_package(package_name):
     if not mgr:
         return False, 'No supported package manager found'
 
-    install_cmds = {
-        'apt': ['sudo', '-n', 'apt-get', 'install', '-y', package_name],
-        'dnf': ['sudo', '-n', 'dnf', 'install', '-y', package_name],
-        'yum': ['sudo', '-n', 'yum', 'install', '-y', package_name],
-        'pacman': ['sudo', '-n', 'pacman', '-S', '--noconfirm', package_name],
-        'apk': ['sudo', '-n', 'apk', 'add', package_name],
-        'zypper': ['sudo', '-n', 'zypper', 'install', '-y', package_name],
-    }
-
-    cmd = install_cmds.get(mgr)
-    if not cmd:
+    # The helper runs the install itself (pkg-install), with its own list of names.
+    if mgr not in ('apt', 'dnf', 'yum', 'pacman', 'apk', 'zypper'):
         return False, f'Unsupported package manager: {mgr}'
 
-    rc, out, err = _priv.run('pkg-install', package_name, legacy=[cmd], timeout=120)
+    rc, out, err = _priv.run('pkg-install', package_name, timeout=120)
     if rc == 0:
         return True, f'Installed {package_name} via {mgr}'
     else:
@@ -716,10 +703,8 @@ class CpuLoadBalance:
 
         if not irqb_running:
             # Enable and start
-            _priv.run('systemctl', 'enable', 'irqbalance',
-                      legacy=[['sudo', '-n', 'systemctl', 'enable', 'irqbalance']])
-            rc, _, err = _priv.run('systemctl', 'start', 'irqbalance',
-                                   legacy=[['sudo', '-n', 'systemctl', 'start', 'irqbalance']])
+            _priv.run('systemctl', 'enable', 'irqbalance')
+            rc, _, err = _priv.run('systemctl', 'start', 'irqbalance')
             actions.append({
                 'action': 'Start irqbalance',
                 'success': rc == 0,
@@ -1198,8 +1183,7 @@ class ServiceWatchdog:
                               f'first, or leave the unit disabled.'),
                 })
                 return {'name': 'service', 'actions': actions, 'success': False}
-            rc, _, err = _priv.run('systemctl', 'restart', 'mysterium-node',
-                                   legacy=[['sudo', '-n', 'systemctl', 'restart', 'mysterium-node']])
+            rc, _, err = _priv.run('systemctl', 'restart', 'mysterium-node')
             actions.append({
                 'action': 'Restart mysterium-node — this ends any session in progress and the '
                           'node rebuilds its quality score afterwards',
@@ -1594,8 +1578,7 @@ class NicCoalescing:
 
         if adaptive_rx and adaptive_rx != 'on':
             # Test if adaptive-rx is supported before adding it
-            rc_test, _, _ = _priv.run('ethtool-coalesce', iface, 'adaptive-rx', 'on',
-                                      legacy=[['sudo', '-n', 'ethtool', '-C', iface, 'adaptive-rx', 'on']])
+            rc_test, _, _ = _priv.run('ethtool-coalesce', iface, 'adaptive-rx', 'on')
             if rc_test == 0:
                 # Already applied — record it, don't double-add
                 actions.append({'action': f'adaptive-rx → on on {iface}', 'success': True})
@@ -1603,8 +1586,7 @@ class NicCoalescing:
             # If rc_test != 0, NIC doesn't support adaptive — skip silently
 
         if coalesce_args:
-            rc, _, err = _priv.run('ethtool-coalesce', iface, *coalesce_args,
-                                   legacy=[['sudo', '-n', 'ethtool', '-C', iface] + coalesce_args])
+            rc, _, err = _priv.run('ethtool-coalesce', iface, *coalesce_args)
             if rc == 0:
                 changes = []
                 for i in range(0, len(coalesce_args), 2):
@@ -1616,9 +1598,7 @@ class NicCoalescing:
             else:
                 # Try rx-usecs alone as fallback (most compatible)
                 rc2, _, err2 = _priv.run(
-                    'ethtool-coalesce', iface, 'rx-usecs', NicCoalescing.TARGET_RX_USECS,
-                    legacy=[['sudo', '-n', 'ethtool', '-C', iface,
-                             'rx-usecs', str(NicCoalescing.TARGET_RX_USECS)]])
+                    'ethtool-coalesce', iface, 'rx-usecs', NicCoalescing.TARGET_RX_USECS)
                 actions.append({
                     'action': f'rx-usecs → {NicCoalescing.TARGET_RX_USECS}µs on {iface} (tx-usecs/adaptive not supported)',
                     'success': rc2 == 0,
@@ -1669,13 +1649,13 @@ class FirewallBackend:
     @staticmethod
     def _count_rules(binary):
         """Count actual rules (non-empty chains) in a specific iptables backend."""
-        rc, out, _ = _run(['sudo', '-n', binary, '-w', '5', '-L', '-n'])
+        rc, out, _ = _priv.read([binary, '-w', '5', '-L', '-n'])
         if rc != 0:
             # Try without sudo
             rc, out, _ = _run([binary, '-w', '5', '-L', '-n'])
             if rc != 0:
                 # Try without -w (very old iptables)
-                rc, out, _ = _run(['sudo', '-n', binary, '-L', '-n'])
+                rc, out, _ = _priv.read([binary, '-L', '-n'])
                 if rc != 0:
                     return -1  # Can't read
         count = 0
@@ -1689,7 +1669,7 @@ class FirewallBackend:
     @staticmethod
     def _has_legacy_warning():
         """Check if nft backend warns about legacy tables."""
-        rc, out, err = _run(['sudo', '-n', 'iptables-nft', '-L', '-n'])
+        rc, out, err = _priv.read(['iptables-nft', '-L', '-n'])
         combined = (out or '') + (err or '')
         return 'legacy tables present' in combined.lower()
 
@@ -1837,7 +1817,7 @@ class PortReachability:
         read returns nothing rather than guessing — reporting a port as blocked
         when it is not would send someone opening holes they do not need.
         """
-        rc, out, _ = _run(['sudo', '-n', 'ufw', 'status'], timeout=6)
+        rc, out, _ = _priv.read(['ufw', 'status'], timeout=6)
         if rc != 0:
             rc, out, _ = _run(['ufw', 'status'], timeout=6)
         if rc != 0 or 'Status: active' not in out:
@@ -2086,8 +2066,7 @@ class PortReachability:
         # Fix: restart node if API not listening
         api_listening = PortReachability._check_port_listening(PortReachability.TEQUILAPI_PORT)
         if not api_listening:
-            rc, _, err = _priv.run('systemctl', 'restart', 'mysterium-node',
-                                   legacy=[['sudo', '-n', 'systemctl', 'restart', 'mysterium-node']])
+            rc, _, err = _priv.run('systemctl', 'restart', 'mysterium-node')
             actions.append({
                 'action': 'Restart mysterium-node (API not listening) — this ends any session '
                           'in progress and the node rebuilds its quality score afterwards',
@@ -2864,8 +2843,7 @@ class CpuGovernorHealth:
                 changed += 1
 
         if changed == 0 and _is_installed('cpupower'):
-            rc, _, _ = _priv.run('governor-set', actual,
-                                 legacy=[['sudo', '-n', 'cpupower', 'frequency-set', '-g', actual]])
+            rc, _, _ = _priv.run('governor-set', actual)
             if rc == 0:
                 changed = len(governors)
 
@@ -3122,7 +3100,7 @@ class BbrCongestion:
         actions = []
 
         # Load the module
-        rc, _, err = _priv.run('modprobe', 'tcp_bbr', legacy=[['sudo', '-n', 'modprobe', 'tcp_bbr']])
+        rc, _, err = _priv.run('modprobe', 'tcp_bbr')
         if rc == 0:
             actions.append({'action': 'modprobe tcp_bbr', 'success': True})
         else:
@@ -3416,8 +3394,7 @@ class NicChecksumOffload:
         failing_now = new_errors > 0 or (share is not None and share > 1e-5)
 
         if errors > 0 and rx_on and failing_now:
-            rc, _, err = _priv.run('ethtool-rxcsum', iface, 'off',
-                                   legacy=[['sudo', '-n', 'ethtool', '-K', iface, 'rx', 'off']])
+            rc, _, err = _priv.run('ethtool-rxcsum', iface, 'off')
             if rc == 0:
                 actions.append({
                     'action': f'ethtool -K {iface} rx off — {errors} hardware checksum errors, '
@@ -3539,11 +3516,9 @@ class NatChainHealth:
         binaries = [NatChainHealth.NODE_IPTABLES, 'iptables']
         last_err = ''
         for binary in binaries:
-            for cmd in (
-                ['sudo', '-n', binary, '-w', '2', '-t', 'nat', '-L', 'MYST', '-n'],
-                [binary, '-w', '2', '-t', 'nat', '-L', 'MYST', '-n'],
-            ):
-                rc, out, err = _run(cmd, timeout=6)
+            args = [binary, '-w', '2', '-t', 'nat', '-L', 'MYST', '-n']
+            for as_root in (True, False):
+                rc, out, err = _priv.read(args, timeout=6) if as_root else _run(args, timeout=6)
                 if rc == 0:
                     return 'present', out
                 blob = f'{out} {err}'.lower()
@@ -3848,15 +3823,15 @@ RPS_SCRIPT_FILE = '/usr/local/bin/mysterium-rps-setup.sh'
 
 
 def _read_sysctl_persist_lines():
-    """The sysctl persist file as lines. It is world-readable; sudo cat is
-    only the fallback for a host where it is not (v1.4.60)."""
+    """The sysctl persist file as lines. The helper writes it world-readable
+    (0644), so no sudo is needed; v1.4.64 removed the `sudo cat` fallback."""
     try:
         return Path(SYSCTL_PERSIST_FILE).read_text().splitlines()
     except FileNotFoundError:
         return []
-    except Exception:
-        rc, out, _ = _run(['sudo', '-n', 'cat', SYSCTL_PERSIST_FILE])
-        return out.splitlines() if rc == 0 and out else []
+    except Exception as e:
+        logger.warning(f'Could not read {SYSCTL_PERSIST_FILE}: {e}')
+        return []
 
 
 def _sysctl_pairs(lines):
@@ -3875,7 +3850,7 @@ def _remove_paths(paths):
     done = {}
     for path in paths:
         if Path(path).exists():
-            rc, _, err = _priv.run('remove', path, legacy=[['sudo', '-n', 'rm', '-f', path]])
+            rc, _, err = _priv.run('remove', path)
             done[path] = (rc, err)
     return done
 
@@ -3883,32 +3858,20 @@ def _remove_paths(paths):
 def _systemctl(action, unit):
     """systemctl through the helper. action: start, stop, restart, enable,
     disable, enable-now, disable-now."""
-    old = {'enable-now': ['enable', '--now'], 'disable-now': ['disable', '--now']}.get(action, [action])
-    return _priv.run('systemctl', action, unit,
-                     legacy=[['sudo', '-n', 'systemctl'] + old + [unit]])
+    return _priv.run('systemctl', action, unit)
 
 
 def _daemon_reload():
-    return _priv.run('daemon-reload', legacy=[['sudo', '-n', 'systemctl', 'daemon-reload']])
+    return _priv.run('daemon-reload')
 
 
 def _module_persist(module):
     """Load a module at boot: modules-load.d, or /etc/modules where that does not exist."""
-    def _old():
-        if Path('/etc/modules-load.d').exists():
-            return _run(['sudo', '-n', 'tee', f'/etc/modules-load.d/{module}.conf'],
-                        input_data=f'{module}\n')
-        return _run(['sudo', '-n', 'bash', '-c',
-                     f'grep -q {module} /etc/modules 2>/dev/null || echo {module} >> /etc/modules'])
-    return _priv.run('module-persist', module, legacy=_old)
+    return _priv.run('module-persist', module)
 
 
 def _module_unpersist(module):
-    def _old():
-        _run(['sudo', '-n', 'rm', '-f', f'/etc/modules-load.d/{module}.conf'])
-        return _run(['sudo', '-n', 'bash', '-c',
-                     f"sed -i '/^{module}$/d' /etc/modules 2>/dev/null || true"])
-    return _priv.run('module-unpersist', module, legacy=_old)
+    return _priv.run('module-unpersist', module)
 
 
 def persist_all():
@@ -3952,14 +3915,9 @@ def persist_all():
         except Exception as e:
             logger.warning(f'Could not write /etc/modules-load.d/nf_conntrack.conf: {e}')
 
-    sysctl_content = '\n'.join(sysctl_lines) + '\n'
-
     try:
-        # The helper builds the file from the key=value pairs; the content
-        # assembled above is only used by the fallback.
-        rc, _, err = _priv.run('sysctl-persist-replace', *_sysctl_pairs(sysctl_lines),
-                               legacy=[['sudo', '-n', 'tee', SYSCTL_PERSIST_FILE]],
-                               input_data=sysctl_content)
+        # The helper builds the file from the key=value pairs.
+        rc, _, err = _priv.run('sysctl-persist-replace', *_sysctl_pairs(sysctl_lines))
         ok = rc == 0
         actions.append({
             'action': f'Wrote {SYSCTL_PERSIST_FILE}',
@@ -4045,11 +4003,8 @@ def persist_one(subsystem_name):
         merged = list(SYSCTL_HEADER)
         for k, v in sorted(existing_map.items()):
             merged.append(f'{k} = {v}')
-        merged_content = '\n'.join(merged) + '\n'
-        # The helper does the same merge itself; merged_content feeds the fallback.
-        rc, _, err = _priv.run('sysctl-persist-set', *_sysctl_pairs(new_lines),
-                               legacy=[['sudo', '-n', 'tee', SYSCTL_PERSIST_FILE]],
-                               input_data=merged_content)
+        # The helper does the same merge itself on the file.
+        rc, _, err = _priv.run('sysctl-persist-set', *_sysctl_pairs(new_lines))
         return rc == 0, err
 
     # ── conntrack ────────────────────────────────────────────
@@ -4117,15 +4072,7 @@ RemainAfterExit=yes
 WantedBy=multi-user.target
 """
 
-            def _old_rps():
-                rc_, out_, err_ = _run(['sudo', '-n', 'tee', RPS_SCRIPT_FILE], input_data=rps_script)
-                if rc_ == 0:
-                    _run(['sudo', '-n', 'chmod', '+x', RPS_SCRIPT_FILE])
-                    if not Path(RPS_SERVICE_FILE).exists():
-                        _run(['sudo', '-n', 'tee', RPS_SERVICE_FILE], input_data=service_unit)
-                return rc_, out_, err_
-
-            rc, _, err = _priv.run('rps-persist', primary, all_mask, rx_usecs, legacy=_old_rps)
+            rc, _, err = _priv.run('rps-persist', primary, all_mask, rx_usecs)
             ok = rc == 0
             label = (f'Persisted NIC coalescing (rx-usecs={rx_usecs}) + RPS → {RPS_SCRIPT_FILE}'
                      if name == 'nic_coalesce' else f'Persisted RPS (mask={all_mask}) → {RPS_SCRIPT_FILE}')
@@ -4158,9 +4105,7 @@ WantedBy=multi-user.target
                     existing = ''
                 if 'ethtool -K' not in existing:
                     new_content = existing.rstrip('\n') + f'\nethtool -K "{iface}" rx off 2>/dev/null\n'
-                    rc, _, err = _priv.run('rps-csum-persist', iface,
-                                           legacy=[['sudo', '-n', 'tee', RPS_SCRIPT_FILE]],
-                                           input_data=new_content)
+                    rc, _, err = _priv.run('rps-csum-persist', iface)
                     actions.append({'action': f'Added ethtool -K rx off to {RPS_SCRIPT_FILE}',
                                     'success': rc == 0, 'error': err if rc != 0 else None})
                 else:
@@ -4169,13 +4114,7 @@ WantedBy=multi-user.target
                 # Create minimal boot script
                 script = f'#!/bin/bash\nethtool -K "{iface}" rx off 2>/dev/null\n'
 
-                def _old_csum():
-                    rc_, out_, err_ = _run(['sudo', '-n', 'tee', RPS_SCRIPT_FILE], input_data=script)
-                    if rc_ == 0:
-                        _run(['sudo', '-n', 'chmod', '+x', RPS_SCRIPT_FILE])
-                    return rc_, out_, err_
-
-                rc, _, err = _priv.run('rps-csum-persist', iface, legacy=_old_csum)
+                rc, _, err = _priv.run('rps-csum-persist', iface)
                 actions.append({'action': f'Created {RPS_SCRIPT_FILE} with csum fix',
                                 'success': rc == 0, 'error': err if rc != 0 else None})
         else:
@@ -4268,20 +4207,14 @@ def unpersist_one(subsystem_name):
             # v1.4.60: the helper drops the keys and removes the file when nothing
             # is left. The old fallback put the whole file between single quotes
             # on a bash command line, which a value containing a quote breaks.
-            def _old_unset():
-                if not has_real_content:
-                    return _run(['sudo', '-n', 'rm', '-f', SYSCTL_PERSIST_FILE])
-                return _run(['sudo', '-n', 'bash', '-c',
-                             f'printf "%s" {chr(39)}{new_content}{chr(39)} > {SYSCTL_PERSIST_FILE}'])
-
-            rc2, _, err = _priv.run('sysctl-persist-unset', *sorted(keys_to_remove), legacy=_old_unset)
+            rc2, _, err = _priv.run('sysctl-persist-unset', *sorted(keys_to_remove))
             if not has_real_content:
                 actions.append({'action': f'Removed empty {SYSCTL_PERSIST_FILE}', 'success': rc2 == 0})
             else:
                 actions.append({'action': f'Removed {removed} key(s) from {SYSCTL_PERSIST_FILE}',
                                 'success': rc2 == 0, 'error': err if rc2 != 0 else None})
             # Reload sysctl so removal takes effect
-            _priv.run('sysctl-reload', legacy=[['sudo', '-n', 'sysctl', '--system']])
+            _priv.run('sysctl-reload')
         except Exception as e:
             actions.append({'action': f'Modify {SYSCTL_PERSIST_FILE}', 'success': False, 'error': str(e)})
 
@@ -4312,9 +4245,7 @@ def unpersist_one(subsystem_name):
     elif name == 'nic_csum':
         # Remove ethtool -K line from boot script
         if Path(RPS_SCRIPT_FILE).exists():
-            rc, _, err = _priv.run('rps-csum-unpersist',
-                                   legacy=[['sudo', '-n', 'bash', '-c',
-                                            f"sed -i '/ethtool -K.*rx off/d' {RPS_SCRIPT_FILE}"]])
+            rc, _, err = _priv.run('rps-csum-unpersist')
             actions.append({'action': f'Removed ethtool -K rx off from {RPS_SCRIPT_FILE}',
                             'success': rc == 0, 'error': err if rc != 0 else None})
         else:
@@ -4322,8 +4253,7 @@ def unpersist_one(subsystem_name):
         # Re-enable rx checksum in live system
         iface = NicChecksumOffload._get_primary_iface()
         if iface:
-            rc, _, _ = _priv.run('ethtool-rxcsum', iface, 'on',
-                                 legacy=[['sudo', '-n', 'ethtool', '-K', iface, 'rx', 'on']])
+            rc, _, _ = _priv.run('ethtool-rxcsum', iface, 'on')
             actions.append({'action': f'ethtool -K {iface} rx on (re-enabled)', 'success': rc == 0})
 
     elif name == 'swap':
@@ -4336,13 +4266,8 @@ def unpersist_one(subsystem_name):
                 lines = f.readlines()
             new_lines = [l for l in lines if sf not in l]
             if len(new_lines) < len(lines):
-                content = ''.join(new_lines)
-                # v1.4.60: the helper rewrites /etc/fstab through a temporary
-                # file. The fallback quotes the whole file on a command line —
-                # one ' in it and /etc/fstab is half written.
-                rc, _, err = _priv.run('fstab-drop-swapfile',
-                                       legacy=[['sudo', '-n', 'bash', '-c',
-                                                f"printf '%s' '{content}' > /etc/fstab"]])
+                # v1.4.60: the helper rewrites /etc/fstab through a temporary file.
+                rc, _, err = _priv.run('fstab-drop-swapfile')
                 actions.append({'action': f'Removed {sf} from /etc/fstab',
                                 'success': rc == 0})
             else:
@@ -4411,7 +4336,7 @@ def unpersist_all():
     actions.append({'action': 'Removed CPU governor + BBR persistence files', 'success': True})
 
     # Reload sysctl defaults
-    rc, _, _ = _priv.run('sysctl-reload', legacy=[['sudo', '-n', 'sysctl', '--system']])
+    rc, _, _ = _priv.run('sysctl-reload')
     actions.append({'action': 'Reloaded system sysctl defaults', 'success': rc == 0})
 
     # Ensure ip_forward stays on

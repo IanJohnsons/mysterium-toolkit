@@ -201,26 +201,19 @@ TequilAPI is on **port 4449**. The `-p 4449:4449` flag exposes it to the host â€
 
 ## Permissions
 
-The backend always runs as your normal user, never as root. During setup, `setup.sh` writes `/etc/sudoers.d/mysterium-toolkit` with narrow passwordless rules. These never expire.
+The backend always runs as your normal user, never as root. Everything the dashboard changes as root goes through one helper, `bin/toolkit-helper.sh`, installed root-owned to `/usr/local/lib/mysterium-toolkit/toolkit-helper`. It has a closed list of actions, checks every argument and builds every file it writes itself; the dashboard passes names and numbers, never a command line, a path or file content. The copy in the repository is not the one sudo runs.
+
+Since v1.4.64, `setup.sh` and `update.sh` write `/etc/sudoers.d/mysterium-toolkit` with three passwordless entries and nothing else:
 
 | Command | Purpose |
 |---------|---------|
-| `sysctl` | Apply kernel network parameters live |
-| `ethtool` | NIC interrupt coalescing and checksum offload |
-| `conntrack` | Read connection tracking table |
-| `tee /etc/sysctl.d/*` | Persist kernel parameters to survive reboot |
-| `tee /etc/modules-load.d/*` | Persist kernel module loading at boot |
-| `tee /sys/module/nf_conntrack/parameters/hashsize` | Set conntrack hash size |
-| `tee /usr/local/bin/*` | Write RPS and governor boot scripts |
-| `tee /etc/systemd/system/mysterium-*.service` | Write systemd service units |
-| `tee /etc/systemd/system/mysterium-*.timer` | Write systemd timer units |
-| `chmod +x /usr/local/bin/mysterium-*` | Make boot scripts executable |
-| `systemctl start/stop/enable/disable mysterium-*` | Node and toolkit service management |
-| `systemctl daemon-reload` | Reload systemd after unit changes |
-| `iptables` / `ip6tables` / `nft` | Read and manage firewall rules |
-| `fail2ban-client` | Read jail status and apply live jail settings |
-| `tee /etc/fail2ban/jail.local` | Write toolkit-managed jail block |
-| `tee /etc/fail2ban/filter.d/*` | Write toolkit filter definitions |
+| `/usr/local/lib/mysterium-toolkit/toolkit-helper` | Health fixes and persistence, firewall and fail2ban changes, node restart, the auto-update timer, and the reads that need root (firewall listings, fail2ban status, WireGuard handshakes) |
+| `<install dir>/update.sh` | Unattended updates through the timer; a manual `./update.sh` re-runs itself through it |
+| `<install dir>/bin/node_update.sh` | Installing a node release from the dashboard |
+
+Earlier versions granted `bash`, `cat`, `tee` on wildcard paths, `systemctl â€¦ mysterium-*`, `fail2ban-client`, `iptables` and more without argument limits. A `*` in sudoers also matches `/`, `..` and spaces, so together that was passwordless root for the toolkit user. All of that is gone.
+
+Both update scripts sit in the install directory, which your user can edit; making them root-owned copies like the helper is planned.
 
 To regenerate after an update: `./update.sh`
 
