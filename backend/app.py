@@ -1371,6 +1371,16 @@ metrics_lock = Lock()
 # a busy Pi held 2.0 GB and stalled every request waiting on the lock.
 metrics_history = deque(maxlen=200)
 SESSION_ITEMS_IN_POLL = 200
+# v1.4.67: what a fleet summary poll leaves out, and how long a node page counts
+# as open after its last poll. Measured with 100 nodes on a test bench: these
+# three lists were 91% of every light poll, and only the node page reads them.
+# The browser polls an open node page every 5 s; 30 s covers a slow phone
+# without keeping the full poll going long after the page was closed.
+SESSION_LISTS_NOT_IN_SUMMARY = ('items', 'active_items', 'observed_active')
+FLEET_DETAIL_WINDOW = 30
+# How long /fleet/node/<id> waits for a node's full poll when its page opens.
+# The browser gives up on that request after 10 s.
+FLEET_DETAIL_WAIT = 4
 last_update_time = time.time()
 node_status = {'connected': False, 'error': None}
 peak_clients = 0  # Persistent peak tracker — highest connected count seen
@@ -7403,6 +7413,16 @@ class MetricsCollector:
 # Per-node metrics for multi-node mode
 _per_node_metrics = {}  # {node_id: {timestamp, status, earnings, sessions, ...}}
 _per_node_lock = Lock()
+# v1.4.67: when each node's page was last polled by a browser (time.time()).
+# A node polled within FLEET_DETAIL_WINDOW gets the full light poll with its
+# session lists; every other node gets the summary poll.
+_fleet_node_viewed = {}
+_fleet_detail_inflight = set()   # node ids with a page-triggered full poll running
+
+
+def _fleet_detail_wanted(node_id):
+    """True while someone has this node's page open."""
+    return time.time() - _fleet_node_viewed.get(node_id, 0) < FLEET_DETAIL_WINDOW
 _fleet_aggregate = {}  # Aggregated view across all nodes
 _fleet_lock = Lock()
 
@@ -7732,13 +7752,16 @@ def _get_node_heavy_data(node_id, toolkit_url, headers, verify=True):
     return cached or dict(_NODE_HEAVY_DEFAULTS)
 
 
-def _collect_single_node(node_entry):
+def _collect_single_node(node_entry, detail=True):
     """Collect metrics for a single remote node.
 
     Three modes:
     1. LOCAL mode: toolkit_url points to this instance → read directly from metrics_cache
     2. PEER mode: node_entry has 'toolkit_url' → fetch from /peer/data (rich data)
     3. TEQUILA mode: fallback via TequilAPI (live only)
+
+    detail=False (v1.4.67) asks a peer for the summary poll, without the session
+    lists. The result carries 'detail': whether the session lists are in it.
     """
     node_id     = node_entry['id']
     label       = node_entry.get('label', node_id)
@@ -7756,6 +7779,9 @@ def _collect_single_node(node_entry):
         'version':   'unknown',
         'error':     None,
         'peer_mode': False,
+        # Local and TequilAPI modes always carry their session lists; the peer
+        # branch below sets this from the answer it got.
+        'detail':    True,
     }
 
     # ── LOCAL MODE: toolkit_url points to this instance ────────────────────────
@@ -7817,13 +7843,18 @@ def _collect_single_node(node_entry):
                 headers['Authorization'] = f'Basic {creds}'
 
             verify = _peer_verify(node_entry)
-            resp = requests.get(f'{toolkit_url}/peer/data?light=1', headers=headers, timeout=10,
+            # v1.4.67: the summary poll unless someone has this node's page open.
+            # A peer older than v1.4.67 ignores 'summary' and sends the full light
+            # poll; its answer then has no 'summary': True and counts as detail.
+            _poll_url = f'{toolkit_url}/peer/data?light=1' + ('' if detail else '&summary=1')
+            resp = requests.get(_poll_url, headers=headers, timeout=10,
                                 verify=verify)
             if resp.status_code == 200:
                 data = resp.json()
                 ns   = data.get('node_status', {})
                 heavy = _get_node_heavy_data(node_id, toolkit_url, headers, verify)
                 result.update({
+                    'detail':           not data.get('summary', False),
                     'peer_mode':        True,
                     'status':           ns.get('status', 'unknown'),
                     'uptime':           ns.get('uptime', '0s'),
@@ -8137,6 +8168,33 @@ def _build_fleet_aggregate():
     return agg
 
 
+def _fleet_poll_node(node_entry, detail):
+    """Poll one fleet node and store the result; returns it, or None on an error.
+
+    Used by the collector for every node each round, and by /fleet/node/<id>
+    when a page opens on a node whose stored data is a summary (v1.4.67)."""
+    try:
+        node_data = _apply_scheme_hint(node_entry, _collect_single_node(node_entry, detail=detail))
+        with _per_node_lock:
+            prev = _per_node_metrics.get(node_entry['id'])
+            # A round that started before the page opened brings a summary; it
+            # must not wipe the session lists the page has just been given.
+            # Keep the previous lists until the next round fetches fresh ones.
+            if (not node_data.get('detail') and prev and prev.get('detail')
+                    and _fleet_detail_wanted(node_entry['id'])
+                    and isinstance(node_data.get('sessions'), dict)
+                    and isinstance(prev.get('sessions'), dict)):
+                kept = {k: prev['sessions'][k] for k in SESSION_LISTS_NOT_IN_SUMMARY
+                        if k in prev['sessions']}
+                node_data['sessions'] = {**node_data['sessions'], **kept}
+                node_data['detail'] = True
+            _per_node_metrics[node_entry['id']] = node_data
+        return node_data
+    except Exception as e:
+        logger.warning(f"Error collecting {node_entry['id']}: {e}")
+        return None
+
+
 def multi_node_background_collector():
     """Background collector for multi-node mode — staggered to avoid bursts.
 
@@ -8151,12 +8209,7 @@ def multi_node_background_collector():
 
     def _poll_one(node_entry):
         # One node per task: a slow or failing node occupies only its own worker.
-        try:
-            node_data = _apply_scheme_hint(node_entry, _collect_single_node(node_entry))
-            with _per_node_lock:
-                _per_node_metrics[node_entry['id']] = node_data
-        except Exception as e:
-            logger.warning(f"Error collecting {node_entry['id']}: {e}")
+        _fleet_poll_node(node_entry, _fleet_detail_wanted(node_entry['id']))
     cycle = 0
     _last_nodes_check = 0.0
     while True:
@@ -10646,13 +10699,43 @@ def get_fleet():
 @app.route('/fleet/node/<node_id>', methods=['GET'])
 @require_auth
 def get_fleet_node(node_id):
-    """Per-node metrics for a specific node in the fleet."""
+    """Per-node metrics for a specific node in the fleet.
+
+    v1.4.67: each call marks the node as viewed, so the collector polls it with
+    its session lists for the next FLEET_DETAIL_WINDOW seconds. When the stored
+    data is still a summary (the page has just opened), the full poll is done
+    right here, waiting at most FLEET_DETAIL_WAIT seconds; a slower node answers
+    with the summary now and the lists on the next page poll."""
     if not MULTI_NODE_MODE:
         return jsonify({'error': 'Multi-node mode not active'}), 404
+    _fleet_node_viewed[node_id] = time.time()
     with _per_node_lock:
         node_data = _per_node_metrics.get(node_id)
     if not node_data:
         return jsonify({'error': f'Node {node_id} not found'}), 404
+    if not node_data.get('detail', True):
+        entry = next((e for e in list(_node_registry) if e.get('id') == node_id), None)
+        with _per_node_lock:
+            # One full poll per node at a time: a slow node must not gain a new
+            # thread on every page poll while the first is still waiting.
+            start = entry is not None and node_id not in _fleet_detail_inflight
+            if start:
+                _fleet_detail_inflight.add(node_id)
+        if start:
+            def _run(e=entry):
+                try:
+                    _fleet_poll_node(e, True)
+                finally:
+                    with _per_node_lock:
+                        _fleet_detail_inflight.discard(node_id)
+            t = Thread(target=_run, daemon=True, name=f'fleet-detail-{node_id}')
+            t.start()
+            t.join(FLEET_DETAIL_WAIT)
+            if t.is_alive():
+                logger.info(f'Fleet: full poll for {node_id} still running after '
+                            f'{FLEET_DETAIL_WAIT}s; serving its summary for now')
+            with _per_node_lock:
+                node_data = _per_node_metrics.get(node_id, node_data)
     return jsonify(copy.deepcopy(node_data)), 200
 
 
@@ -14723,12 +14806,21 @@ def peer_data():
     response only once a day, caching the heavy fields in between. Default behaviour
     (no ?light) is UNCHANGED — existing one-off callers (node test/setup) keep working
     exactly as before.
+
+    ?light=1&summary=1 (v1.4.67): the light answer without the three session lists
+    (sessions.items, active_items, observed_active) — about 90% of the light answer,
+    used only by the node page. A fleet master asks for this for every node nobody
+    is viewing; the counts, earnings and status that the fleet overview and its
+    totals read are all still here. A separate parameter on purpose: a peer older
+    than v1.4.67 ignores 'summary' and answers the plain light poll, as before —
+    a new value for 'light' would read as false there and return the full payload.
     """
     try:
         with metrics_lock:
             cache = copy.deepcopy(metrics_cache)
 
         light = request.args.get('light', '').lower() in ('1', 'true', 'yes')
+        summary = light and request.args.get('summary', '').lower() in ('1', 'true', 'yes')
 
         if light:
             earnings_history, uptime_stats, db_stats, traffic_history, logs = {}, {}, {}, {}, []
@@ -14778,10 +14870,17 @@ def peer_data():
             'lifetime_totals':   sessions_cache.get('lifetime_totals', {}),
             'monitoring_sessions': sessions_cache.get('monitoring_sessions', 0),
         }
+        sessions_out = cache.get('sessions', {})
+        if summary and isinstance(sessions_out, dict):
+            sessions_out = {k: v for k, v in sessions_out.items()
+                            if k not in SESSION_LISTS_NOT_IN_SUMMARY}
 
         return jsonify({
             'peer_mode':        True,
             'light':            light,
+            # v1.4.67: True only when the session lists were left out on request.
+            # The master reads it to know whether this answer can feed a node page.
+            'summary':          summary,
             'version':          cache.get('nodeStatus', {}).get('version', 'unknown'),
             # The toolkit's own version, distinct from 'version' above, which is
             # the Mysterium node's. Without it a master could only compare its
@@ -14794,7 +14893,7 @@ def peer_data():
             'toolkit_update':   _toolkit_update_status(block=False),
             'node_status':      cache.get('nodeStatus', {}),
             'earnings':         cache.get('earnings', {}),
-            'sessions':         cache.get('sessions', {}),
+            'sessions':         sessions_out,
             'services':         cache.get('services', {}),
             'resources':        cache.get('resources', {}),
             'performance':      cache.get('performance', {}),

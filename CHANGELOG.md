@@ -4,6 +4,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.67
+
+- improve: **a fleet master only fetches session lists for the node you are looking at.** Every 10 seconds the master polled each node for its light data, including the three session lists (`items`, `active_items`, `observed_active`) — about 90% of that answer, while only the node page uses them; the fleet overview, its cards and the fleet totals read counts, earnings and status. Each node now gets a summary poll without those lists, and a node whose page was open in the last 30 seconds gets the full poll as before. Opening a node's page fetches its lists straight away. Measured with 100 nodes on a test bench: 22 GB a day into the master became 3.4 GB; from one node, 30 KB per poll became 4 KB. Status, session counts, MYST earnings and the fleet totals update every round, exactly as before. Peer side: `/peer/data?light=1&summary=1`. A node running an older toolkit ignores `summary` and keeps sending the full poll; an older master keeps asking for it.
+- docs: `docs/REFERENCE.md` describes the summary poll.
+
 ## v1.4.66
 
 - fix: **the fleet safety copy includes the pinned certificates.** The copy in `~/.config/mysterium-toolkit/` held `nodes.json` only, while the certificates pinned for https:// nodes live in `config/tls/peers/<id>.pem` inside the install directory. After a reinstall and **Restore fleet**, `nodes.json` pointed at files that no longer existed and those nodes failed on TLS. The certificates are now copied next to the safety copy (`peers/`, mode 600) and put back by Restore fleet and by `setup.sh` wherever they are missing; an existing pin is never overwritten. When the copy lacks one, the restore says which and points to **Fetch certificate**.

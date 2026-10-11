@@ -107,6 +107,8 @@ Hot-reload: edit `nodes.json` while running — changes apply within 30 seconds.
 
 Polling: the master asks all nodes at the same time — ten at once by default, four with `pi_mode`, or set `fleet_poll_workers` in `config/setup.json` — and starts a new round every 10 seconds (`FLEET_POLL_INTERVAL` in the environment, minimum 5). A node that does not answer only holds up its own slot, for the length of its timeout. The fleet cards keep the order of `nodes.json`. The dashboard poll (`/metrics`) carries only the fields the fleet cards show; `GET /fleet` returns every node's full record.
 
+Session lists travel only for nodes someone is looking at (v1.4.67). Each round, a node whose page has been open in the last 30 seconds gets the full poll; every other node gets a summary without its session lists — about a tenth of the size, with the same status, counts and earnings, so the fleet overview and its totals update exactly as before. Opening a node's page fetches its lists straight away. A node running a toolkit older than v1.4.67 does not know the summary and keeps answering with the full poll.
+
 Each node reports its own update status — whether its branch has a newer version — so the **↑ Update** badge on a card always refers to that node's branch.
 
 ### Safety copy of the fleet
