@@ -71,6 +71,32 @@ if [ ! -d ".git" ]; then
     exit 1
 fi
 
+# ── One update at a time (v1.4.70) ────────────────────────────────────────
+# The hourly auto-update and a manual run (or the dashboard's Update button)
+# could run at once: on 12 October 2026 the timer fired at 15:00 while an
+# update was started by hand, and the manual run lost its build files half-way
+# through npm (the other run removes them when it finishes). A second run now
+# stops before touching anything. The lock is taken here, after the sudo
+# re-run at the top (sudo closes open files); a re-run of this script after it
+# updated itself keeps the lock it already holds (_MT_UPDATE_LOCKED). The file
+# is opened read-only, so a root-owned lock file still works for the operator.
+if [ -z "${_MT_UPDATE_LOCKED:-}" ]; then
+    _LOCK_FILE="$TOOLKIT_DIR/logs/update.lock"
+    [ -d "$TOOLKIT_DIR/logs" ] || _as_user mkdir -p "$TOOLKIT_DIR/logs" 2>/dev/null || true
+    [ -e "$_LOCK_FILE" ] || : > "$_LOCK_FILE" 2>/dev/null || true
+    if ! command -v flock >/dev/null 2>&1; then
+        echo -e "  ${YELLOW}⚠ flock not found — running without the one-update-at-a-time lock${NC}"
+    elif ! { exec 9<"$_LOCK_FILE"; } 2>/dev/null; then
+        echo -e "  ${YELLOW}⚠ cannot open $_LOCK_FILE — running without the one-update-at-a-time lock${NC}"
+    elif ! flock -n 9; then
+        echo -e "${RED}✗ Another update is already running — nothing was done${NC}"
+        echo -e "  ${DIM}Wait for it to finish (the hourly auto-update starts on the hour), then check: cat VERSION${NC}"
+        exit 1
+    else
+        export _MT_UPDATE_LOCKED=1
+    fi
+fi
+
 # ── Backup config before git pull ────────────────────────────────────────────
 _CONFIG_BACKUP=""
 if [ -f "config/setup.json" ]; then
@@ -909,7 +935,9 @@ else
     # No subshell around this: $! inside one reports the subshell's own child,
     # not the backend, and start.sh then reads a PID file pointing at a process
     # that is not the dashboard. update.sh already runs from TOOLKIT_DIR.
-    nohup "$_PY_BIN" backend/app.py > "$TOOLKIT_DIR/logs/backend.log" 2>&1 &
+    # 9<&-: the backend must not inherit the update lock (v1.4.70), or it would
+    # hold it for as long as it runs and refuse every later update.
+    nohup "$_PY_BIN" backend/app.py > "$TOOLKIT_DIR/logs/backend.log" 2>&1 9<&- &
     _NEW_PID=$!
     echo "$_NEW_PID" > "$TOOLKIT_DIR/logs/.backend.pid"
     sleep 5

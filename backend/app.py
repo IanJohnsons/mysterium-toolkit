@@ -9475,7 +9475,9 @@ def system_update_status():
         # Return last 30 lines
         recent = '\n'.join(lines[-30:])
         # Detect if done (restart line or error)
-        done = any(x in content for x in ['✓ Backend restarted', 'failed to restart', 'git pull failed', '✓ Done'])
+        # v1.4.70: a run refused because another update holds the lock is done too.
+        done = any(x in content for x in ['✓ Backend restarted', 'failed to restart', 'git pull failed',
+                                          '✓ Done', 'Another update is already running'])
         return jsonify({'log': recent, 'done': done}), 200
     except Exception as e:
         return jsonify({'log': str(e), 'done': True}), 200

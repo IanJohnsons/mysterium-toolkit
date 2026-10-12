@@ -4,6 +4,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.70
+
+- fix: **one update at a time.** The hourly auto-update and an update started by hand or from the dashboard could run at the same moment. On a node that follows `dev` the timer fired while an update had just been started by hand: the manual run lost its build files half-way through `npm install` (exit 254, its log gone), because the other run removes them when it finishes. `update.sh` now takes a lock (`logs/update.lock`) before it touches anything; a second run stops with "Another update is already running — nothing was done". The run that holds the lock keeps it when it restarts itself after updating its own script, and a backend started without systemd does not inherit it. The dashboard's update status treats the refused run as finished.
+
 ## v1.4.69
 
 - fix: **the Consumers tab counts live sessions.** It read the session archive only, where a running session holds 0 tokens and 0 bytes until it closes — the node writes both at the end. The biggest consumer of the moment, 16.55 MYST on a session running for a week, was listed under "No traffic", and no consumer was ever shown as connected. The tab now takes the node's live figures where they are larger, lists live sessions the archive has not stored yet, and marks their consumers "● live". The consumer counts in the dashboard poll do the same.
