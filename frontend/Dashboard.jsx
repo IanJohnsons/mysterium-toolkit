@@ -1174,6 +1174,111 @@ const UpdateWaiter = ({ onBack }) => {
   );
 };
 
+// v1.4.68: which branch this install follows for updates. Only on the machine's
+// own dashboard — the node view of a remote fleet node does not render it, and
+// /toolkit/branch is not in the fleet proxy allow-list. Choosing a branch only
+// records it; the next update (button or hourly auto-update) does the switch.
+// Declared at module scope: a component inside the main function's fleet branch
+// is invisible to the node view (the toggleAutoUpdate / nodeIsBehind trap).
+const BranchSelector = ({ localUrl, authHeaders, onChanged }) => {
+  const [info, setInfo] = useState(null);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState(null);   // { ok, text }
+
+  const load = useCallback(() => {
+    if (!localUrl) return;
+    fetch(`${localUrl}/toolkit/branch`, { headers: authHeaders || {} })
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then(d => setInfo(d))
+      .catch(e => console.warn('/toolkit/branch failed:', e?.message || e));
+  }, [localUrl, authHeaders]);
+
+  useEffect(() => { load(); }, [load]);
+
+  if (!info) return null;
+  const pending = info.wanted && info.wanted !== info.current;
+
+  const choose = async (branch) => {
+    if (busy) return;
+    if (branch === 'dev' && info.current !== 'dev' && !confirm(
+      'dev is the test branch: fixes land there before a release and have not been through a release round. ' +
+      'The next update switches this install to dev and restarts the toolkit. Continue?')) return;
+    setBusy(true);
+    setNote(null);
+    try {
+      const r = await fetch(`${localUrl}/toolkit/branch`, {
+        method: 'POST',
+        headers: { ...(authHeaders || {}), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ branch }),
+      });
+      const d = await r.json().catch(() => ({}));
+      setNote({ ok: !!d.ok, text: d.ok ? d.message : (d.error || `HTTP ${r.status}`) });
+      load();
+      if (d.ok && onChanged) onChanged();
+    } catch (e) {
+      setNote({ ok: false, text: 'Request failed: ' + (e?.message || e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <span className="relative inline-block">
+      <button
+        onClick={() => setOpen(o => !o)}
+        title={pending ? ('Switches to ' + info.wanted + ' at the next update') : 'Branch this install follows for updates'}
+        className={`ml-2 text-xs font-normal rounded px-1.5 py-0.5 border transition ${
+          pending ? 'text-amber-400 border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20'
+                  : 'text-slate-400 border-slate-600 hover:bg-slate-800'
+        }`}
+      >
+        {pending ? ('⎇ ' + info.current + ' → ' + info.wanted) : ('⎇ ' + info.current)}
+      </button>
+      {open && (
+        <div className="absolute right-0 sm:right-auto sm:left-0 top-full mt-1 z-50 w-72 max-w-[calc(100vw-1.5rem)] p-3 rounded-lg border border-slate-700 bg-slate-900 shadow-xl text-left font-normal leading-snug tracking-normal">
+          <div className="text-xs font-semibold text-slate-300 mb-1">Update branch</div>
+          <div className="text-[11px] text-slate-400 mb-2">
+            Runs v{info.running} from {info.current}. The choice takes effect at the next update — the update button, or the hourly auto-update if it is on.
+          </div>
+          <div className="flex gap-2 mb-2">
+            {(info.branches || []).map(b => {
+              const active = (info.wanted || info.current) === b;
+              const v = info.versions?.[b];
+              return (
+                <button
+                  key={b}
+                  disabled={busy || active}
+                  onClick={() => choose(b)}
+                  className={`flex-1 text-xs rounded px-2 py-1.5 border transition disabled:cursor-default ${
+                    active ? 'text-emerald-300 border-emerald-500/40 bg-emerald-500/10'
+                           : 'text-slate-300 border-slate-600 hover:bg-slate-800'
+                  }`}
+                >
+                  {b}{v ? (' · v' + v) : ''}
+                </button>
+              );
+            })}
+          </div>
+          {pending && (
+            <div className="text-[11px] text-amber-400 mb-1">
+              Switches from {info.current} to {info.wanted} at the next update.
+            </div>
+          )}
+          {info.local_changes && info.local_changes.length > 0 && (
+            <div className="text-[11px] text-amber-400 mb-1">
+              Local changes to tracked files block a switch: {info.local_changes.slice(0, 3).join(', ')}
+            </div>
+          )}
+          {note && (
+            <div className={`text-[11px] ${note.ok ? 'text-emerald-400' : 'text-red-400'}`}>{note.text}</div>
+          )}
+        </div>
+      )}
+    </span>
+  );
+};
+
 const MysteriumDashboard = () => {
   // ============ STATE ============
   const [setupMode, setSetupMode] = useState('loading'); // loading | config | connected | error
@@ -1285,6 +1390,10 @@ const MysteriumDashboard = () => {
     } catch { return null; }
   });
   const selectedNodeRef = useRef(null); // keep ref in sync for fetchMetrics
+  // v1.4.68: true while the Tunnels & Sessions panel is open. fetchMetrics asks for
+  // the session lists only then (?lists=0 otherwise); a ref so that opening the
+  // panel does not recreate fetchMetrics and restart the poll interval.
+  const sessionListsWantedRef = useRef(false);
   const nodeAwareUrlRef = useRef('');   // keep ref in sync for fetchArchive (avoids stale closure)
   const archiveSearchRef = useRef('');  // search term read inside fetchArchive (stale-closure safe)
   // healthBackendUrl: returns the correct URL base for health fix/scan/persist requests.
@@ -1616,9 +1725,11 @@ const MysteriumDashboard = () => {
     try {
       // When a remote node is selected, fetch from fleet endpoint and map to metrics shape
       const nodeId = selectedNodeRef.current;
+      // v1.4.68: the session lists are only fetched while the sessions panel is open.
+      const listsQuery = sessionListsWantedRef.current ? '' : '?lists=0';
       const metricsUrl = nodeId
-        ? `${backendUrlRef.current}/fleet/node/${encodeURIComponent(nodeId)}`
-        : `${backendUrlRef.current}/metrics`;
+        ? `${backendUrlRef.current}/fleet/node/${encodeURIComponent(nodeId)}${listsQuery}`
+        : `${backendUrlRef.current}/metrics${listsQuery}`;
 
       const response = await fetch(metricsUrl, {
         headers: authHeaderRef.current,
@@ -1665,12 +1776,25 @@ const MysteriumDashboard = () => {
           _node_toolkit_url: raw.toolkit_url || null,  // remote toolkit URL for fix requests
         } : raw;
 
-        setMetrics(prev => ({
+        setMetrics(prev => {
+          // v1.4.68: an answer without lists that arrives after the panel was opened
+          // (it was requested just before) keeps the lists already shown instead of
+          // blanking them until the next poll.
+          let sessions = data.sessions || prev.sessions;
+          if (data.sessions?.lists_omitted && sessionListsWantedRef.current && prev.sessions) {
+            sessions = {
+              ...data.sessions,
+              items: prev.sessions.items,
+              active_items: prev.sessions.active_items,
+              observed_active: prev.sessions.observed_active,
+            };
+          }
+          return {
           nodeStatus: data.nodeStatus || prev.nodeStatus,
           earnings: data.earnings || prev.earnings,
           bandwidth: data.bandwidth || prev.bandwidth,
           services: data.services || prev.services,
-          sessions: data.sessions || prev.sessions,
+          sessions,
           live_connections: data.live_connections || prev.live_connections,
           clients: data.clients || prev.clients,
           performance: data.performance || prev.performance,
@@ -1686,7 +1810,8 @@ const MysteriumDashboard = () => {
           _node_label: data._node_label || '',
           _node_id: data._node_id || '',
           _node_toolkit_url: data._node_toolkit_url || null,
-        }));
+          };
+        });
         setLastUpdate(new Date());
         // Backend answered: whatever restart was expected is over.
         try { localStorage.removeItem('myst-update-started'); } catch {}
@@ -1806,12 +1931,39 @@ const MysteriumDashboard = () => {
     return () => window.removeEventListener('myst-data-deleted', onDeleted);
   }, []);
 
+  // v1.4.68: no polling while the tab is hidden (a background tab, a phone with the
+  // screen off). Chrome only slows a hidden tab to about once a minute after five
+  // minutes, so a forgotten laptop tab kept polling every 5 s (~15 MB an hour).
+  // When the tab is shown again one poll runs at once, then the interval resumes.
   useEffect(() => {
     if (!isConnected) return;
-    fetchMetrics();
-    const interval = setInterval(fetchMetrics, updateInterval);
-    return () => clearInterval(interval);
+    let interval = null;
+    const start = () => {
+      if (interval) return;
+      fetchMetrics();
+      interval = setInterval(fetchMetrics, updateInterval);
+    };
+    const stop = () => {
+      if (interval) { clearInterval(interval); interval = null; }
+    };
+    const onVisibility = () => { if (document.hidden) stop(); else start(); };
+    if (!document.hidden) start();
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      stop();
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, [isConnected, fetchMetrics, updateInterval]);
+
+  // v1.4.68: the session lists travel only while the Tunnels & Sessions panel is
+  // open. Opening it fetches at once, so the lists appear without waiting for the
+  // next 5 s poll; closing it makes the next poll ask with ?lists=0.
+  useEffect(() => {
+    const wanted = activePanel === 'sessions';
+    const changed = sessionListsWantedRef.current !== wanted;
+    sessionListsWantedRef.current = wanted;
+    if (wanted && changed && isConnected && !document.hidden) fetchMetrics();
+  }, [activePanel, isConnected, fetchMetrics]);
 
   // Fetch toolkit settings (pi mode, hardware detection) once on connect
   useEffect(() => {
@@ -2372,6 +2524,17 @@ const MysteriumDashboard = () => {
                         ↑ v{updateInfo.latest} available
                       </span>
                     )}
+                    {/* v1.4.68: the fleet master's own install — remote nodes choose
+                        their branch on their own dashboard. */}
+                    <BranchSelector
+                      localUrl={backendUrlRef.current}
+                      authHeaders={authHeaderRef.current}
+                      onChanged={() => {
+                        fetch('/api/update-check').then(r => r.ok ? r.json() : null)
+                          .then(d => { if (d) setUpdateInfo(d); })
+                          .catch(e => console.warn('/api/update-check failed:', e?.message || e));
+                      }}
+                    />
                   </div>
                 </div>
               </div>
@@ -2963,7 +3126,12 @@ const MysteriumDashboard = () => {
                       <button
                         onClick={async (e) => {
                           e.stopPropagation();
-                          if (!confirm(`Update this node to v${updateInfo.latest}? The backend restarts and the dashboard reloads.`)) return;
+                          // v1.4.68: a branch switch chosen on this install is installed by this same update.
+                          const switching = !selectedNodeId && updateInfo.switch_pending;
+                          const question = switching
+                            ? 'Switch this install to ' + updateInfo.target_branch + ' (v' + updateInfo.latest + ')? The backend restarts and the dashboard reloads.'
+                            : 'Update this node to v' + updateInfo.latest + '? The backend restarts and the dashboard reloads.';
+                          if (!confirm(question)) return;
                           // Marks the restart as expected, so the waiting screen
                           // may say "update in progress" instead of guessing.
                           try { localStorage.setItem('myst-update-started', String(Date.now())); } catch {}
@@ -2987,7 +3155,9 @@ const MysteriumDashboard = () => {
                         }}
                         title={`Update this node to v${updateInfo.latest}`}
                         className="ml-2 text-xs font-normal text-amber-400 border border-amber-500/40 bg-amber-500/10 rounded px-1.5 py-0.5 hover:bg-amber-500/20 transition cursor-pointer">
-                        ↑ v{updateInfo.latest}
+                        {!selectedNodeId && updateInfo.switch_pending
+                          ? ('↑ ' + updateInfo.target_branch + ' v' + updateInfo.latest)
+                          : ('↑ v' + updateInfo.latest)}
                       </button>
                     );
                   })()}
@@ -3004,6 +3174,17 @@ const MysteriumDashboard = () => {
                     >
                       {autoUpdateBusy ? '⟳' : autoUpdateError ? '⚠ auto-update' : (autoUpdate.enabled ? '⟳ auto-update on' : '⏸ auto-update off')}
                     </button>
+                  )}
+                  {!selectedNodeId && isConnected && (
+                    <BranchSelector
+                      localUrl={backendUrlRef.current}
+                      authHeaders={authHeaderRef.current}
+                      onChanged={() => {
+                        fetch('/api/update-check').then(r => r.ok ? r.json() : null)
+                          .then(d => { if (d) setUpdateInfo(d); })
+                          .catch(e => console.warn('/api/update-check failed:', e?.message || e));
+                      }}
+                    />
                   )}
                 </h1>
                 <div className="flex gap-2 items-center text-xs">

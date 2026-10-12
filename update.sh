@@ -134,6 +134,76 @@ if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]
         fi
     fi
 fi
+# ── Branch chosen on the dashboard (v1.4.68) ──────────────────────────────
+# The dashboard only records the choice (setup.json "update_branch"); the switch
+# happens here, as the operator, and is then installed like any update. Exactly
+# "main" or "dev" is accepted — this script runs as root and the file is written
+# by the toolkit user. A branch behind the running version is not switched to:
+# older code over a database a newer version migrated is a downgrade nobody
+# checks. A fetch or version problem leaves the install on its own branch and the
+# update continues there; a checkout that fails half-way stops the update.
+_WANT_BRANCH=""
+if [ -f "config/setup.json" ]; then
+    _WANT_BRANCH=$(python3 -c 'import json,sys
+try:
+    b = json.load(open(sys.argv[1])).get("update_branch", "")
+except Exception:
+    b = ""
+print(b if b in ("main", "dev") else "")' "config/setup.json" 2>/dev/null) || _WANT_BRANCH=""
+fi
+_CUR_BRANCH=$(_as_user git rev-parse --abbrev-ref HEAD 2>/dev/null) || _CUR_BRANCH=""
+if [ -n "$_WANT_BRANCH" ] && [ "$_WANT_BRANCH" != "$_CUR_BRANCH" ]; then
+    echo -e "  Switching from ${_CUR_BRANCH:-?} to $_WANT_BRANCH (chosen on the dashboard)..."
+    _HERE_VER=$(tr -d '[:space:]' < VERSION 2>/dev/null) || _HERE_VER=""
+    _TARGET_VER=""
+    if _as_user git fetch origin "+refs/heads/$_WANT_BRANCH:refs/remotes/origin/$_WANT_BRANCH" 2>&1; then
+        _TARGET_VER=$(_as_user git show "origin/$_WANT_BRANCH:VERSION" 2>/dev/null | tr -d '[:space:]') || _TARGET_VER=""
+    fi
+    if [ -z "$_TARGET_VER" ]; then
+        echo -e "  ${YELLOW}⚠ not switched: could not fetch $_WANT_BRANCH from GitHub — staying on $_CUR_BRANCH${NC}"
+    elif [ -n "$_HERE_VER" ] && [ "$_HERE_VER" != "$_TARGET_VER" ] && \
+         [ "$(printf '%s\n%s\n' "$_HERE_VER" "$_TARGET_VER" | sort -V | head -1)" = "$_TARGET_VER" ]; then
+        echo -e "  ${YELLOW}⚠ not switched: $_WANT_BRANCH is at v$_TARGET_VER, this install runs v$_HERE_VER${NC}"
+        echo -e "  ${DIM}    The switch happens by itself once $_WANT_BRANCH reaches v$_HERE_VER.${NC}"
+    elif [ -n "$(_as_user git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+        echo -e "  ${YELLOW}⚠ not switched: local changes to tracked files would be overwritten${NC}"
+        echo -e "  ${DIM}    Inspect them first, they may be yours: git status --short${NC}"
+    else
+        # Under set -e an && list whose last command fails ends the script, so
+        # every step is tested inside an if and the outcome checked below.
+        # The upstream is written with git config rather than --track: in a clone
+        # made with --single-branch the fetch refspec does not cover the other
+        # branch, and --track then refuses ("starting point is not a branch").
+        _SW_OK=0
+        if _as_user git show-ref --verify --quiet "refs/heads/$_WANT_BRANCH"; then
+            if _as_user git checkout "$_WANT_BRANCH" 2>&1 \
+               && _as_user git merge --ff-only "origin/$_WANT_BRANCH" 2>&1; then
+                _SW_OK=1
+            fi
+        elif _as_user git checkout -b "$_WANT_BRANCH" "origin/$_WANT_BRANCH" 2>&1; then
+            _SW_OK=1
+        fi
+        if [ $_SW_OK -eq 1 ]; then
+            if ! { _as_user git config "branch.$_WANT_BRANCH.remote" origin \
+                   && _as_user git config "branch.$_WANT_BRANCH.merge" "refs/heads/$_WANT_BRANCH"; }; then
+                _SW_OK=0
+            fi
+        fi
+        if [ $_SW_OK -eq 1 ] && [ "$(_as_user git rev-parse --abbrev-ref HEAD 2>/dev/null || true)" = "$_WANT_BRANCH" ]; then
+            echo -e "  ${GREEN}✓ Now on $_WANT_BRANCH (v$_TARGET_VER)${NC}"
+        else
+            echo -e "${RED}✗ switching to $_WANT_BRANCH failed — see the git output above${NC}"
+            if [ -n "$_CUR_BRANCH" ] && [ "$_CUR_BRANCH" != "HEAD" ]; then
+                if _as_user git checkout "$_CUR_BRANCH" >/dev/null 2>&1; then
+                    echo -e "  ${DIM}    back on $_CUR_BRANCH; nothing was installed${NC}"
+                else
+                    echo -e "  ${RED}    could not return to $_CUR_BRANCH — check: git status${NC}"
+                fi
+            fi
+            exit 1
+        fi
+    fi
+fi
 _PULL_OUT=$(_as_user git pull 2>&1)
 _PULL_RC=$?
 echo "$_PULL_OUT"
@@ -678,6 +748,28 @@ BRANCH=\$(cd "$TOOLKIT_DIR" && git rev-parse --abbrev-ref HEAD 2>/dev/null)
 [ -z "\$BRANCH" ] || [ "\$BRANCH" = "HEAD" ] && BRANCH=main
 LATEST=\$(curl -sf "https://raw.githubusercontent.com/IanJohnsons/mysterium-toolkit/\$BRANCH/VERSION" 2>/dev/null)
 
+# v1.4.68: a branch chosen on the dashboard (setup.json "update_branch") makes this
+# run update.sh even at the same version number — update.sh does the switch. Not
+# while that branch is behind this install: update.sh refuses that switch, and the
+# run would only restart the toolkit every hour for nothing.
+SWITCH=""
+WANT=\$(python3 -c 'import json,sys
+try:
+    b = json.load(open(sys.argv[1])).get("update_branch", "")
+except Exception:
+    b = ""
+print(b if b in ("main", "dev") else "")' "$TOOLKIT_DIR/config/setup.json" 2>/dev/null)
+if [ -n "\$WANT" ] && [ "\$WANT" != "\$BRANCH" ] && [ -n "\$CURRENT" ]; then
+    WLATEST=\$(curl -sf "https://raw.githubusercontent.com/IanJohnsons/mysterium-toolkit/\$WANT/VERSION" 2>/dev/null)
+    if [ -z "\$WLATEST" ]; then
+        echo "auto-update: could not fetch the VERSION for branch \$WANT — no switch this run"
+    elif [ "\$WLATEST" != "\$CURRENT" ] && [ "\$(printf '%s\n%s\n' "\$CURRENT" "\$WLATEST" | sort -V | head -1)" = "\$WLATEST" ]; then
+        echo "auto-update: switch to \$WANT waits until it reaches \$CURRENT (it is at \$WLATEST)"
+    else
+        SWITCH=1
+    fi
+fi
+
 # Everything below reports why it did nothing. This script used to end in a bare
 # exit 0 on every path, so a failed version check and an up-to-date install were
 # indistinguishable: systemd logged "Finished successfully" hourly while the
@@ -686,16 +778,19 @@ if [ -z "\$CURRENT" ]; then
     echo "auto-update: cannot read \$TOOLKIT_DIR/VERSION — skipping"
     exit 0
 fi
-if [ -z "\$LATEST" ]; then
-    echo "auto-update: could not fetch the VERSION for branch \$BRANCH from GitHub — skipping"
-    exit 0
+if [ -n "\$SWITCH" ]; then
+    echo "auto-update: switching \$BRANCH -> \$WANT (\$CURRENT -> \$WLATEST), chosen on the dashboard"
+else
+    if [ -z "\$LATEST" ]; then
+        echo "auto-update: could not fetch the VERSION for branch \$BRANCH from GitHub — skipping"
+        exit 0
+    fi
+    if [ "\$CURRENT" = "\$LATEST" ]; then
+        echo "auto-update: already on \$CURRENT (\$BRANCH)"
+        exit 0
+    fi
+    echo "auto-update: \$CURRENT -> \$LATEST on \$BRANCH"
 fi
-if [ "\$CURRENT" = "\$LATEST" ]; then
-    echo "auto-update: already on \$CURRENT (\$BRANCH)"
-    exit 0
-fi
-
-echo "auto-update: \$CURRENT -> \$LATEST on \$BRANCH"
 if [ "\$(id -u)" -eq 0 ]; then
     exec "$TOOLKIT_DIR/update.sh"
 fi

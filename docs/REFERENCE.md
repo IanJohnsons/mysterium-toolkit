@@ -109,6 +109,8 @@ Polling: the master asks all nodes at the same time — ten at once by default, 
 
 Session lists travel only for nodes someone is looking at (v1.4.67). Each round, a node whose page has been open in the last 30 seconds gets the full poll; every other node gets a summary without its session lists — about a tenth of the size, with the same status, counts and earnings, so the fleet overview and its totals update exactly as before. Opening a node's page fetches its lists straight away. A node running a toolkit older than v1.4.67 does not know the summary and keeps answering with the full poll.
 
+Since v1.4.68 this goes one step further: the session lists are fetched only while the **Tunnels & Sessions** panel is open, on a node's own dashboard and in the fleet. With the panel closed the dashboard asks `/metrics?lists=0` or `/fleet/node/<id>?lists=0`, and a fleet master no longer counts that node as being looked at, so it keeps polling it with the summary. Opening the panel fetches the lists at once. The dashboard also stops polling while its tab is hidden — a background tab, or a phone with the screen off — and polls at once when it is shown again. The CLI and any client that does not send `lists=0` get the full answer as before.
+
 Each node reports its own update status — whether its branch has a newer version — so the **↑ Update** badge on a card always refers to that node's branch.
 
 ### Safety copy of the fleet
@@ -130,6 +132,14 @@ How the update works per install type:
 **Docker requirement:** the container must be started with `--restart=always` or `--restart=unless-stopped` so it restarts automatically after the process exits during update.
 
 **Note:** `./update.sh` handles everything — git pull, pip deps, frontend build, service restart. No outer sudo needed. The script uses `$SUDO` internally for privileged commands. On root installs (VPS) simply run `./update.sh` as root.
+
+### Update branch: main or dev
+
+Every install follows the branch it is checked out on: `main` for releases, `dev` for fixes that have not been through a release round yet. Since v1.4.68 the **⎇** button beside the version in the dashboard header chooses it. The choice is stored in `config/setup.json` (`update_branch`) and nothing else happens at that moment; the next update — the update button, or the hourly auto-update — fetches the branch, checks it out and installs it like any update, restart included. Without a choice an install never changes branch on its own.
+
+- Only `main` and `dev` can be chosen, each on the install's own dashboard. A fleet master cannot change the branch of another node.
+- A branch whose version is lower than what runs now is refused: older code is not installed over data a newer version may already have changed. Going from `dev` back to `main` can therefore be chosen once `main` has reached the same version — after the next release; until then the dashboard says why not. Should the chosen branch fall behind after it was chosen, the update leaves the install where it is and switches once the branch has caught up.
+- Local changes to tracked files block the switch, and the dashboard names them.
 
 ### Advanced: Mass Update via Ansible
 

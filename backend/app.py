@@ -7421,8 +7421,35 @@ _fleet_detail_inflight = set()   # node ids with a page-triggered full poll runn
 
 
 def _fleet_detail_wanted(node_id):
-    """True while someone has this node's page open."""
+    """True while someone has this node's session lists open (v1.4.68: the
+    sessions panel, not just the page)."""
     return time.time() - _fleet_node_viewed.get(node_id, 0) < FLEET_DETAIL_WINDOW
+
+
+def _session_lists_wanted():
+    """v1.4.68: False when the caller sent ?lists=0.
+
+    The dashboard sends it while its Tunnels & Sessions panel is closed: the three
+    session lists were 80-85% of every /metrics and /fleet/node answer and nothing
+    outside that panel reads them. Default is True, so the CLI (which reads
+    observed_active) and any older dashboard get the full answer as before."""
+    return request.args.get('lists', '1').strip().lower() not in ('0', 'false', 'no')
+
+
+def _without_session_lists(payload):
+    """A shallow copy of a /metrics or fleet node payload without the three session
+    lists, marked sessions.lists_omitted so the dashboard can tell 'not sent' from
+    'empty'. Nothing is deep-copied here; the caller copies the result."""
+    if not isinstance(payload, dict):
+        return payload
+    out = dict(payload)
+    ss = out.get('sessions')
+    if isinstance(ss, dict):
+        out['sessions'] = {k: v for k, v in ss.items() if k not in SESSION_LISTS_NOT_IN_SUMMARY}
+        out['sessions']['lists_omitted'] = True
+    return out
+
+
 _fleet_aggregate = {}  # Aggregated view across all nodes
 _fleet_lock = Lock()
 
@@ -8724,21 +8751,57 @@ _TOOLKIT_UPDATE = {'result': None, 'at': 0.0, 'refreshing': False}
 _TOOLKIT_UPDATE_LOCK = Lock()
 
 
-def _toolkit_update_fetch():
-    """Read the VERSION file of the branch this install is on and compare."""
+# v1.4.68: the branches an operator may choose on the dashboard. update.sh and the
+# auto-update wrapper accept exactly these two words and nothing else, because the
+# choice is read from config/setup.json by a script that runs as root.
+UPDATE_BRANCHES = ('main', 'dev')
+
+
+def _wanted_branch():
+    """The branch chosen on this install's dashboard (setup.json 'update_branch'),
+    or None. Read from disk each time: update.sh may have switched meanwhile."""
+    try:
+        b = json.loads(setup_config_path.read_text()).get('update_branch')
+    except Exception:
+        return None
+    return b if b in UPDATE_BRANCHES else None
+
+
+def _branch_version(branch):
+    """VERSION of a branch on GitHub, or None when it cannot be read."""
     import urllib.request as _ur
     url = (f'https://raw.githubusercontent.com/IanJohnsons/mysterium-toolkit/'
-           f'{_current_branch()}/VERSION')
+           f'{branch}/VERSION')
+    req = _ur.Request(url, headers={'User-Agent': 'mysterium-toolkit'})
+    with _ur.urlopen(req, timeout=5) as resp:
+        return resp.read().decode().strip() or None
+
+
+def _toolkit_update_fetch():
+    """Read the VERSION file of the branch this install follows and compare.
+
+    v1.4.68: when a different branch was chosen on the dashboard, that branch is
+    the one compared. The switch is offered as an update even at the same version
+    number (the code differs), but never when the chosen branch is behind what
+    runs now — that would be a downgrade, and nothing checks that older code can
+    read a database a newer version already migrated. update.sh refuses it too."""
+    current = _current_branch()
+    wanted = _wanted_branch()
+    pending = bool(wanted and wanted != current)
+    target = wanted if pending else current
+    base = {'current': APP_VERSION, 'branch': current, 'target_branch': target,
+            'switch_pending': pending, 'switch_blocked': False}
     try:
-        req = _ur.Request(url, headers={'User-Agent': 'mysterium-toolkit'})
-        with _ur.urlopen(req, timeout=5) as resp:
-            latest = resp.read().decode().strip()
+        latest = _branch_version(target)
         newer = _version_newer(latest, APP_VERSION)
-        return {'current': APP_VERSION, 'latest': latest, 'up_to_date': not newer,
-                'update_available': newer, 'branch': _current_branch()}
+        if pending:
+            blocked = _version_newer(APP_VERSION, latest) or not _parse_node_version(latest)
+            return {**base, 'latest': latest, 'switch_blocked': blocked,
+                    'up_to_date': blocked, 'update_available': not blocked}
+        return {**base, 'latest': latest, 'up_to_date': not newer, 'update_available': newer}
     except Exception as e:
-        return {'current': APP_VERSION, 'latest': None, 'up_to_date': True,
-                'update_available': False, 'branch': _current_branch(), 'error': str(e)[:80]}
+        return {**base, 'latest': None, 'up_to_date': True,
+                'update_available': False, 'error': str(e)[:80]}
 
 
 def _toolkit_update_status(block=True):
@@ -8780,6 +8843,120 @@ def check_for_update():
     to disable the auto-update timer.
     """
     return jsonify(_toolkit_update_status()), 200
+
+
+_BRANCH_VERSIONS = {'result': None, 'at': 0.0}
+
+
+def _tracked_changes():
+    """Files with local changes git tracks (they would block a checkout), or None
+    when git could not be asked."""
+    try:
+        out = subprocess.run(['git', 'status', '--porcelain', '--untracked-files=no'],
+                             capture_output=True, text=True, timeout=10,
+                             cwd=str(Path(__file__).resolve().parent.parent))
+    except Exception as e:
+        logger.warning(f'toolkit/branch: git status failed: {e}')
+        return None
+    if out.returncode != 0:
+        logger.warning(f'toolkit/branch: git status exit {out.returncode}: {out.stderr.strip()[:120]}')
+        return None
+    return [ln[3:] for ln in out.stdout.splitlines() if ln.strip()]
+
+
+@app.route('/toolkit/branch', methods=['GET', 'POST'])
+@require_auth
+def toolkit_branch():
+    """The branch this install follows for updates (v1.4.68).
+
+    GET: the branch checked out now, the one chosen (if any), and the VERSION of
+    each choosable branch on GitHub (cached 5 minutes).
+
+    POST {"branch": "main"|"dev"}: records the choice in setup.json and changes
+    nothing else. The switch itself happens in update.sh, at the next update (the
+    Update button or the hourly timer): it fetches the branch, checks it out as the
+    operator and installs it like any update. A git checkout from here would change
+    the VERSION file under a running process, and the timer compares that file —
+    it would then report "already on" and never install the code that is on disk.
+
+    Refused: a branch behind the running version (a downgrade, see
+    _toolkit_update_fetch), a branch whose VERSION cannot be read, and local
+    changes to tracked files (they would block the checkout).
+
+    Deliberately not in the fleet proxy allow-list: an install's branch is chosen
+    on that install's own dashboard, not by a fleet master."""
+    current = _current_branch()
+    if request.method == 'GET':
+        now = time.time()
+        if _BRANCH_VERSIONS['result'] is None or now - _BRANCH_VERSIONS['at'] > 300:
+            versions = {}
+            for b in UPDATE_BRANCHES:
+                try:
+                    versions[b] = _branch_version(b)
+                except Exception as e:
+                    logger.warning(f'toolkit/branch: VERSION of {b} not readable: {e}')
+                    versions[b] = None
+            _BRANCH_VERSIONS.update(result=versions, at=now)
+        changes = _tracked_changes()
+        return jsonify({'current': current, 'wanted': _wanted_branch(),
+                        'running': APP_VERSION, 'branches': list(UPDATE_BRANCHES),
+                        'versions': dict(_BRANCH_VERSIONS['result']),
+                        'local_changes': changes}), 200
+
+    body = request.get_json(silent=True) or {}
+    branch = str(body.get('branch', '')).strip()
+    if branch not in UPDATE_BRANCHES:
+        return jsonify({'ok': False, 'error': f'branch must be one of: {", ".join(UPDATE_BRANCHES)}'}), 400
+    if branch != current:
+        try:
+            target_version = _branch_version(branch)
+        except Exception as e:
+            return jsonify({'ok': False, 'error': f'Could not read the VERSION of {branch} on GitHub '
+                                                  f'({str(e)[:80]}) — nothing was changed.'}), 503
+        if not _parse_node_version(target_version):
+            return jsonify({'ok': False, 'error': f'The VERSION of {branch} is not a version number '
+                                                  f'({target_version!r}) — nothing was changed.'}), 503
+        if _version_newer(APP_VERSION, target_version):
+            return jsonify({'ok': False, 'error': (
+                f'{branch} is at v{target_version} and this install runs v{APP_VERSION}. '
+                f'Switching would install older code over data a newer version may already '
+                f'have changed. Choose {branch} again once it reaches v{APP_VERSION}.')}), 409
+        changes = _tracked_changes()
+        if changes is None:
+            return jsonify({'ok': False, 'error': 'git status could not be read in the install '
+                                                  'directory — nothing was changed.'}), 500
+        if changes:
+            return jsonify({'ok': False, 'error': (
+                'Local changes to tracked files would block the switch: '
+                + ', '.join(changes[:5]) + (' …' if len(changes) > 5 else '')
+                + '. Inspect them with git status --short.')}), 409
+
+    def _set(d):
+        if branch == current:
+            # Back to the branch already checked out: no switch is pending.
+            if 'update_branch' not in d:
+                return False
+            d.pop('update_branch', None)
+        else:
+            if d.get('update_branch') == branch:
+                return False
+            d['update_branch'] = branch
+    try:
+        _update_setup_json(_set)
+    except Exception as e:
+        logger.error(f'toolkit/branch: could not write setup.json: {e}')
+        return jsonify({'ok': False, 'error': f'Could not save the choice: {e}'}), 500
+    with _TOOLKIT_UPDATE_LOCK:
+        _TOOLKIT_UPDATE['at'] = 0.0          # the next update check reads the new target
+    log_result(f'Update branch: {branch} chosen on the dashboard (checked out: {current})')
+    if branch == current:
+        msg = f'This install stays on {branch}; no switch is pending.'
+    else:
+        msg = (f'Saved. The next update switches this install from {current} to {branch} '
+               f'and restarts the toolkit — use the update button, or leave it to the hourly '
+               f'auto-update if that is on.')
+    return jsonify({'ok': True, 'current': current, 'wanted': None if branch == current else branch,
+                    'message': msg}), 200
 
 
 def _parse_node_version(v):
@@ -10651,9 +10828,14 @@ def get_logs():
 @app.route('/metrics', methods=['GET'])
 @require_auth
 def get_all_metrics():
-    """All metrics — includes fleet aggregate if multi-node mode active"""
+    """All metrics — includes fleet aggregate if multi-node mode active.
+
+    ?lists=0 (v1.4.68): without sessions.items, active_items and observed_active
+    — see _session_lists_wanted."""
+    want_lists = _session_lists_wanted()
     with metrics_lock:
-        data = copy.deepcopy(metrics_cache)
+        data = copy.deepcopy(metrics_cache if want_lists
+                             else _without_session_lists(metrics_cache))
     # Inject fleet data if multi-node mode
     if MULTI_NODE_MODE:
         with _fleet_lock:
@@ -10705,14 +10887,23 @@ def get_fleet_node(node_id):
     its session lists for the next FLEET_DETAIL_WINDOW seconds. When the stored
     data is still a summary (the page has just opened), the full poll is done
     right here, waiting at most FLEET_DETAIL_WAIT seconds; a slower node answers
-    with the summary now and the lists on the next page poll."""
+    with the summary now and the lists on the next page poll.
+
+    v1.4.68: with ?lists=0 (the dashboard's sessions panel is closed) the node is
+    not marked viewed, no full poll is started and the answer leaves the three
+    session lists out. The master then fetches a node's lists from the peer only
+    while someone has them open, not for every open node page."""
     if not MULTI_NODE_MODE:
         return jsonify({'error': 'Multi-node mode not active'}), 404
-    _fleet_node_viewed[node_id] = time.time()
+    want_lists = _session_lists_wanted()
+    if want_lists:
+        _fleet_node_viewed[node_id] = time.time()
     with _per_node_lock:
         node_data = _per_node_metrics.get(node_id)
     if not node_data:
         return jsonify({'error': f'Node {node_id} not found'}), 404
+    if not want_lists:
+        return jsonify(copy.deepcopy(_without_session_lists(node_data))), 200
     if not node_data.get('detail', True):
         entry = next((e for e in list(_node_registry) if e.get('id') == node_id), None)
         with _per_node_lock:
