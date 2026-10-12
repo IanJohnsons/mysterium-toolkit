@@ -4,6 +4,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.69
+
+- fix: **the Consumers tab counts live sessions.** It read the session archive only, where a running session holds 0 tokens and 0 bytes until it closes — the node writes both at the end. The biggest consumer of the moment, 16.55 MYST on a session running for a week, was listed under "No traffic", and no consumer was ever shown as connected. The tab now takes the node's live figures where they are larger, lists live sessions the archive has not stored yet, and marks their consumers "● live". The consumer counts in the dashboard poll do the same.
+- fix: **live earnings are kept in the session archive.** Once a minute the toolkit raises a running session's stored tokens and bytes to what the node holds in memory. A node restart during a long session used to lose its final write, and the archive kept 0 for a session that had earned. Values only go up, and a completed session is never reopened.
+- fix: **update.sh says why a `git pull` failed.** Under `set -e` a failed pull ended the script on the spot, before git's message or any explanation was printed: the update showed "Pulling latest code..." and stopped. It now prints git's output and the cause, and for a copy whose history no longer matches GitHub it gives the one-time command to bring it in line, with checks that stop it when there are local changes.
+- improve: **Public mode changes are logged**, with the mode they replaced, in `logs/backend.log` — also when the change fails.
+- docs: **what Verified costs.** The Public card and the help text said Verified admits "Mysterium-registered consumers". It admits only consumers on Mysterium's own access list, and most paying Public consumers are not on it: measured on one node, Public sessions fell from 35–100 a week to 0–2 within days of switching, paid ones included, while nodes on Open kept theirs. The card now says so.
+
 ## v1.4.68
 
 - improve: **the dashboard stops polling while its tab is hidden.** A tab left open in the background, or a phone with the screen off, kept asking for `/metrics` every 5 seconds — about 15 MB an hour, measured on a real fleet, for a page nobody was looking at. Browsers only slow a hidden tab down to once a minute after five minutes. Polling now pauses while the tab is hidden and runs at once when it is shown again.

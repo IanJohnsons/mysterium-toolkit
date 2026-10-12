@@ -204,8 +204,12 @@ if [ -n "$_WANT_BRANCH" ] && [ "$_WANT_BRANCH" != "$_CUR_BRANCH" ]; then
         fi
     fi
 fi
-_PULL_OUT=$(_as_user git pull 2>&1)
-_PULL_RC=$?
+# v1.4.69: the exit code is caught inside the assignment. Under set -e a bare
+# `_PULL_OUT=$(git pull)` that fails ends the script on that line, so none of the
+# explanations below ever ran and git's own message was never printed — the
+# operator saw "Pulling latest code..." and then nothing.
+_PULL_RC=0
+_PULL_OUT=$(_as_user git pull 2>&1) || _PULL_RC=$?
 echo "$_PULL_OUT"
 if [ $_PULL_RC -ne 0 ]; then
     # v1.4.5: this said "check your network or repo access" for every failure,
@@ -226,6 +230,15 @@ if [ $_PULL_RC -ne 0 ]; then
     elif echo "$_PULL_OUT" | grep -qiE "could not resolve host|network is unreachable|timed out|connection refused"; then
         echo -e "${RED}✗ git pull failed — cannot reach GitHub${NC}"
         echo -e "  ${DIM}    git remote -v${NC}"
+    elif echo "$_PULL_OUT" | grep -qiE "divergent branches|reconcile|refusing to merge unrelated|not possible to fast-forward"; then
+        # v1.4.69: the history on GitHub was rewritten (it was, once, in October
+        # 2026), so this copy and GitHub no longer share their latest commits.
+        _B=$(_as_user git rev-parse --abbrev-ref HEAD 2>/dev/null) || _B="main"
+        echo -e "${RED}✗ git pull failed — this copy and GitHub have different histories${NC}"
+        echo -e "  ${DIM}Nothing was changed and the toolkit keeps running. If you made no changes${NC}"
+        echo -e "  ${DIM}or commits of your own in this copy, bring it in line with GitHub once:${NC}"
+        echo -e "  ${DIM}    git fetch origin && git diff --quiet && git diff --cached --quiet && git reset --hard origin/$_B && ./update.sh${NC}"
+        echo -e "  ${DIM}The checks before the reset stop it when there are local changes.${NC}"
     else
         echo -e "${RED}✗ git pull failed — see the git output above.${NC}"
     fi

@@ -3164,6 +3164,47 @@ class SessionDB:
         return saved
 
     @classmethod
+    def raise_live_totals(cls, live_sessions):
+        """Raise stored tokens and bytes to what the node holds in memory (v1.4.69).
+
+        The node writes a session's tokens and bytes only when it closes cleanly; while
+        it runs they exist in the node's memory (/events/state). A node restart or crash
+        during a multi-day session loses that final write, and the archive kept 0 for a
+        session that had earned — 16.55 MYST on one live session when this was found.
+
+        Only raises: tokens are written when the live value is larger, bytes take the
+        maximum, status and duration are left alone (a late live value can never turn a
+        Completed row back). Only rows that already exist are touched; the regular
+        upsert creates them. Returns the number of rows whose tokens went up, or None
+        when the database could not be written (logged)."""
+        cls.init()
+        raised = 0
+        with cls._lock:
+            try:
+                conn = cls._conn()
+                for s in live_sessions:
+                    sid = s.get('id')
+                    if not sid:
+                        continue
+                    tok = str(int(s.get('tokens') or 0))
+                    if int(tok) > 0:
+                        cur = conn.execute(
+                            "UPDATE sessions SET tokens = ?, tokens_frozen = 1 "
+                            "WHERE id = ? AND CAST(? AS REAL) > CAST(tokens AS REAL)",
+                            (tok, sid, tok))
+                        raised += cur.rowcount
+                    conn.execute(
+                        "UPDATE sessions SET bytes_sent = MAX(bytes_sent, ?), "
+                        "bytes_received = MAX(bytes_received, ?) WHERE id = ?",
+                        (int(s.get('bytes_sent') or 0), int(s.get('bytes_received') or 0), sid))
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                logger.warning(f"SessionDB live totals not stored: {e}")
+                return None
+        return raised
+
+    @classmethod
     def get_stats(cls):
         """Return summary stats for display."""
         cls.init()
@@ -5186,12 +5227,22 @@ class MetricsCollector:
                 if started and started > c['last_seen']:
                     c['last_seen'] = started
 
+            # v1.4.69: a live session's tokens and bytes exist only in the node's
+            # memory until it closes; its archived row holds 0 and 0. The session
+            # list above already carries the live figures — take the larger value,
+            # or a live 16 MYST consumer counted as "no traffic".
+            live_by_id = {s.get('id'): s for s in sessions if s.get('is_active') and s.get('id')}
+
             # Durable, settlement-safe source: every archived session with frozen tokens.
             for row in cm_db_rows:
                 cid = row.get('consumer_id', '') or 'unknown'
                 data_mb = ((row.get('bytes_sent', 0) or 0) + (row.get('bytes_received', 0) or 0)) / (1024 * 1024)
                 # tokens is TEXT since v1.4.4 — convert before arithmetic
                 earn = _tokens_to_myst(row.get('tokens'))
+                _lv = live_by_id.get(row.get('id'))
+                if _lv:
+                    data_mb = max(data_mb, _lv.get('data_total', 0) or 0)
+                    earn = max(earn, _lv.get('earnings_myst', 0) or 0)
                 _cm_add(cid, row.get('consumer_country', '') or '', data_mb, earn,
                         row.get('started_at', '') or '', row.get('service_type', '') or '',
                         row.get('id') in live_active_ids)
@@ -7545,6 +7596,35 @@ def _live_sessions_view(node_urls):
     return out
 
 
+def _live_consumer_sessions():
+    """{session id: live provider session} for the consumer lists (v1.4.69), {} when
+    the live list is unavailable. Internal service types are left out, as everywhere
+    else in the consumer figures."""
+    live = _live_sessions_view(NODE_API_URLS) or {}
+    return {sid: s for sid, s in live.items()
+            if (s.get('direction') or 'Provided') == 'Provided'
+            and (s.get('service_type') or '').lower() not in MetricsCollector.INTERNAL_SERVICE_TYPES}
+
+
+# v1.4.69: how often the live tokens are written into the session archive.
+LIVE_TOKENS_STORE_SECS = 60
+_live_tokens_stored_at = {'t': 0.0}
+
+
+def _store_live_totals(now=None):
+    """Write live tokens and bytes into the archive at most every
+    LIVE_TOKENS_STORE_SECS (see SessionDB.raise_live_totals). Called from the
+    metrics loop, so a quiet node is covered too."""
+    now = time.time() if now is None else now
+    if now - _live_tokens_stored_at['t'] < LIVE_TOKENS_STORE_SECS:
+        return None
+    _live_tokens_stored_at['t'] = now
+    live = _live_consumer_sessions()
+    if not live:
+        return 0
+    return SessionDB.raise_live_totals(list(live.values()))
+
+
 def _live_session_listener(node_url):
     """Keep _LIVE_SESSIONS[node_url] current from the node's /events/state."""
     backoff = 5
@@ -8335,6 +8415,13 @@ def background_collector():
             logger.debug(f"Metrics collected at {metrics['timestamp']}")
         except Exception as e:
             logger.error(f"Collection error: {e}")
+
+        # v1.4.69: keep the archive's tokens up with live sessions (see
+        # SessionDB.raise_live_totals). A failed write is logged there.
+        try:
+            _store_live_totals()
+        except Exception as e:
+            logger.warning(f"Live session totals not stored: {e}")
 
         time.sleep(UPDATE_INTERVAL)
 
@@ -12091,8 +12178,14 @@ def consumers_top():
     only when this endpoint is called, which the frontend does when the Consumers tab
     is opened — the same on-demand pattern used for wallet history.
 
-    Read-only from sessions_history.db. Mirrors the consumer aggregation and probe
-    detection that used to run inline in get_metrics(), so results are identical.
+    Read from sessions_history.db, plus the node's live sessions (v1.4.69). Until
+    v1.4.69 this read the archive only, while its docstring promised results identical
+    to the inline list: a live session's archived row holds 0 tokens and 0 bytes (the
+    node writes them at close), so the biggest consumer of the moment — 16.55 MYST on
+    a 170-hour session — sat under "No traffic", and active_sessions was never set, so
+    every consumer showed as offline. Live tokens and bytes now count when they are
+    larger, a live session not yet archived is added, and each live session marks its
+    consumer as connected.
     """
     try:
         rows = SessionDB.get_range(limit=50000, offset=0)
@@ -12104,7 +12197,7 @@ def consumers_top():
 
     consumer_map = {}
 
-    def _add(cid, country, data_mb, earnings, started, svc):
+    def _add(cid, country, data_mb, earnings, started, svc, is_live=False):
         if cid not in consumer_map:
             consumer_map[cid] = {
                 'consumer_id': cid, 'consumer_country': country or '',
@@ -12114,6 +12207,8 @@ def consumers_top():
             }
         c = consumer_map[cid]
         c['sessions'] += 1
+        if is_live:
+            c['active_sessions'] += 1
         c['total_data_mb'] += data_mb
         c['total_earnings'] += earnings
         if country and not c['consumer_country']:
@@ -12123,13 +12218,34 @@ def consumers_top():
         if started and started > c['last_seen']:
             c['last_seen'] = started
 
+    live = _live_consumer_sessions()
+
+    def _live_figures(ls):
+        try:
+            mb = (int(ls.get('bytes_sent') or 0) + int(ls.get('bytes_received') or 0)) / (1024 * 1024)
+            return mb, int(ls.get('tokens') or 0) / 1e18
+        except (TypeError, ValueError):
+            return 0.0, 0.0
+
     for row in rows:
         cid = row.get('consumer_id', '') or 'unknown'
         data_mb = ((row.get('bytes_sent', 0) or 0) + (row.get('bytes_received', 0) or 0)) / (1024 * 1024)
         # tokens is TEXT since v1.4.4 — convert before arithmetic
         earn = _tokens_to_myst(row.get('tokens'))
+        ls = live.pop(row.get('id'), None)
+        if ls is not None:
+            l_mb, l_earn = _live_figures(ls)
+            data_mb, earn = max(data_mb, l_mb), max(earn, l_earn)
         _add(cid, row.get('consumer_country', '') or '', data_mb, earn,
-             row.get('started_at', '') or '', row.get('service_type', '') or '')
+             row.get('started_at', '') or '', row.get('service_type', '') or '',
+             is_live=ls is not None)
+
+    # Live sessions the archive has not stored yet.
+    for ls in live.values():
+        l_mb, l_earn = _live_figures(ls)
+        _add(ls.get('consumer_id') or 'unknown',
+             ls.get('consumer_country', '') or '', l_mb, l_earn,
+             ls.get('created_at', '') or '', ls.get('service_type', '') or '', is_live=True)
 
     for c in consumer_map.values():
         c['service_types'] = sorted(c.pop('_service_types', set()))
@@ -12641,11 +12757,31 @@ def set_wireguard_mode():
     try:
         headers = MetricsCollector.get_tequilapi_headers()
         for node_url in NODE_API_URLS:
+            # v1.4.69: every change is logged with the mode it replaced. When the
+            # effect of Verified on paying Public consumers had to be measured, no
+            # machine could say when its mode had changed.
+            before = '?'
             try:
-                return _wg_apply_mode(node_url, headers, mode)
+                _svc = _wg_find_service(node_url, headers)
+                _run = bool(_svc) and _svc.get('status') == 'Running'
+                before = _wg_mode_for_ids(_wg_policy_ids(_svc)) if _run else 'off'
+            except Exception:
+                pass
+            try:
+                resp = _wg_apply_mode(node_url, headers, mode)
             except Exception as e:
                 logger.warning(f'wireguard-mode {mode}: {e}')
+                log_result(f'Public mode change {before} -> {mode} failed: {e}')
                 return jsonify({'success': False, 'error': str(e)}), 200
+            try:
+                d = resp[0].get_json(silent=True) or {}
+            except Exception:
+                d = {}
+            if d.get('success'):
+                log_result(f'Public mode: {before} -> {mode} (set from the dashboard)')
+            else:
+                log_result(f'Public mode change {before} -> {mode} failed: {d.get("error", "unknown")}')
+            return resp
         return jsonify({'success': False, 'error': 'No node available'}), 200
     finally:
         _WG_MODE_LOCK.release()
