@@ -26,6 +26,7 @@ import psutil
 import socket
 import logging
 import subprocess
+import threading
 from pathlib import Path
 from datetime import datetime
 
@@ -800,6 +801,41 @@ class ServiceWatchdog:
     MAX_MEMORY_MB = 1024
     MIN_UPTIME_WARN = 300
 
+    # v1.4.70: the journal is read incrementally. The node logs at debug level —
+    # about 16,000 lines an hour on a Pi — and reading everything since the node
+    # started grew with its uptime: 3.9 s after 19 hours, past the 15 s timeout
+    # after about three days. From then on the restart-loop and identity-lock
+    # checks were skipped on exactly the nodes that had run longest. Each scan
+    # now reads only what was written since the previous one and adds it to
+    # counts kept per node start. 'window' is the journalctl --since value the
+    # counts belong to; a new node start resets everything.
+    _journal_lock = threading.Lock()
+    _journal_state = {'window': None, 'until': None, 'starts': 0, 'locked': 0,
+                      'in_use': False, 'counted_from': None}
+
+    @staticmethod
+    def _reset_journal_state():
+        ServiceWatchdog._journal_state = {'window': None, 'until': None, 'starts': 0,
+                                          'locked': 0, 'in_use': False,
+                                          'counted_from': None}
+
+    @staticmethod
+    def _read_node_journal(since, until):
+        """journalctl filtered to the three lines the checks count.
+
+        Returns (ok, out, err, rc). A journalctl built without pattern matching
+        says so and gets the unfiltered read of the same window."""
+        cmd = ['journalctl', '-u', 'mysterium-node', '--since', since,
+               '--until', f'@{until:.6f}', '--no-pager']
+        rc, out, err = _run(
+            cmd + ['--grep', 'authentication needed|Starting Mysterium Node|address already in use'],
+            timeout=15)
+        if rc != 0 and 'pattern matching' in (err or '').lower():
+            rc, out, err = _run(cmd, timeout=15)
+        # journalctl --grep exits 1 with nothing on stderr when no line matched.
+        ok = rc == 0 or (rc == 1 and not (err or '').strip())
+        return ok, out, err, rc
+
     @staticmethod
     def _docker_myst_running():
         """Check if myst is running in a Docker container. Returns (found, container_name)."""
@@ -1013,14 +1049,54 @@ class ServiceWatchdog:
         # read was 55 lines in 4.6 s. A journalctl built without pattern
         # matching says so and gets the unfiltered read; a read that still
         # fails is reported instead of passing as ok.
-        _jcmd = ['journalctl', '-u', 'mysterium-node', '--since', _since, '--no-pager']
-        rc_j, out_j, err_j = _run(
-            _jcmd + ['--grep', 'authentication needed|Starting Mysterium Node|address already in use'],
-            timeout=15)
-        if rc_j != 0 and 'pattern matching' in (err_j or '').lower():
-            rc_j, out_j, err_j = _run(_jcmd, timeout=15)
-        # journalctl --grep exits 1 with nothing on stderr when no line matched.
-        _journal_ok = rc_j == 0 or (rc_j == 1 and not (err_j or '').strip())
+        #
+        # v1.4.70: incremental, see _journal_state. The first scan after a node
+        # start (or a toolkit start) reads from the node start once; if even that
+        # times out it counts from one hour back and says so, rather than skipping
+        # the checks. Every later scan reads only the window since the previous
+        # one. Without a start time the last hour is read each time, as before.
+        _until = time.time()
+        _since_is_start = _since != '1 hour ago'
+        _period = 'since this process began' if _since_is_start else 'in the last hour'
+        starts = locked = 0
+        in_use = False
+        with ServiceWatchdog._journal_lock:
+            st = ServiceWatchdog._journal_state
+            if not _since_is_start:
+                _journal_ok, out_j, err_j, rc_j = ServiceWatchdog._read_node_journal(_since, _until)
+                if _journal_ok:
+                    starts = out_j.count('Starting Mysterium Node')
+                    locked = out_j.count('authentication needed')
+                    in_use = 'address already in use' in out_j
+            else:
+                if st['window'] != _since:
+                    ServiceWatchdog._reset_journal_state()
+                    st = ServiceWatchdog._journal_state
+                    st['window'] = _since
+                if st['until'] is None:
+                    _journal_ok, out_j, err_j, rc_j = ServiceWatchdog._read_node_journal(_since, _until)
+                    if _journal_ok:
+                        st['counted_from'] = 'start'
+                    elif rc_j == -2:
+                        _from = _until - 3600
+                        _journal_ok, out_j, err_j, rc_j = ServiceWatchdog._read_node_journal(
+                            f'@{_from:.6f}', _until)
+                        if _journal_ok:
+                            st['counted_from'] = _from
+                else:
+                    _journal_ok, out_j, err_j, rc_j = ServiceWatchdog._read_node_journal(
+                        f'@{st["until"]:.6f}', _until)
+                # A failed read leaves the state alone: the next scan reads the
+                # same window again instead of losing it.
+                if _journal_ok:
+                    st['starts'] += out_j.count('Starting Mysterium Node')
+                    st['locked'] += out_j.count('authentication needed')
+                    st['in_use'] = st['in_use'] or 'address already in use' in out_j
+                    st['until'] = _until
+                    starts, locked, in_use = st['starts'], st['locked'], st['in_use']
+                    if st['counted_from'] != 'start':
+                        _period = 'since ' + time.strftime(
+                            '%H:%M', time.localtime(st['counted_from']))
         if not _journal_ok:
             if result['status'] == 'ok':
                 result['status'] = 'warning'
@@ -1029,12 +1105,16 @@ class ServiceWatchdog:
                 'detail': ('could not be read (' + ('timeout' if rc_j == -2 else (err_j or f'exit {rc_j}'))[:60]
                            + ') — restart-loop and identity-lock checks skipped'),
             })
-        if _journal_ok and out_j:
-            starts = out_j.count('Starting Mysterium Node')
-            in_use = 'address already in use' in out_j
+        if _journal_ok and _since_is_start and _period != 'since this process began':
+            result['checks'].append({
+                'name': 'Node journal', 'status': 'info',
+                'detail': (f'counted {_period}: the journal since the node started was '
+                           f'too large to read in time'),
+            })
+        if _journal_ok:
             if starts >= 10:
                 result['status'] = 'critical'
-                detail = f'{starts} start attempts since this process began'
+                detail = f'{starts} start attempts {_period}'
                 if in_use:
                     detail += ' — port 4050 already taken'
                 result['checks'].append({
@@ -1053,7 +1133,7 @@ class ServiceWatchdog:
                     result['status'] = 'warning'
                 result['checks'].append({
                     'name': 'Restart loop', 'status': 'warning',
-                    'detail': f'{starts} restarts since this process began',
+                    'detail': f'{starts} restarts {_period}',
                 })
 
             # --- Identity lock ------------------------------------------------
@@ -1062,7 +1142,6 @@ class ServiceWatchdog:
             # quality/latency/bandwidth/uptime all zero. One laptop logged this
             # 281 times since boot while advertising itself as worthless, and
             # nothing reported it. The fix is one line in the env file.
-            locked = out_j.count('authentication needed')
             if locked:
                 # Two things were wrong with the first version of this.
                 #
@@ -1104,7 +1183,8 @@ class ServiceWatchdog:
                 # Nothing on the operator's machine can fix this, the passphrase
                 # least of all. It scales with traffic, which is why a busy node
                 # logs more of them.
-                _detail = (f'{locked}x since startup — originates in the node, '
+                _detail = (f'{locked}x {"since startup" if _period == "since this process began" else _period}'
+                           f' — originates in the node, '
                            f'not in this machine\'s configuration')
                 # v1.4.63: information, not a warning. The text below says no
                 # action is needed on this machine; an amber card and a "1 health
