@@ -4,6 +4,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.71
+
+- fix: **the payment errors card shows the node you are looking at.** It fetched its counts from the dashboard's own backend, so on a fleet master every node's page showed the master's journal: a laptop viewed through the VPS read "1 session ended after Hermes payment errors" — the VPS's single one — while the laptop's own journal held 22. The card now asks the node being viewed, through the fleet proxy (`api/payment-errors` added to its allowlist).
+- fix: **the counts stay current.** The card was read once per page load and the backend kept the result for an hour, so a page left open showed "last 24h" figures from whenever it was opened. The card now re-reads every five minutes while the tab is visible, the backend caches for five minutes, and the card says when it was counted.
+- improve: **one line per kind, with what it means.** "No answer to the first invoice" (`could not send first invoice … p2p send timeout`: the consumer never paid to start) was counted as "another payment error"; it has its own line now, as do "consumer stopped paying" and "Hermes refused the payment" (usually "promise value too low"). Remaining causes are listed by their own text. A line at the top says what all of them are: the node refusing sessions that are not paid for, not a fault. The card is shown in the information colour, and only turns amber when Hermes sent replies the node could not interpret.
+
 ## v1.4.70
 
 - fix: **one update at a time.** The hourly auto-update and an update started by hand or from the dashboard could run at the same moment. On a node that follows `dev` the timer fired while an update had just been started by hand: the manual run lost its build files half-way through `npm install` (exit 254, its log gone), because the other run removes them when it finishes. `update.sh` now takes a lock (`logs/update.lock`) before it touches anything; a second run stops with "Another update is already running — nothing was done". The run that holds the lock keeps it when it restarts itself after updating its own script, and a backend started without systemd does not inherit it. The dashboard's update status treats the refused run as finished.

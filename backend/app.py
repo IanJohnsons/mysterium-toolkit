@@ -7386,11 +7386,36 @@ class MetricsCollector:
     #
     # Read-only and bounded: --since 24h, --grep so journalctl filters instead of
     # Python (a full read of a busy node's journal was 209 MB and 14s), a line
-    # cap, and an hourly cache. Falls back to a bounded plain read where
-    # journalctl was compiled without pattern matching.
+    # cap, and a cache. Falls back to a bounded plain read where journalctl was
+    # compiled without pattern matching.
+    #
+    # v1.4.71: the cache is five minutes, not an hour. With the hourly cache and a
+    # dashboard that fetched the card once per page load, the "last 24h" figures
+    # could be hours old without saying so; the answer now carries counted_at.
     _payment_errors_cache = None
     _payment_errors_last_scan = 0
-    PAYMENT_ERRORS_INTERVAL = 3600
+    PAYMENT_ERRORS_INTERVAL = 300
+
+    # v1.4.71: why a "Payment engine error" line ended the session, in the order
+    # the checks run. The first two are the node refusing a consumer that did not
+    # pay; they never involve Hermes. 'first invoice' used to fall under "other".
+    @staticmethod
+    def _payment_error_kind(line):
+        _l = line.lower()
+        if 'did not get paid' in _l:           # consumer stopped paying a critical invoice
+            return 'unpaid'
+        if 'first invoice' in _l:              # no answer to the first invoice
+            return 'first_invoice'
+        if 'hermes' in _l or 'promise' in _l:  # Hermes refused or failed the promise
+            return 'hermes'
+        return 'other'
+
+    @staticmethod
+    def _payment_error_cause(line):
+        """The node's error text from 'error="…"', unescaped and shortened."""
+        m = re.search(r'error="((?:[^"\\]|\\.)*)"', line)
+        cause = m.group(1).replace('\\"', '"') if m else line.split('Payment engine error', 1)[-1]
+        return cause.strip()[:120]
 
     @staticmethod
     def get_payment_errors():
@@ -7400,8 +7425,9 @@ class MetricsCollector:
         # a consumer that stopped paying — which it does to protect the operator,
         # and which every public node sees.
         result = {'available': False, 'window_hours': 24, 'unknown_cause': 0,
-                  'sessions_lost': 0, 'ended_unpaid': 0, 'ended_hermes': 0,
-                  'ended_other': 0, 'note': ''}
+                  'sessions_lost': 0, 'ended_unpaid': 0, 'ended_first_invoice': 0,
+                  'ended_hermes': 0, 'ended_other': 0, 'other_causes': [],
+                  'counted_at': int(time.time()), 'note': ''}
         try:
             import subprocess
             base = ['journalctl', '-u', 'mysterium-node', '--since', '24 hours ago',
@@ -7424,13 +7450,12 @@ class MetricsCollector:
             for _line in out.splitlines():
                 if 'Payment engine error' not in _line:
                     continue
-                _l = _line.lower()
-                if 'did not get paid' in _l:          # consumer did not pay a critical invoice
-                    result['ended_unpaid'] += 1
-                elif 'hermes' in _l or 'promise' in _l:
-                    result['ended_hermes'] += 1
-                else:
-                    result['ended_other'] += 1
+                _kind = MetricsCollector._payment_error_kind(_line)
+                result['ended_' + _kind] += 1
+                if _kind == 'other':
+                    _cause = MetricsCollector._payment_error_cause(_line)
+                    if _cause and _cause not in result['other_causes'] and len(result['other_causes']) < 5:
+                        result['other_causes'].append(_cause)
         except Exception as e:
             result['note'] = str(e)[:120]
         return result
@@ -11532,6 +11557,10 @@ def fleet_node_proxy(node_id, endpoint):
         'consumers/top',
         'export/sessions',
         'firewall/remove-legacy-ports',
+        # v1.4.71: the payment errors card counts the journal of the node being
+        # viewed. It fetched from the master and showed the master's count on
+        # every fleet node's page.
+        'api/payment-errors',
     }
     endpoint_base = endpoint.split('?')[0]
     if (endpoint_base not in ALLOWED

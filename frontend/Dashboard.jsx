@@ -490,6 +490,9 @@ const localBase = (url) => (url || '').replace(/\/fleet\/node\/[^/]+\/proxy$/, '
 // real transport overhead is that header over the payload — about 4.2%.
 const WG_HEADER_BYTES = 60;
 const MYST_MTU = 1420;
+// v1.4.71: how often the payment errors card re-reads its counts (the backend
+// caches them for the same five minutes).
+const PAYMENT_ERRORS_POLL_MS = 5 * 60 * 1000;
 
 const countryFlag = (code) => {
   if (!code || code.length !== 2) return '';
@@ -1593,10 +1596,6 @@ const MysteriumDashboard = () => {
   // is_local_request() does not treat as local.
   useEffect(() => {
     if (!isConnected) return;
-    fetch(`${backendUrlRef.current}/api/payment-errors`, { headers: authHeaderRef.current })
-      .then(r => r.ok ? r.json() : null)
-      .then(d => { if (d) setPaymentErrors(d); })
-      .catch(e => console.warn('/api/payment-errors failed:', e?.message || e));
     fetch(`${backendUrlRef.current}/api/autoupdate`, { headers: authHeaderRef.current })
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d) setAutoUpdate(d); })
@@ -1930,6 +1929,40 @@ const MysteriumDashboard = () => {
     window.addEventListener('myst-data-deleted', onDeleted);
     return () => window.removeEventListener('myst-data-deleted', onDeleted);
   }, []);
+
+  // v1.4.71: payment errors of the node being viewed, re-read every five minutes
+  // while the tab is visible. Until now the card was fetched once per page load,
+  // and from the dashboard's own backend: a page left open kept its first count,
+  // and a fleet node's page showed the master's journal (a laptop viewed through
+  // the VPS read "1 session" — the VPS's one — against 22 in the laptop's own).
+  useEffect(() => {
+    if (!isConnected) return;
+    let cancelled = false;
+    let timer = null;
+    setPaymentErrors(null);
+    const load = () => {
+      fetch(`${getNodeAwareUrl()}/api/payment-errors`, { headers: authHeaderRef.current })
+        .then(r => r.ok ? r.json() : null)
+        .then(d => { if (!cancelled) setPaymentErrors(d || null); })
+        .catch(e => console.warn('/api/payment-errors failed:', e?.message || e));
+    };
+    const start = () => {
+      if (timer) return;
+      load();
+      timer = setInterval(load, PAYMENT_ERRORS_POLL_MS);
+    };
+    const stop = () => {
+      if (timer) { clearInterval(timer); timer = null; }
+    };
+    const onVisibility = () => { if (document.hidden) stop(); else start(); };
+    if (!document.hidden) start();
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      cancelled = true;
+      stop();
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [isConnected, selectedNodeId]);
 
   // v1.4.68: no polling while the tab is hidden (a background tab, a phone with the
   // screen off). Chrome only slows a hidden tab to about once a minute after five
@@ -4649,12 +4682,23 @@ const MysteriumDashboard = () => {
               session when a payment step fails. Until v1.4.61 every teardown was
               presented as a Hermes problem; most are a consumer that stopped
               paying, which the node cuts off to protect the operator. Older
-              backends (fleet nodes not yet updated) send no split: old wording. */}
+              backends (fleet nodes not yet updated) send no split: old wording.
+              v1.4.71: one line per kind with what it means, "no answer to the first
+              invoice" out of "other", information colour unless Hermes sent replies
+              the node could not interpret, and the time the count was made. */}
           {paymentErrors && paymentErrors.available && paymentErrors.sessions_lost > 0 && (() => {
             const pe = paymentErrors;
             const split = typeof pe.ended_unpaid === 'number';
             const plural = (n, one, many) => (n === 1 ? one : many);
-            const alarming = !split || (pe.ended_hermes || 0) + (pe.ended_other || 0) > 0;
+            const alarming = !split || (pe.unknown_cause || 0) > 0;
+            const countedAt = pe.counted_at
+              ? new Date(pe.counted_at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+              : null;
+            const Row = ({ n, children }) => (
+              <p className="text-sm text-slate-300">
+                <span className="text-sky-300 font-semibold">{n}</span> {children}
+              </p>
+            );
             return (
               <div className={`mb-6 p-4 bg-slate-800/30 border rounded-lg backdrop-blur ${alarming ? 'border-amber-500/20' : 'border-sky-500/20'}`}>
                 <div className="flex items-center gap-3">
@@ -4667,24 +4711,44 @@ const MysteriumDashboard = () => {
                         after <span className="text-amber-300 font-semibold">{pe.unknown_cause}</span> hermes {plural(pe.unknown_cause, 'reply', 'replies')} the node could not interpret.
                       </p>
                     )}
-                    {split && pe.ended_unpaid > 0 && (
-                      <p className="text-sm text-slate-300">
-                        <span className="text-sky-300 font-semibold">{pe.ended_unpaid}</span> {plural(pe.ended_unpaid, 'session', 'sessions')} cut off because the consumer stopped paying.
-                        <span className="text-slate-500"> The node does this to protect you; it is normal on a public node. What was paid before the cut-off is yours.</span>
+                    {split && (
+                      <p className="text-xs text-slate-400 mb-1">
+                        The node ended or refused these sessions because payment did not come through.
+                        This is the node protecting your earnings, not a fault.
                       </p>
+                    )}
+                    {split && pe.ended_unpaid > 0 && (
+                      <Row n={pe.ended_unpaid}>
+                        {plural(pe.ended_unpaid, 'session', 'sessions')} cut off because the consumer stopped paying.
+                        <span className="text-slate-500"> What was paid before the cut-off is yours.</span>
+                      </Row>
+                    )}
+                    {split && pe.ended_first_invoice > 0 && (
+                      <Row n={pe.ended_first_invoice}>
+                        {plural(pe.ended_first_invoice, 'session', 'sessions')} with no answer to the first invoice.
+                        <span className="text-slate-500"> The consumer never paid to start, so the session did not really begin.</span>
+                      </Row>
                     )}
                     {split && pe.ended_hermes > 0 && (
-                      <p className="text-sm text-slate-300">
-                        <span className="text-amber-300 font-semibold">{pe.ended_hermes}</span> {plural(pe.ended_hermes, 'session', 'sessions')} ended after Hermes payment errors
-                        {pe.unknown_cause > 0 && <> — <span className="text-amber-300 font-semibold">{pe.unknown_cause}</span> {plural(pe.unknown_cause, 'reply', 'replies')} the node could not interpret</>}.
-                      </p>
+                      <Row n={pe.ended_hermes}>
+                        {plural(pe.ended_hermes, 'session', 'sessions')} where Hermes refused the payment.
+                        <span className="text-slate-500"> Usually the consumer paid too little ("promise value too low").</span>
+                      </Row>
                     )}
                     {split && pe.ended_other > 0 && (
+                      <Row n={pe.ended_other}>
+                        {plural(pe.ended_other, 'session', 'sessions')} ended with another payment error
+                        {(pe.other_causes || []).length > 0 && <span className="text-slate-500">: {pe.other_causes.join('; ')}</span>}.
+                      </Row>
+                    )}
+                    {split && pe.unknown_cause > 0 && (
                       <p className="text-sm text-slate-300">
-                        <span className="text-amber-300 font-semibold">{pe.ended_other}</span> {plural(pe.ended_other, 'session', 'sessions')} ended with another payment error.
+                        <span className="text-amber-300 font-semibold">{pe.unknown_cause}</span> Hermes {plural(pe.unknown_cause, 'reply', 'replies')} the node could not interpret.
+                        <span className="text-slate-500"> A known issue between the node and Hermes; the node retries and ends the session if it keeps failing.</span>
                       </p>
                     )}
                     <p className="text-[10px] text-slate-500 mt-1">
+                      {countedAt && <>Counted at {countedAt} from this node's journal. </>}
                       This happens inside the node's payment code, not in the toolkit — the toolkit only counts it.
                       Check with: journalctl -u mysterium-node --since "24 hours ago" | grep "Payment engine error"
                     </p>
