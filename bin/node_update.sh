@@ -2,10 +2,11 @@
 # Mysterium Toolkit — install a Mysterium node release from GitHub.
 #
 # Why this exists: myst-updater only installs packages that come from the
-# Mysterium PPA. That PPA trails the GitHub tags by a long way, has no suite for
-# Debian, and refuses to touch a node whose .deb was installed by hand. On a node
-# installed that way the timer runs every six hours and achieves nothing. This is
-# the deliberate override for that situation.
+# Mysterium PPA, and the PPA can trail the GitHub tags. This is the deliberate
+# override for an operator who does not want to wait. The GitHub .deb carries the
+# plain version (e.g. 1.39.8); the PPA build of the same release ranks higher
+# (1.39.8+build<N>+<suite>), so with myst-updater on the node is updated again
+# once the PPA has it.
 #
 # Called as: sudo bin/node_update.sh <version>
 # The caller passes a version number and nothing else. No URL, no path, no file

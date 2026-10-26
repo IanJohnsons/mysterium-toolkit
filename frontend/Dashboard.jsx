@@ -222,22 +222,31 @@ const selfUpdaterState = (info) => {
 };
 
 // v1.4.8: one line about the node's own updater, weighted by whether anything is
-// actually at stake.
+// actually at stake. Amber only when the node is missing a release it cannot reach
+// on its own; otherwise the same fact, stated once, in grey.
 //
-// This started as three separate lines — updater state, APT candidate, and the
-// version badge — which is fine while something is wrong and permanent wallpaper
-// afterwards. On a node kept current through the GitHub button, myst-updater fails
-// every six hours forever, by design: the hand-installed .deb outranks the PPA and
-// always will. Shouting about that on a node that is already on the latest release
-// trains the operator to ignore the line, and then it is worth nothing on the day
-// it matters.
-//
-// So: amber only when the node is actually missing a release it cannot reach on its
-// own. Otherwise the same fact, stated once, in grey.
+// v1.4.72: every line checked against the node source (updater/deb/updater.go,
+// parse.go, myst-updater.timer). What the updater really does:
+//   - it installs APT's candidate, and only when that candidate comes from the
+//     Mysterium PPA and is higher than the installed version;
+//   - a package not from the PPA (a .deb installed by hand, a custom build) stays
+//     the candidate only while its version is higher than the PPA's. Each run
+//     then exits with "candidate X is not supplied by the Mysterium node PPA" —
+//     but as soon as the PPA has a higher version, the next run installs it.
+//     So that case is waiting, not broken, and the line says so. Before this it
+//     read "inactive" with a tooltip saying it would never install anything;
+//   - without a PPA source in APT every run fails, until the source is added;
+//   - the timer fires every 6 to 12 hours (OnUnitActiveSec=6h plus
+//     RandomizedDelaySec=6h), not every six.
+// Versions are shown with their build suffix: "PPA has 1.39.7, you run 1.39.7"
+// hid that one was 1.39.7+build…+<suite> and the other e.g. 1.39.7+custom. A fleet
+// master proxying an older node gets no *_full fields and falls back to the short.
 //
 // Returns null when there is nothing to say, or when a fleet master is proxying a
 // node on v1.4.6 that sends no updater state at all.
 // tone: 'ok' | 'warn' | 'muted'
+const aptFull = (apt, key) => apt?.[key + '_full'] || apt?.[key] || '';
+
 const updaterLine = (info) => {
   const state = selfUpdaterState(info);
   if (!state) return null;
@@ -245,45 +254,102 @@ const updaterLine = (info) => {
   const apt = info?.apt || {};
   const behind = Boolean(info?.update_available);
 
-  // Why it cannot install anything, in the fewest words that stay true.
-  let why = '';
-  if (apt.reason === 'no_ppa_source') {
-    why = 'no Mysterium PPA on this system';
-  } else if (apt.reason === 'local_package_outranks_ppa') {
-    why = 'PPA has ' + (apt.ppa_version || 'an older build') +
-          ', you run ' + (apt.installed || 'a newer build') + ' from a .deb';
-  } else if (apt.reason === 'ppa_update_pending') {
-    why = (apt.candidate || 'a newer build') + ' waiting in the PPA';
-  }
-
-  if (state === 'failing') {
-    return behind
-      ? { tone: 'warn',
-          text: 'node self-updater: failing every run' + (why ? ' — ' + why : '') }
-      : { tone: 'muted',
-          text: 'node self-updater: inactive' + (why ? ' — ' + why : '') };
-  }
   if (state === 'on') {
-    return { tone: 'ok', text: 'node self-updater: on' + (why ? ' — ' + why : '') };
+    if (apt.reason === 'ppa_update_pending') {
+      return { tone: 'ok', text: 'node self-updater: on — ' + (apt.candidate || 'a newer version') +
+                                 ' is in the PPA, installs on its next run' };
+    }
+    return { tone: 'ok', text: 'node self-updater: on' };
+  }
+  if (state === 'failing') {
+    if (apt.reason === 'local_package_outranks_ppa') {
+      const above = aptFull(apt, 'candidate') || aptFull(apt, 'installed');
+      return { tone: 'muted', text: 'node self-updater: on — waiting for a PPA release above ' +
+                                    (above || 'the installed package') };
+    }
+    if (apt.reason === 'no_ppa_source') {
+      return { tone: behind ? 'warn' : 'muted',
+               text: 'node self-updater: failing every run — no Mysterium PPA in APT' };
+    }
+    return { tone: behind ? 'warn' : 'muted', text: 'node self-updater: last run failed' };
   }
   if (state === 'absent') {
-    return { tone: 'muted', text: 'node self-updater: not installed' };
+    return { tone: 'muted', text: 'node self-updater: timer not active' };
   }
-  return { tone: 'muted', text: 'node self-updater: off' + (why ? ' — ' + why : '') };
+  return { tone: 'muted', text: 'node self-updater: off' };
 };
 
 const updaterTitle = (info) => {
   const state = selfUpdaterState(info);
+  const apt = info?.apt || {};
+  const check = ' Check with: journalctl -u myst-updater.service -n 20';
   if (state === 'on') {
-    return 'The node installs its own updates on a six-hourly timer, so its version can change without anyone touching the dashboard. Disable with MYST_UPDATER_ENABLED=false in /etc/default/myst-updater.';
+    return 'myst-updater.timer runs every 6 to 12 hours. When the Mysterium PPA has a higher myst version than the one installed, it installs it and restarts the node, so the version can change without anyone touching the dashboard.' +
+           (apt.reason === 'ppa_update_pending'
+             ? ' The PPA has ' + aptFull(apt, 'candidate') + ' now; the next run installs it.'
+             : '') +
+           ' Disable with MYST_UPDATER_ENABLED=false in /etc/default/myst-updater.';
   }
   if (state === 'failing') {
-    return 'myst-updater.timer runs but the service exits with an error every cycle, so it will never install anything. It only accepts packages from the Mysterium PPA — that PPA has no suite for some distributions, and a .deb installed by hand always outranks it. Harmless while this node is already on the latest release; it only costs you something on the day it is not. Check with: journalctl -u myst-updater.service -n 20';
+    if (apt.reason === 'local_package_outranks_ppa') {
+      const installed = aptFull(apt, 'installed');
+      const candidate = aptFull(apt, 'candidate');
+      const ppa = aptFull(apt, 'ppa_version');
+      const what = (candidate && candidate !== installed)
+        ? 'APT prefers ' + candidate + ', which'
+        : 'the installed package' + (installed ? ' (' + installed + ')' : '');
+      return 'Waiting, not broken: ' + what + ' does not come from the Mysterium PPA and is newer than the PPA\'s version' +
+             (ppa ? ' (' + ppa + ')' : '') +
+             ', so each run stops without installing anything. As soon as the PPA has a higher version, the next run installs it and restarts the node.' + check;
+    }
+    if (apt.reason === 'no_ppa_source') {
+      return 'myst-updater.timer runs, but APT on this system has no Mysterium PPA source, so every run stops before it looks at a version. Nothing is installed until the PPA is added.' + check;
+    }
+    const code = info?.self_updater?.exit_code;
+    return 'The last run of myst-updater.service ended with an error' +
+           (code !== null && code !== undefined ? ' (exit ' + code + ')' : '') + '.' + check;
   }
   if (state === 'absent') {
-    return 'This node has no myst-updater.timer — it was installed before node 1.38 shipped one, or the timer is disabled. You decide when it changes version.';
+    return 'myst-updater.timer is not active on this node: the node is older than 1.39.0, the first release that ships one, or the timer was stopped or disabled. You decide when it changes version.';
   }
-  return 'The node will not update itself — you decide when it changes version.';
+  return 'MYST_UPDATER_ENABLED=false in /etc/default/myst-updater: the timer still runs, but each run exits without checking. You decide when it changes version.';
+};
+
+// v1.4.72: the "↑ X" badge said "self-updating" whenever the updater was on, also
+// while the PPA did not have X yet. Only say so when the PPA carries it.
+// Compared on the short version: the GitHub tag has no build suffix.
+const updaterBadge = (info) => {
+  const latest = info?.latest;
+  const state = selfUpdaterState(info);
+  const apt = info?.apt;
+  const inPpa = Boolean(latest && apt?.ppa_version === latest);
+  if (state === 'on' && inPpa) {
+    return { suffix: ' — self-updating',
+             title: 'Node v' + latest + ' is in the Mysterium PPA; myst-updater.timer installs it on its next run (every 6 to 12 hours) and restarts the node.' };
+  }
+  // Only claim the PPA lacks it when APT shows a PPA version to compare with.
+  if ((state === 'on' || state === 'failing') && apt?.ppa_version) {
+    return { suffix: ' available',
+             title: 'Node v' + latest + ' is released on GitHub but not in the Mysterium PPA yet. myst-updater.timer installs it once the PPA has it.' };
+  }
+  return { suffix: ' available', title: 'Mysterium node v' + latest + ' available' };
+};
+
+// v1.4.72: the GitHub install button's tooltip, checked against the node source.
+// Removed three claims that were not true: that install.sh rejects Parrot and Kali
+// (every distribution that is not ubuntu gets the Debian path with the focal suite),
+// that a restart settles the unsettled balance regardless of the threshold
+// (handleNodeStart() force-settles only channels with Hermeses that are no longer
+// active), and that myst-updater keeps failing afterwards (it fails only until the
+// PPA has a higher version — which the PPA build of the same release is).
+const githubInstallTitle = (info) => {
+  const latest = info?.latest || 'this release';
+  const state = selfUpdaterState(info);
+  const ppaPresent = Boolean(info?.apt?.ppa_version);
+  return 'Downloads myst_linux_<arch>.deb from the Mysterium GitHub release, checks its SHA256 against the checksum GitHub publishes, installs it with dpkg and restarts the node. No APT repository is involved.' +
+         ((state === 'on' || state === 'failing') && ppaPresent
+           ? ' The GitHub package is versioned ' + latest + '; the PPA build of the same release carries a build suffix and ranks higher, so myst-updater installs this release again once the PPA has it and restarts the node a second time.'
+           : '');
 };
 
 // NAT labels lived inside the node dashboard only, so the fleet cards printed the
@@ -7799,10 +7865,8 @@ const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, 
             {nodeUpdateInfo?.update_available && (
               <div className="mt-0.5">
                 <span className="text-xs text-amber-400 border border-amber-500/40 bg-amber-500/10 rounded px-1.5 py-0.5"
-                      title={selfUpdaterState(nodeUpdateInfo) === 'on'
-                        ? `Node v${nodeUpdateInfo.latest} available — myst-updater.timer will install it on its own schedule`
-                        : `Mysterium node v${nodeUpdateInfo.latest} available`}>
-                  ↑ {nodeUpdateInfo.latest}{selfUpdaterState(nodeUpdateInfo) === 'on' ? ' — self-updating' : ' available'}
+                      title={updaterBadge(nodeUpdateInfo).title}>
+                  ↑ {nodeUpdateInfo.latest}{updaterBadge(nodeUpdateInfo).suffix}
                 </span>
               </div>
             )}
@@ -7866,7 +7930,7 @@ const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, 
                       : nodeUpdate && nodeUpdate.done === false
                         ? 'text-red-300 border-red-500/40'
                         : 'text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/10'}`}
-                  title={'Downloads myst_linux_<arch>.deb from the Mysterium GitHub release, checks its SHA256 against the checksum GitHub publishes, installs it with dpkg and restarts the node. No APT repository is involved, so the distribution does not have to be one the node project recognises — Parrot and Kali work here even though install.sh rejects them. Note that restarting settles the unsettled balance regardless of your threshold: handleNodeStart() in the node calls ForceSettleInactiveHermeses() on every start, which bypasses the payments.zero-stake-unsettled-amount check entirely. The Hermes fee is proportional either way, so an early settlement costs you only the transaction fee — around 0.03 MYST. Afterwards this package outranks the PPA, so myst-updater will keep failing until you set MYST_UPDATER_ENABLED=false.'}
+                  title={githubInstallTitle(nodeUpdateInfo)}
                 >
                   {nodeUpdate === 'running'
                     ? 'installing ' + nodeUpdateInfo.latest + ' on ' + (nodeLabel || 'this node') + '…'

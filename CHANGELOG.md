@@ -4,6 +4,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.72
+
+- fix: **the node self-updater line says what the updater is doing.** With a package installed that does not come from the Mysterium PPA and is newer than the PPA's version, each myst-updater run ends with an error. The line called that "inactive" and the tooltip said the updater would never install anything. Both were wrong: the updater installs the next PPA release that is higher than the installed package. The line now reads "on — waiting for a PPA release above <version>", and the tooltip explains why each run stops and when it will install.
+- fix: **versions shown in full.** "PPA has 1.39.7, you run 1.39.7" hid the build suffix that tells a PPA build from a custom one. The line and tooltips now show the full package versions.
+- fix: **"↑ X — self-updating" only when the PPA has X.** It was shown whenever the updater was on, including while the release existed only on GitHub.
+- fix: **the GitHub install button's tooltip, checked against the node source.** Removed three claims that were not true: that the node's install.sh rejects Parrot and Kali, that a node restart settles the unsettled balance regardless of the threshold (on start the node only force-settles channels with Hermeses that are no longer active), and that myst-updater keeps failing afterwards. Added what does happen: the GitHub package carries the plain version, the PPA build of the same release ranks higher, so with the updater on the node installs that release again once the PPA has it — a second restart.
+- fix: the updater timer runs every 6 to 12 hours (OnUnitActiveSec=6h plus RandomizedDelaySec=6h), not every six; the timer ships from node 1.39.0, not 1.38. Corrected in the tooltips and docs/REFERENCE.md.
+
 ## v1.4.71
 
 - fix: **the payment errors card shows the node you are looking at.** It fetched its counts from the dashboard's own backend, so on a fleet master every node's page showed the master's journal: a laptop viewed through the VPS read "1 session ended after Hermes payment errors" — the VPS's single one — while the laptop's own journal held 22. The card now asks the node being viewed, through the fleet proxy (`api/payment-errors` added to its allowlist).

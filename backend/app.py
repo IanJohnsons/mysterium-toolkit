@@ -300,15 +300,16 @@ def _node_self_updater_state():
     only accepts a candidate that comes from the Mysterium PPA (origin
     LP-PPA-mysteriumnetwork-node, hosts ppa.launchpadcontent.net or
     ppa.mysterium.network — see updater/deb/parse.go in the node source). Two ways
-    that fails in the field, both observed on 15 August 2026:
-      - no PPA source at all -> "authenticated APT metadata for origin ... was not
-        found", exit 1. Debian trixie has no suite in that PPA.
-      - a .deb installed by hand that outranks the PPA version -> APT picks the local
-        package as candidate and the updater answers "candidate X is not supplied by
-        the Mysterium node PPA", exit 1.
-    Neither is a toolkit fault and neither is fixable from here, but both must be
-    visible: a unit that fails every six hours is exactly the kind of silent failure
-    this project keeps finding months late.
+    a run fails, both observed in the field:
+      - no PPA source in APT at all -> "authenticated APT metadata for origin ...
+        was not found", exit 1. Every run fails until the PPA is added.
+      - a package not from the PPA with a higher version than the PPA's (a .deb
+        installed by hand, a custom build) -> APT keeps it as candidate and the
+        updater answers "candidate X is not supplied by the Mysterium node PPA",
+        exit 1. This one ends by itself: once the PPA carries a higher version,
+        that becomes the candidate and the next run installs it.
+    Neither is a toolkit fault, but both must be visible. The timer runs every
+    6 to 12 hours (OnUnitActiveSec=6h, RandomizedDelaySec=6h).
 
     `systemctl show` on the service carries the outcome of the last run and needs no
     root and no journal access. Returns a dict:
@@ -399,19 +400,22 @@ def _apt_myst_state():
 
     v1.4.7. Knowing that myst-updater fails is half an answer; the other half is in
     `apt-cache policy myst`, which is readable without root. Two shapes seen in the
-    field on 15 August 2026, both of which leave the node stuck:
+    field:
 
-      1. no Mysterium PPA line at all (Debian trixie has no suite in that PPA), so
-         the updater stops at "authenticated APT metadata for origin ... was not
-         found" before it looks at any version;
-      2. a .deb installed by hand ranking above the PPA, so APT offers the local
-         package as the candidate and the updater answers "candidate X is not
-         supplied by the Mysterium node PPA".
+      1. no Mysterium PPA line at all, so the updater stops at "authenticated APT
+         metadata for origin ... was not found" before it looks at any version;
+      2. a package not from the PPA ranking above the PPA's version, so APT keeps
+         it as the candidate and the updater answers "candidate X is not supplied
+         by the Mysterium node PPA" — until the PPA has a higher version.
 
     Returns None where apt does not exist — Arch and Alpine installs get no badge
     rather than a misleading empty one.
 
     reason: 'ok' | 'no_ppa_source' | 'local_package_outranks_ppa' | 'ppa_update_pending'
+
+    The short fields drop the build suffix; the *_full fields keep it. Without the
+    suffix a custom build and the PPA build of the same release both read "1.39.7",
+    and the line "PPA has 1.39.7, you run 1.39.7" looks like a contradiction.
     """
     try:
         rc = subprocess.run(['apt-cache', 'policy', 'myst'],
@@ -462,6 +466,9 @@ def _apt_myst_state():
         'installed':   _deb_version_short(installed),
         'candidate':   _deb_version_short(candidate),
         'ppa_version': _deb_version_short(ppa_version),
+        'installed_full':   installed,
+        'candidate_full':   candidate,
+        'ppa_version_full': ppa_version,
         'reason':      reason,
     }
 
@@ -9307,11 +9314,15 @@ def check_node_update():
 def node_update():
     """Install a Mysterium node release from GitHub, bypassing APT.
 
-    v1.4.8. The node's own updater only accepts packages from the Mysterium PPA.
-    That PPA has no suite for Debian, trails the GitHub tags, and will not touch a
-    node whose package was installed from a .deb by hand — which leaves those nodes
-    with a timer that fails every six hours and no way forward. This is the
-    deliberate override.
+    v1.4.8. The node's own updater only accepts packages from the Mysterium PPA,
+    and the PPA can trail the GitHub tags. This is the deliberate override for an
+    operator who does not want to wait.
+
+    The GitHub .deb carries the plain version (bin/package_debian --version, e.g.
+    1.39.8); the PPA build of the same release carries a build suffix
+    (1.39.8+build<N>+<suite>) and dpkg ranks it higher. With myst-updater on, the
+    updater therefore installs the same release again once the PPA has it, and
+    restarts the node a second time.
 
     Works for every node in the fleet, not only this machine. The earlier
     is_local_request() gate here came from a wrong picture of how the fleet works:
@@ -9321,12 +9332,8 @@ def node_update():
     self-update, which is no less invasive — has always worked exactly this way,
     behind @require_auth and nothing else.
 
-    Distribution-agnostic on purpose. The official install.sh reads ID from
-    /etc/os-release and only falls back to ID_LIKE when ID is empty, so Parrot
-    (ID=parrot), Kali, Mint and Devuan all come out unsupported even though they
-    are Debian underneath — that installer has to know the name because it adds an
-    APT suite. This route adds no repository and needs no such list: a .deb and
-    dpkg are enough, whatever the distribution calls itself.
+    Distribution-agnostic: this route adds no repository, a .deb and dpkg are
+    enough, whatever the distribution calls itself.
 
     The request carries a version number and nothing else — no URL, no file name.
     bin/node_update.sh derives the rest and verifies the SHA256 that GitHub

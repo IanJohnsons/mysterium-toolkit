@@ -563,8 +563,11 @@ myst --version
 
 A later `apt upgrade` may put the repository version back once it catches up, which is
 harmless. From node 1.39.0 onwards the package also installs `myst-updater.timer`,
-which updates the node on its own six-hourly schedule. The dashboard shows whether it
-is active, under the node version. Changing it is left to the operator, because the
+which updates the node on its own every 6 to 12 hours, but only with a package from the
+Mysterium PPA that is newer than the installed one. A package installed by hand from
+GitHub carries the plain version (e.g. 1.39.8) and ranks below the PPA build of the same
+release, so the updater installs that release again once the PPA has it. The dashboard
+shows the updater's state under the node version. Changing it is left to the operator, because the
 file belongs to the node package and writing it would need a sudo right the toolkit has
 no other use for:
 
