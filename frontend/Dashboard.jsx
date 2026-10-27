@@ -352,6 +352,40 @@ const githubInstallTitle = (info) => {
            : '');
 };
 
+// v1.4.74: a branch chosen on a dashboard is offered as an update, also at the same
+// version number (v1.4.68, _toolkit_update_fetch). The node page named the branch;
+// the fleet view did not, and read "↑ v1.4.73 available" / "Update 1 node to v1.4.73"
+// on a node already running v1.4.73. Top level, used only in the fleet branch, and
+// pure so tests/test_v1474_fleet_switch_labels.py can run them.
+//
+// The branch a toolkit update status will switch to, or null for a plain update.
+const toolkitSwitchTarget = (u) => {
+  return (u && u.switch_pending && !u.switch_blocked && u.target_branch) ? u.target_branch : null;
+};
+
+// The fleet header badge for the master's own install.
+const fleetUpdateBadge = (u) => {
+  const target = toolkitSwitchTarget(u);
+  if (target) {
+    return { text: '↑ switch to ' + target + ' · v' + u.latest,
+             title: 'Chosen on this dashboard: this install moves to the ' + target + ' branch at the next update. Same version number, different code.' };
+  }
+  return { text: '↑ v' + u.latest + ' available', title: 'v' + u.latest + ' available' };
+};
+
+// The fleet header button. switchTargets: one entry per node the button acts on —
+// the branch it switches to, or null for a plain update. ownTarget: the master's
+// own switch, used when no node is listed as behind.
+const fleetUpdateLabel = (switchTargets, latest, ownTarget) => {
+  const n = switchTargets.length;
+  if (!n) return ownTarget ? '↑ Switch to ' + ownTarget : '↑ Update All to v' + latest;
+  const nodes = n + ' node' + (n !== 1 ? 's' : '');
+  const branches = [...new Set(switchTargets)];
+  if (branches.length === 1 && branches[0]) return '↑ Switch ' + nodes + ' to ' + branches[0];
+  if (switchTargets.some(Boolean)) return '↑ Update ' + nodes;   // mixed: no single version to name
+  return '↑ Update ' + nodes + ' to v' + latest;
+};
+
 // NAT labels lived inside the node dashboard only, so the fleet cards printed the
 // raw value from the node — `prcone` instead of `Port Restricted`. Same mistake as
 // fmtType once had. Module level so every view reads the same table.
@@ -2386,6 +2420,8 @@ const MysteriumDashboard = () => {
         return !!(fleetLatest && verOlder(v, fleetLatest));
       };
       const nodeLatest = (n) => (n.toolkit_update && n.toolkit_update.latest) || fleetLatest;
+      // Same source as nodeIsBehind: the node's own status, or the master's for its own card.
+      const nodeSwitch = (n) => toolkitSwitchTarget(n.toolkit_update || (!n.toolkit_version ? updateInfo : null));
       const behindNodes = fleetNodes.filter(nodeIsBehind);
       const anyBehind = behindNodes.length > 0 || !!updateInfo?.update_available;
 
@@ -2619,8 +2655,8 @@ const MysteriumDashboard = () => {
                   <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
                     <span>v{toolkitVersion} — select a node to view its dashboard</span>
                     {updateInfo?.update_available && (
-                      <span className="whitespace-nowrap text-amber-400 border border-amber-500/40 bg-amber-500/10 rounded px-1.5 py-0.5" title={`v${updateInfo.latest} available`}>
-                        ↑ v{updateInfo.latest} available
+                      <span className="whitespace-nowrap text-amber-400 border border-amber-500/40 bg-amber-500/10 rounded px-1.5 py-0.5" title={fleetUpdateBadge(updateInfo).title}>
+                        {fleetUpdateBadge(updateInfo).text}
                       </span>
                     )}
                     {/* v1.4.68: the fleet master's own install — remote nodes choose
@@ -2674,7 +2710,7 @@ const MysteriumDashboard = () => {
                     }}
                     className="text-xs px-3 py-1.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 transition font-semibold"
                   >
-                    ↑ Update {behindNodes.length ? `${behindNodes.length} node${behindNodes.length !== 1 ? 's' : ''}` : 'All'} to v{updateInfo?.latest}
+                    {fleetUpdateLabel(behindNodes.map(nodeSwitch), updateInfo?.latest, toolkitSwitchTarget(updateInfo))}
                   </button>
                 )}
                 {fleetUpdateNote && (
@@ -3089,7 +3125,7 @@ const MysteriumDashboard = () => {
                                 }
                               }}
                               className="text-[10px] px-2 py-0.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 transition"
-                            >↑ Update to v{nodeLatest(n)}</button>
+                            >{nodeSwitch(n) ? '↑ Switch to ' + nodeSwitch(n) : '↑ Update to v' + nodeLatest(n)}</button>
                           )}
                         </div>
                       )}

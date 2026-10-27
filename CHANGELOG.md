@@ -4,6 +4,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.74
+
+- fix: **the fleet view says "switch" when a branch switch is pending.** A branch chosen on a dashboard is installed by the next update, also when both branches carry the same version number. The node page named the branch, the fleet view did not: a master running v1.4.73 from dev with main chosen showed "↑ v1.4.73 available", "Update 1 node to v1.4.73" and, on its card, "↑ Update to v1.4.73" — an update to the version it already ran. The header badge now reads "↑ switch to main · v1.4.73", the header button "Switch 1 node to main" (or "Update N nodes" without a version when switches and updates are mixed), and the card "↑ Switch to main". Without a pending switch nothing changes.
+
 ## v1.4.73
 
 - fix: **lifetime totals count every day again.** The permanent daily rollup behind the lifetime earnings, sessions, data and the per-service breakdown lost each day as it left its three-day refresh window: every refresh deleted the window's whole days but wrote back only the sessions started after the cutoff's time of day, so the oldest day shrank on every pass and ended empty. This has been the case since v1.2.31; only days written by a full rebuild survived, and the lifetime figures showed a fraction of what the node earned. The refresh now recomputes whole days.
