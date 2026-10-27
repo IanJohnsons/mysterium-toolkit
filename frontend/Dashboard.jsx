@@ -3818,7 +3818,7 @@ const MysteriumDashboard = () => {
                                 <div className="flex items-center gap-2">
                                   <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${dotColor(peer)}`} />
                                   <span className="text-cyan-400 font-mono text-sm font-semibold">{peer.interface}</span>
-                                  {peer.is_idle && <span className="text-[9px] uppercase tracking-wide text-slate-500" title="Live tunnel but negligible traffic — likely a monitoring probe">idle</span>}
+                                  {peer.is_idle && <span className="text-[9px] uppercase tracking-wide text-slate-500" title="Connected but quiet: no traffic in the last minute. Not a dead tunnel — a tunnel that has stopped is not counted as live at all.">idle</span>}
                                 </div>
                                 <span className="text-slate-300 text-xs">{peer.duration}</span>
                               </div>
@@ -3847,7 +3847,7 @@ const MysteriumDashboard = () => {
                               <div className="col-span-1 flex items-center">
                                 <div className={`w-2.5 h-2.5 rounded-full ${dotColor(peer)}`} />
                               </div>
-                              <div className="col-span-2 text-cyan-400 font-mono text-xs font-semibold">{peer.interface}{peer.is_idle && <span className="ml-1.5 text-[9px] uppercase tracking-wide text-slate-500" title="Live tunnel but negligible traffic — likely a monitoring probe">idle</span>}</div>
+                              <div className="col-span-2 text-cyan-400 font-mono text-xs font-semibold">{peer.interface}{peer.is_idle && <span className="ml-1.5 text-[9px] uppercase tracking-wide text-slate-500" title="Connected but quiet: no traffic in the last minute. Not a dead tunnel — a tunnel that has stopped is not counted as live at all.">idle</span>}</div>
                               <div className="col-span-2 text-slate-400">{peer.duration}</div>
                               <div className="col-span-2 text-emerald-300">{formatDataSize(peer.download_mb)}</div>
                               <div className="col-span-2 text-slate-300">{formatDataSize(peer.upload_mb)}</div>
@@ -3972,8 +3972,7 @@ const MysteriumDashboard = () => {
                       </>
                     ) : (() => {
                       // Honest reporting: the node sometimes reports zero active sessions
-                      // while WireGuard tunnels are still live (it drops session status but
-                      // the tunnel persists via keepalives). The tunnel → wallet mapping is
+                      // while WireGuard tunnels are still live. The tunnel → wallet mapping is
                       // not retrievable from any API, so instead of inventing a consumer we
                       // point to the Tunnels tab, which is the source of truth for live traffic.
                       // We DO show recently-closed sessions (real node data: wallet, time,

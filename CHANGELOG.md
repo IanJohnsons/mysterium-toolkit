@@ -4,6 +4,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.73
+
+- fix: **lifetime totals count every day again.** The permanent daily rollup behind the lifetime earnings, sessions, data and the per-service breakdown lost each day as it left its three-day refresh window: every refresh deleted the window's whole days but wrote back only the sessions started after the cutoff's time of day, so the oldest day shrank on every pass and ended empty. This has been the case since v1.2.31; only days written by a full rebuild survived, and the lifetime figures showed a fraction of what the node earned. The refresh now recomputes whole days.
+- fix: **the lost days are rebuilt once.** On the first pass after updating, each install rebuilds its rollup from what its session history still holds (the retention period, 90 days by default). A day is only ever raised, never lowered, and days whose sessions were pruned before the update stay as they were. The earnings history chart is not affected: it reads the node's own earnings total, not this table.
+- docs: the session-list comments no longer say the node keeps a tunnel alive after it closes a session. It tears the tunnel down; what kept answering was the keepalive handler.
+- improve: the "idle" tooltip on a tunnel says what idle means — connected, no traffic in the last minute — instead of guessing it is a monitoring probe.
+
 ## v1.4.72
 
 - fix: **the node self-updater line says what the updater is doing.** With a package installed that does not come from the Mysterium PPA and is newer than the PPA's version, each myst-updater run ends with an error. The line called that "inactive" and the tooltip said the updater would never install anything. Both were wrong: the updater installs the next PPA release that is higher than the installed package. The line now reads "on — waiting for a PPA release above <version>", and the tooltip explains why each run stops and when it will install.

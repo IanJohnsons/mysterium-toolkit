@@ -3483,6 +3483,9 @@ class RollupDB:
     _db_path = Path(__file__).parent / 'databases' / 'earnings_rollup.db'
     _lock = Lock()
     _backfilled = False
+    # v1.4.73: PRAGMA user_version of the rollup database. Below this, the days
+    # emptied by the old refresh_recent() are rebuilt once from the sessions table.
+    REPAIR_VERSION = 1
 
     @classmethod
     def _conn(cls):
@@ -3619,6 +3622,14 @@ class RollupDB:
 
         The check is two indexed MIN() queries. If the oldest session predates the
         oldest rollup day, the rollup cannot be complete and is rebuilt once.
+
+        v1.4.73: a third reason, 'repair'. Until v1.4.72 refresh_recent() emptied
+        every day as it left its three-day window (see there), so a rollup can be
+        complete at its oldest day and still miss almost every day after it. Each
+        install rebuilds once from what its sessions table still holds, marked with
+        PRAGMA user_version so a restart does not repeat it. In the repair a day
+        only goes up: the oldest day in the sessions table can be partly pruned,
+        and its rollup row may hold more than the sessions left for it.
         """
         cls.init()
         try:
@@ -3627,6 +3638,7 @@ class RollupDB:
                 n = conn.execute("SELECT COUNT(*) FROM daily_totals").fetchone()[0]
                 oldest_rollup = conn.execute(
                     "SELECT MIN(date) FROM daily_totals").fetchone()[0] if n else None
+                user_version = conn.execute("PRAGMA user_version").fetchone()[0]
                 conn.close()
 
             reason = None
@@ -3640,6 +3652,8 @@ class RollupDB:
                     sconn.close()
                 if oldest_session and oldest_rollup and oldest_session < oldest_rollup:
                     reason = f'incomplete (sessions from {oldest_session}, rollup from {oldest_rollup})'
+            if reason is None and user_version < cls.REPAIR_VERSION:
+                reason = 'repair (days emptied by the refresh before v1.4.73)'
 
             if reason is None:
                 cls._backfilled = True
@@ -3647,6 +3661,8 @@ class RollupDB:
 
             rows = SessionDB.get_range(limit=10_000_000, offset=0)
             agg = cls._aggregate(rows)
+            if reason.startswith('repair'):
+                agg = cls._without_lower_days(agg)
             # No DELETE before the rebuild. daily_totals is the permanent record:
             # sessions are pruned after 90 days by default, this table never is,
             # so it holds days whose sessions no longer exist anywhere. Clearing
@@ -3655,29 +3671,66 @@ class RollupDB:
             # on (date, provider_id, service_type), so the days the aggregate
             # covers are corrected and every other row is left untouched.
             cls._upsert(agg)
+            # Only after a successful upsert: _upsert raises on failure, and the
+            # repair then runs again on the next pass.
+            with cls._lock:
+                conn = cls._conn()
+                conn.execute(f"PRAGMA user_version = {int(cls.REPAIR_VERSION)}")
+                conn.commit()
+                conn.close()
             cls._backfilled = True
-            logger.info(f"RollupDB backfill [{reason}]: aggregated {len(rows)} sessions "
-                        f"into {len(agg)} daily_totals rows")
+            log_result(f"RollupDB backfill [{reason}]: aggregated {len(rows)} sessions "
+                       f"into {len(agg)} daily_totals rows")
         except Exception as e:
             logger.warning(f"RollupDB backfill failed: {e}")
 
     @classmethod
+    def _without_lower_days(cls, agg):
+        """Drop the aggregate rows that would lower an existing rollup row."""
+        with cls._lock:
+            conn = cls._conn()
+            existing = {(r['date'], r['provider_id'], r['service_type']): r
+                        for r in conn.execute(
+                            "SELECT date, provider_id, service_type, sessions, tokens "
+                            "FROM daily_totals")}
+            conn.close()
+        out = {}
+        for key, a in agg.items():
+            old = existing.get(key)
+            if old is not None:
+                try:
+                    old_tok = int(old['tokens'] or 0)
+                except (TypeError, ValueError):
+                    old_tok = 0
+                if (old_tok, int(old['sessions'] or 0)) > (a['tok'], a['sessions']):
+                    continue
+            out[key] = a
+        return out
+
+    @classmethod
     def refresh_recent(cls, days=3):
         """Recompute only the last `days` days from current sessions.
-        Older rollup rows are never touched, so they survive session pruning."""
+        Older rollup rows are never touched, so they survive session pruning.
+
+        v1.4.73: whole days. This deleted every day from the cutoff's date onward
+        but read back only sessions started after the cutoff's time of day, so the
+        oldest day was rewritten with less of itself on every pass and left the
+        window empty. Since v1.2.31 that happened to every day; lifetime totals
+        and the service breakdown counted only what a full backfill had written.
+        The bound is now the date itself: 'YYYY-MM-DD' sorts before every
+        timestamp of that day and after every timestamp of the day before."""
         cls.init()
         if not cls._backfilled:
             cls.backfill_if_empty()
             return
         try:
-            cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime('%Y-%m-%dT%H:%M:%SZ')
+            since_date = (datetime.now(timezone.utc) - timedelta(days=days)).strftime('%Y-%m-%d')
             with SessionDB._lock:
                 sconn = SessionDB._conn()
                 rows = [dict(r) for r in sconn.execute(
-                    "SELECT * FROM sessions WHERE started_at >= ?", (cutoff,)).fetchall()]
+                    "SELECT * FROM sessions WHERE started_at >= ?", (since_date,)).fetchall()]
                 sconn.close()
             agg = cls._aggregate(rows)
-            since_date = cutoff[:10]
             # Clear then re-insert recent days so deleted sessions don't leave stale rows.
             with cls._lock:
                 conn = cls._conn()
@@ -4886,9 +4939,11 @@ class MetricsCollector:
         """Get actual client sessions from ALL configured nodes (via TequilaCache).
         Filters out monitoring probes and service registration entries.
 
-        NOTE: TequilAPI marks sessions "Completed" even while tunnels are still active,
-        and drops session status while a tunnel persists via keepalives. The tunnel →
-        consumer wallet mapping is not exposed by any API (it lives only in the node's
+        NOTE: the node writes a provider session to its stored list only when it starts
+        and when it closes cleanly, so a live session can read New/0/0 for days and a
+        session whose close was never written (a node restart) stays New forever. When
+        the node closes a session it also tears down its tunnel. The tunnel → consumer
+        wallet mapping is not exposed by any API (it lives only in the node's
         in-memory event bus; wg show yields only peer public keys), so we do NOT fabricate
         active sessions from recent history. The session list reflects only what the node
         genuinely reports; the tunnel view (live_connections) is the source of truth for
@@ -5154,8 +5209,7 @@ class MetricsCollector:
 
             # NOTE (honest live-session reporting):
             # We deliberately do NOT fabricate active sessions here. When TequilAPI
-            # reports zero active sessions but WireGuard tunnels are live (a real case:
-            # the node drops session status while the tunnel persists via keepalives),
+            # reports zero active sessions but WireGuard tunnels are live,
             # the mapping tunnel → consumer wallet is NOT retrievable — it lives only in
             # the node's in-memory event bus, is never exposed over any API, and `wg show`
             # only yields peer public keys. Previously we guessed by promoting the most
