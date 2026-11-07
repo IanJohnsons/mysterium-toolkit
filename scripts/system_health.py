@@ -1206,6 +1206,18 @@ class ServiceWatchdog:
                        '/etc/default/mysterium-node; that is worth adding for the '
                        'unlock at startup, but it will not stop this message.'))
 
+        # v1.4.75: fix() only acts on a unit that is not active, and persist has
+        # nothing to keep for this subsystem. While the node runs, Fix & Lock, Fix
+        # and Unpersist therefore did nothing — and a button that does nothing is
+        # how an operator concludes that none of them work. They are shown again
+        # the moment the unit stops. A warning found here (a restart loop, a node
+        # outside systemd) stays amber: it is real even if no button repairs it.
+        if svc == 'active':
+            result['fixable'] = False
+            result['keep_warning'] = True
+            result['report_note'] = ('The node is running, so there is nothing for Fix to do. '
+                                     'To restart it, use Restart on the node card.')
+
         return result
 
     @staticmethod
@@ -2199,9 +2211,23 @@ class PortMapping:
             pass
         return ips
 
+    _upnp_memo = {'t': 0.0, 'val': None}
+
     @staticmethod
     def _upnp_list():
-        """Read the IGD mapping table. Returns (available, mappings, error)."""
+        """Read the IGD mapping table. Returns (available, mappings, error).
+
+        v1.4.75: kept for 60 s — PortMapping and DashboardExposure both read it in
+        the same scan, and one upnpc call can take up to 15 s."""
+        memo = PortMapping._upnp_memo
+        if memo['val'] is not None and time.time() - memo['t'] < 60:
+            return memo['val']
+        val = PortMapping._upnp_list_uncached()
+        memo.update(t=time.time(), val=val)
+        return val
+
+    @staticmethod
+    def _upnp_list_uncached():
         if not shutil.which('upnpc'):
             return False, [], 'upnpc not installed'
         rc, out, err = _run(['upnpc', '-l'], timeout=15)
@@ -2353,6 +2379,233 @@ class PortMapping:
         return {'name': PortMapping.name, 'actions': [
             {'action': 'Port mapping is handled by the node itself — reporting only',
              'success': True}], 'success': True}
+
+
+class DashboardExposure:
+    """Whether the toolkit dashboard or the node's Web UI can be reached from the
+    internet (v1.4.75).
+
+    The dashboard listens on every address, and setup opens its port to anywhere
+    when a firewall is active. Behind Tailscale or on a LAN that is fine. On a
+    machine with a public address, or behind a router that forwards the port, it
+    puts a control panel for the node on the open internet — password protected,
+    but an attack surface nobody needs. An external operator's scan found exactly
+    that: dashboard and node UI both reachable from outside.
+
+    Report only. Changing the firewall from here could cut off the fleet master,
+    which reaches each node's dashboard on this port — that happened once, when
+    the port was closed by hand. The operator gets the commands and decides.
+
+    Exposed means: the port listens on a non-loopback address AND either
+      - an interface carries a public address and no firewall rule narrows the
+        port (ufw inactive, or a rule allowing it from Anywhere), or
+      - the router's UPnP table forwards the port to this machine and no
+        firewall rule narrows it.
+    A port forward made by hand on the router cannot be seen from here; the
+    detail says so when the machine sits behind NAT.
+    """
+
+    name = 'dashboard_exposure'
+    title = 'Dashboard Exposure'
+    NODE_UI_PORT = 4449
+
+    @staticmethod
+    def _dashboard_port():
+        env = os.environ.get('DASHBOARD_PORT', '')
+        if env.isdigit():
+            return int(env)
+        try:
+            import json as _json
+            cfg = Path(__file__).resolve().parent.parent / 'config' / 'setup.json'
+            return int(_json.loads(cfg.read_text()).get('dashboard_port', 5000))
+        except Exception:
+            return 5000
+
+    @staticmethod
+    def _public_ips():
+        """IPv4 addresses on this machine that are routable on the internet.
+        Private, CGNAT/Tailscale (100.64.0.0/10), loopback and link-local are not."""
+        import ipaddress
+        ips = set()
+        try:
+            for iface, addrs in psutil.net_if_addrs().items():
+                if iface == 'lo' or iface.startswith(('myst', 'wg', 'tun', 'docker', 'br-',
+                                                      'veth', 'tailscale')):
+                    continue
+                for a in addrs:
+                    if getattr(a, 'family', None) != socket.AF_INET or not a.address:
+                        continue
+                    try:
+                        if ipaddress.ip_address(a.address).is_global:
+                            ips.add(a.address)
+                    except ValueError:
+                        pass
+        except Exception:
+            pass
+        return ips
+
+    @staticmethod
+    def _listening(ports):
+        """{port: 'external' | 'loopback' | 'none'}, or None when ss is unreadable."""
+        rc, out, _ = _run(['ss', '-tlnH'], timeout=6)
+        if rc != 0:
+            return None
+        seen = {p: 'none' for p in ports}
+        for line in (out or '').splitlines():
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+            addr, _, port = parts[3].rpartition(':')
+            if not port.isdigit() or int(port) not in seen:
+                continue
+            if addr.strip('[]') in ('127.0.0.1', '::1'):
+                if seen[int(port)] == 'none':
+                    seen[int(port)] = 'loopback'
+            else:
+                seen[int(port)] = 'external'
+        return seen
+
+    @staticmethod
+    def _ufw_rules():
+        """('inactive' | 'active' | 'absent' | 'unknown', [rule lines])."""
+        if not shutil.which('ufw') and not Path('/usr/sbin/ufw').exists():
+            return 'absent', []
+        rc, out, _ = _priv.read(['ufw', 'status'], timeout=6)
+        if rc != 0:
+            rc, out, _ = _run(['ufw', 'status'], timeout=6)
+        if rc != 0 or not out:
+            return 'unknown', []
+        if 'Status: inactive' in out:
+            return 'inactive', []
+        if 'Status: active' not in out:
+            return 'unknown', []
+        return 'active', out.splitlines()
+
+    @staticmethod
+    def _open_to_anywhere(port, ufw_state, rules):
+        """True / False, or None when the firewall cannot be read."""
+        if ufw_state in ('inactive', 'absent'):
+            # 'absent': no ufw at all. Another firewall (plain nftables, a cloud
+            # firewall) may still filter; the detail says so.
+            return True
+        if ufw_state != 'active':
+            return None
+        for line in rules:
+            cols = line.split()
+            if len(cols) < 3 or 'ALLOW' not in cols:
+                continue
+            target = cols[0]
+            if target.split('/')[0] != str(port):
+                continue
+            src = line.split('ALLOW', 1)[1].split()
+            if src and src[0] in ('IN',):
+                src = src[1:]
+            if src and src[0] == 'Anywhere':
+                return True
+        return False
+
+    @staticmethod
+    def scan():
+        result = {
+            'name': DashboardExposure.name,
+            'title': DashboardExposure.title,
+            'status': 'ok',
+            'checks': [],
+            'recommendations': [],
+            'fixable': False,
+            # An exposed dashboard is a real risk, not background information:
+            # keep the amber that report-only subsystems otherwise lose.
+            'keep_warning': True,
+            'report_note': ('Reports only — changing the firewall from here could cut off '
+                            'your fleet master. The commands are below.'),
+        }
+        dash = DashboardExposure._dashboard_port()
+        ports = {dash: 'Toolkit dashboard', DashboardExposure.NODE_UI_PORT: 'Node Web UI'}
+        listening = DashboardExposure._listening(list(ports))
+        if listening is None:
+            result['status'] = 'info'
+            result['checks'].append({'name': 'Listening ports', 'status': 'info',
+                                     'detail': 'could not read listening sockets (ss)'})
+            return result
+
+        public = sorted(DashboardExposure._public_ips())
+        ufw_state, rules = DashboardExposure._ufw_rules()
+        upnp_ok, mappings, _ = PortMapping._upnp_list()
+        mine = PortMapping._local_ips()
+        forwarded = {m['int_port'] for m in mappings
+                     if upnp_ok and m['proto'] == 'TCP' and m['target_ip'] in mine}
+
+        exposed = []
+        for port, label in ports.items():
+            state = listening.get(port, 'none')
+            if state != 'external':
+                detail = ('not listening' if state == 'none'
+                          else 'listens on this machine only (127.0.0.1)')
+                result['checks'].append({'name': f'{label} ({port})', 'status': 'ok',
+                                         'detail': detail})
+                continue
+            anywhere = DashboardExposure._open_to_anywhere(port, ufw_state, rules)
+            fw_txt = ('no active firewall' if ufw_state == 'inactive'
+                      else 'no ufw found — open unless another firewall (nftables, your '
+                           'provider\'s) blocks it' if ufw_state == 'absent'
+                      else 'firewall allows it from anywhere')
+            if anywhere and public:
+                exposed.append(port)
+                result['checks'].append({
+                    'name': f'{label} ({port})', 'status': 'warning',
+                    'detail': f'reachable from the internet on {", ".join(public[:2])} — {fw_txt}'})
+            elif anywhere and port in forwarded:
+                exposed.append(port)
+                result['checks'].append({
+                    'name': f'{label} ({port})', 'status': 'warning',
+                    'detail': f'the router forwards {port} here (UPnP) — {fw_txt}'})
+            elif anywhere is None:
+                result['checks'].append({
+                    'name': f'{label} ({port})', 'status': 'info',
+                    'detail': 'listens on all addresses; the firewall could not be read'})
+            elif anywhere is False:
+                result['checks'].append({
+                    'name': f'{label} ({port})', 'status': 'ok',
+                    'detail': 'listens on all addresses; the firewall limits who may connect'})
+            else:
+                result['checks'].append({
+                    'name': f'{label} ({port})', 'status': 'ok',
+                    'detail': ('listens on all addresses, no public address here — reachable '
+                               'from the internet only if the router forwards it by hand')})
+
+        if exposed:
+            result['status'] = 'warning'
+            if dash in exposed and ufw_state == 'absent':
+                result['recommendations'].append(
+                    f'Limit port {dash} to your own networks in whatever firewall this machine '
+                    f'or its provider uses, or reach the dashboard over Tailscale only. If this '
+                    f'node is in a fleet, keep the fleet master allowed — it reaches this '
+                    f'dashboard on {dash}.')
+            elif dash in exposed:
+                result['recommendations'].append(
+                    f'Limit port {dash} to your own networks. If this node is in a fleet, '
+                    f'keep the fleet master allowed — it reaches this dashboard on {dash}. '
+                    f'Add the narrow rules first, then remove the open one, for example: '
+                    f'sudo ufw allow from 100.64.0.0/10 to any port {dash} proto tcp && '
+                    f'sudo ufw allow from 192.168.0.0/16 to any port {dash} proto tcp && '
+                    f'sudo ufw delete allow {dash}/tcp')
+                if dash in forwarded:
+                    result['recommendations'].append(
+                        f'Or remove the router forward for {dash} — only you know whether '
+                        f'anything outside your network needs it.')
+            if DashboardExposure.NODE_UI_PORT in exposed:
+                result['recommendations'].append(
+                    'The node Web UI binds to 127.0.0.1 and the LAN address by default. To keep '
+                    'it on this machine only, start the node with --ui.address=127.0.0.1 — '
+                    'that takes effect at the next node start.')
+        return result
+
+    @staticmethod
+    def fix():
+        # Deliberately no repair: see the class docstring.
+        return {'name': DashboardExposure.name, 'actions': [
+            {'action': 'Reporting only — the firewall is yours to change', 'success': True}],
+            'success': True}
 
 
 class ProcessCleanup:
@@ -3724,6 +3977,7 @@ SUBSYSTEMS = [
     NatChainHealth,
     PortReachability,
     PortMapping,
+    DashboardExposure,
     ProcessCleanup,
     RpsWatcher,
     SwapHealth,
@@ -3755,8 +4009,12 @@ def scan_all():
     # a day looking for damage that was not there. Those become 'info', which
     # keeps them visible and out of the fault count. Critical still stands:
     # a report-only subsystem can still find something genuinely wrong.
+    # v1.4.75: 'keep_warning' opts out — a subsystem whose finding is a real risk
+    # (an exposed dashboard) or a real fault the buttons cannot fix (a restart
+    # loop on a running node) stays amber.
     for r in results:
-        if r.get('fixable') is False and r.get('status') == 'warning':
+        if (r.get('fixable') is False and r.get('status') == 'warning'
+                and not r.get('keep_warning')):
             r['status'] = 'info'
 
     statuses = [r['status'] for r in results]

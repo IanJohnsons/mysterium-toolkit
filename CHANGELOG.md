@@ -4,6 +4,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.75
+
+- fix: **payment errors show the node's reason, not colour codes.** The node colours its log fields, also in the journal. The card read the reason from `error="…"`, which did not match with the codes in between, so it showed the raw line: `[36merror=[0m[31m"sending of invoice failed…"`. The codes are now removed before anything is read; the dashboard also removes them from fleet nodes still on an older version.
+- new: **System Health → Dashboard Exposure** says whether the dashboard (port 5000) or the node's Web UI (4449) can be reached from the internet: a public address with no firewall rule narrowing the port, or a router that forwards it here over UPnP. Report only — the commands are given, the firewall stays yours. It stays amber, unlike other report-only cards: an exposed control panel is a risk, not background information. Setup and the README now say the same when the port is opened.
+- fix: **"running X, package Y — next restart starts the package".** After a drop-in was removed, the old process kept running until the next node start, and the update line called the official package "a custom build in /usr/bin/myst". Said only when certain: different x.y.z, or a PPA package against a process with its own build tag. A binary copied over /usr/bin/myst is still reported as such.
+- fix: **VPN traffic per day counts tunnels that closed.** Where vnstat does not track the myst interfaces, today's VPN bytes were the counters of the tunnels alive now minus those at midnight, sampled every 10 minutes. Mysterium removes a tunnel when its session ends, and its bytes went with it. Each interface's growth is now added every few seconds, and a toolkit restart continues from the day already stored. That VPN download is much larger than upload is correct: on the tunnel, the node's sending is the consumer's download.
+- fix: **information is blue in every theme.** It used the colour the themes remap, so an info card turned yellow or orange and read as a warning. Recommendations on an info card are no longer amber.
+- fix: **no buttons that do nothing on Mysterium Service.** While the node runs, Fix & Lock, Fix and Unpersist had nothing to act on. They are hidden until the unit stops; a warning found there stays amber.
+- improve: an idle tunnel shows how long ago its consumer's last WireGuard handshake was. A live peer renews it about every two minutes, so "idle, handshake 12s ago" is a quiet consumer, not a ghost.
+- improve: the payment errors card gives a command that counts the journal by reason.
+
 ## v1.4.74
 
 - fix: **the fleet view says "switch" when a branch switch is pending.** A branch chosen on a dashboard is installed by the next update, also when both branches carry the same version number. The node page named the branch, the fleet view did not: a master running v1.4.73 from dev with main chosen showed "↑ v1.4.73 available", "Update 1 node to v1.4.73" and, on its card, "↑ Update to v1.4.73" — an update to the version it already ran. The header badge now reads "↑ switch to main · v1.4.73", the header button "Switch 1 node to main" (or "Update N nodes" without a version when switches and updates are mixed), and the card "↑ Switch to main". Without a pending switch nothing changes.

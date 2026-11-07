@@ -1540,6 +1540,13 @@ case "$_FW_TYPE" in
 
         # Toolkit dashboard port
         _open_port "${DASHBOARD_PORT:-5000}" tcp "Toolkit dashboard"
+        # v1.4.75: the rule above admits any address. Fine on a LAN or behind
+        # Tailscale; on a public address it puts the control panel on the internet.
+        echo -e "  ${YELLOW}⚠ Port ${DASHBOARD_PORT:-5000} is now open to any address.${NC}"
+        echo -e "  ${DIM}  On a machine with a public IP (a VPS) or a router that forwards ${DASHBOARD_PORT:-5000},${NC}"
+        echo -e "  ${DIM}  that is the internet. Limit it to your own networks — and keep your fleet${NC}"
+        echo -e "  ${DIM}  master allowed if this node is in a fleet. System Health → Dashboard Exposure${NC}"
+        echo -e "  ${DIM}  checks this and gives the commands.${NC}"
 
         # Open Mysterium node ports if node is local
         TOOLKIT_MODE=$(python3 -c "

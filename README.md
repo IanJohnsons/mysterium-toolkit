@@ -1,6 +1,6 @@
 # Mysterium Node Toolkit
 
-![Version](https://img.shields.io/badge/version-1.4.74-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Version](https://img.shields.io/badge/version-1.4.75-brightgreen) ![License](https://img.shields.io/badge/license-AGPL--3.0-blue) ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey) ![Python](https://img.shields.io/badge/python-3.8%2B-blue)
 
 A monitoring and management dashboard for [Mysterium Network](https://mysterium.network) VPN node operators. It runs on your own machine: no account, no cloud backend, no telemetry. Your session history, earnings and consumer data live in local SQLite files. A handful of public APIs are contacted for prices, node quality and update checks — every one of them is listed under [Privacy](#privacy).
 
@@ -70,6 +70,8 @@ API key:   shown once at the end of setup — save it
 ```
 
 Open that address, paste the key, and you are in.
+
+> **Keep port 5000 off the internet.** The dashboard listens on every address, and setup opens its port to any address when a firewall is active. On a LAN or over Tailscale that is what you want. On a VPS, or behind a router that forwards 5000, it puts the control panel for your node on the open internet — password protected, but exposed for no reason. Limit the port to your own networks (keep your fleet master allowed: it reaches each node on 5000) or use Tailscale. **System Health → Dashboard Exposure** tells you whether this machine is exposed and gives the commands. The same goes for the node's own Web UI on 4449.
 
 ### Installing a second or third node
 

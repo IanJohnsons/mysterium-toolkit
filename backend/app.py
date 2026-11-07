@@ -1407,15 +1407,61 @@ _traffic_history_imported = False  # Set True after first vnstat history import
 # for tunnel count, speed and latency when writing SystemMetricsDB snapshots.
 _last_fast_data = {}
 
-# VPN daily psutil baseline — used when vnstat does not track myst* interfaces.
-# At midnight (or first run) we snapshot psutil bytes_recv/sent on myst*/wg*/tun*
-# so "today's VPN" = current_psutil - baseline.  Resets each calendar day.
-_vpn_day_baseline = {
-    'date': None,   # 'YYYY-MM-DD' of the baseline snapshot
-    'rx':   0,      # bytes_recv at baseline
-    'tx':   0,      # bytes_sent at baseline
-}
-_vpn_day_baseline_lock = Lock()
+class VpnDayCounter:
+    """Today's VPN bytes when vnstat does not track the myst* interfaces (v1.4.75).
+
+    Until v1.4.74 this was "sum of the counters of the tunnels alive now, minus
+    the same sum at midnight", taken once per 10 minutes. Mysterium creates one
+    interface per consumer and removes it when the session ends, so every tunnel
+    that closed during the day took its bytes with it and the day came out far
+    too low. Now the fast tier (every few seconds) adds each interface's growth
+    since the previous look:
+      - an interface not seen before: all its bytes are new
+      - counters lower than before: the name was re-used, the counters restarted
+      - at midnight the running interfaces stay as the baseline, so what they
+        carried before midnight stays on yesterday
+    The first look after a toolkit start can attribute nothing (no baseline), so
+    the day starts from what the database already holds for it.
+    """
+    _lock = Lock()
+    _date = None
+    _rx = 0
+    _tx = 0
+    _last = {}
+
+    @classmethod
+    def observe(cls, per_iface, today, seed=None):
+        """per_iface: {name: (rx_bytes, tx_bytes)}. seed: callable giving today's
+        stored (rx_bytes, tx_bytes), used once after a start. Returns (rx, tx)."""
+        with cls._lock:
+            if cls._date != today:
+                first = cls._date is None
+                cls._date, cls._rx, cls._tx = today, 0, 0
+                if first:
+                    if seed:
+                        try:
+                            s_rx, s_tx = seed()
+                            cls._rx, cls._tx = int(s_rx or 0), int(s_tx or 0)
+                        except Exception as e:
+                            logger.warning(f'VpnDayCounter: could not read today from the database: {e}')
+                    cls._last = dict(per_iface)
+                    return cls._rx, cls._tx
+            for name, (rx, tx) in per_iface.items():
+                prev = cls._last.get(name)
+                if prev is None or rx < prev[0] or tx < prev[1]:
+                    d_rx, d_tx = rx, tx
+                else:
+                    d_rx, d_tx = rx - prev[0], tx - prev[1]
+                cls._rx += d_rx
+                cls._tx += d_tx
+            cls._last = dict(per_iface)
+            return cls._rx, cls._tx
+
+    @classmethod
+    def totals(cls, today):
+        """(rx, tx) counted for `today`, or None before the first look today."""
+        with cls._lock:
+            return (cls._rx, cls._tx) if cls._date == today else None
 _tier_slow_last = 0
 TIER_SLOW_INTERVAL = 600    # 10 minutes — reduced API calls (was 300)
 _last_medium_unsettled = None   # last unsettled MYST seen on medium tier (settle detection)
@@ -2457,6 +2503,25 @@ class TrafficDB:
                 cls._initialized = True
             except Exception as e:
                 logger.warning(f"TrafficDB init failed: {e}")
+
+    @classmethod
+    def get_vpn_bytes(cls, date_str):
+        """(vpn_rx_bytes, vpn_tx_bytes) stored for this node on date_str, (0, 0) if none.
+        v1.4.75: the starting point for VpnDayCounter after a toolkit start, so a
+        restart in the afternoon does not shrink the day to what came after it."""
+        cls.init()
+        MB = 1024 * 1024
+        with cls._lock:
+            conn = cls._conn()
+            try:
+                row = conn.execute(
+                    "SELECT vpn_rx_mb, vpn_tx_mb FROM daily_traffic WHERE date = ? AND provider_id = ?",
+                    (date_str, local_provider_id())).fetchone()
+            finally:
+                conn.close()
+        if not row:
+            return 0, 0
+        return int((row['vpn_rx_mb'] or 0) * MB), int((row['vpn_tx_mb'] or 0) * MB)
 
     @classmethod
     def upsert_day(cls, date_str, vpn_rx_mb, vpn_tx_mb, nic_rx_mb, nic_tx_mb, source='snapshot'):
@@ -6859,6 +6924,7 @@ class MetricsCollector:
 
     # Per-interface traffic history for speed calculation
     _prev_iface_stats = {}   # {iface_name: {'rx': bytes, 'tx': bytes, 'time': timestamp}}
+    _wg_handshake_ages = {}  # {iface_name: seconds since the latest handshake} (v1.4.75)
 
     @staticmethod
     def _wg_recent_handshake_ifaces(max_age=180):
@@ -6879,6 +6945,7 @@ class MetricsCollector:
                 return None
             now = time.time()
             active = set()
+            ages = {}
             for line in r.stdout.splitlines():
                 parts = line.split('\t')
                 if len(parts) < 3:
@@ -6890,8 +6957,15 @@ class MetricsCollector:
                     ts = int(parts[-1])
                 except (ValueError, TypeError):
                     continue
-                if ts > 0 and (now - ts) <= max_age:
-                    active.add(iface)
+                if ts > 0:
+                    # v1.4.75: keep the age per tunnel for the dashboard. "idle"
+                    # alone read as a ghost to operators; a handshake seconds old
+                    # shows the consumer is there and simply quiet.
+                    age = max(0, int(now - ts))
+                    ages[iface] = min(age, ages.get(iface, age))
+                    if age <= max_age:
+                        active.add(iface)
+            MetricsCollector._wg_handshake_ages = ages
             return active
         except Exception:
             return None
@@ -6917,7 +6991,9 @@ class MetricsCollector:
         now = time.time()
         # True liveness signal: WireGuard handshake recency (falls back to None when
         # `sudo wg show` is unavailable, e.g. wg not in sudoers yet on older installs).
+        MetricsCollector._wg_handshake_ages = {}
         hs_active = MetricsCollector._wg_recent_handshake_ifaces()
+        hs_ages = MetricsCollector._wg_handshake_ages if hs_active is not None else {}
 
         try:
             per_nic = psutil.net_io_counters(pernic=True)
@@ -7008,10 +7084,19 @@ class MetricsCollector:
                     'speed_up': round(speed_up, 4),       # Consumer upload MB/s
                     'speed_total': round(speed_down + speed_up, 4),
                     'duration': duration,
+                    # Seconds since the peer's latest WireGuard handshake, None when
+                    # unknown (no wg access) or never (v1.4.75).
+                    'handshake_age_s': hs_ages.get(iface_name),
                     # Raw bytes for advanced use
                     'rx_bytes': rx,
                     'tx_bytes': tx,
                 })
+
+            # v1.4.75: count today's VPN bytes per interface, every fast cycle.
+            _today = local_today()
+            VpnDayCounter.observe(
+                {n: (c.bytes_recv, c.bytes_sent) for n, c in vpn_ifaces.items()},
+                _today, seed=lambda: TrafficDB.get_vpn_bytes(_today))
         except Exception as e:
             logger.warning(f"Error reading VPN interfaces: {e}")
 
@@ -7251,27 +7336,15 @@ class MetricsCollector:
                         vpn_rx_bytes = raw_vnstat.get('vpn_today_rx', 0)
                         vpn_tx_bytes = raw_vnstat.get('vpn_today_tx', 0)
 
-                        # Fallback: if vnstat doesn't track myst* interfaces,
-                        # use psutil with a midnight-reset daily baseline so
-                        # "today" = current counters - baseline (not cumulative).
+                        # Fallback: if vnstat doesn't track myst* interfaces, use
+                        # what the fast tier counted per interface (v1.4.75 —
+                        # see VpnDayCounter for why a baseline was not enough).
+                        _psutil_vpn_source = False
                         if vpn_rx_bytes == 0 and vpn_tx_bytes == 0:
-                            try:
-                                cur_rx, cur_tx, _ = VpnTrafficSnapshot.get_snapshot()
-                                with _vpn_day_baseline_lock:
-                                    if _vpn_day_baseline['date'] != today_str:
-                                        # New calendar day — reset baseline
-                                        _vpn_day_baseline['date'] = today_str
-                                        _vpn_day_baseline['rx']   = cur_rx
-                                        _vpn_day_baseline['tx']   = cur_tx
-                                    base_rx = _vpn_day_baseline['rx']
-                                    base_tx = _vpn_day_baseline['tx']
-                                vpn_rx_bytes = max(0, cur_rx - base_rx)
-                                vpn_tx_bytes = max(0, cur_tx - base_tx)
+                            _counted = VpnDayCounter.totals(today_str)
+                            if _counted is not None:
+                                vpn_rx_bytes, vpn_tx_bytes = _counted
                                 _psutil_vpn_source = True
-                            except Exception:
-                                _psutil_vpn_source = False
-                        else:
-                            _psutil_vpn_source = False
 
                         TrafficDB.upsert_day(
                             today_str,
@@ -7456,6 +7529,10 @@ class MetricsCollector:
     _payment_errors_cache = None
     _payment_errors_last_scan = 0
     PAYMENT_ERRORS_INTERVAL = 300
+    # v1.4.75: the node colours its log fields, also in the journal. With the
+    # codes left in, error="..." did not match (there are codes between 'error='
+    # and the quote) and the raw rest of the line reached the dashboard.
+    _ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
 
     # v1.4.71: why a "Payment engine error" line ended the session, in the order
     # the checks run. The first two are the node refusing a consumer that did not
@@ -7505,6 +7582,7 @@ class MetricsCollector:
             if rc_out.returncode != 0 and not out:
                 result['note'] = (rc_out.stderr or 'journal not readable').strip()[:120]
                 return result
+            out = MetricsCollector._ANSI_RE.sub('', out)
             result['available'] = True
             result['unknown_cause'] = out.count('unknown hermes error encountered')
             result['sessions_lost'] = out.count('Payment engine error')
@@ -9186,26 +9264,59 @@ def _node_custom_build():
     if val is None:
         with metrics_lock:
             live = metrics_cache.get('nodeStatus', {}).get('version', '')
-        parsed = _parse_node_version(live)
-        if parsed and parsed[4]:
-            val = {'binary': '/usr/bin/myst', 'reason': 'version_tag', 'version': str(live).strip()}
-    if val is None:
+        live = str(live or '').strip().lstrip('v')
+        # v1.4.75: dpkg -V first. A binary copied over /usr/bin/myst is what the
+        # next start runs too, so it must not be mistaken for a pending restart.
+        replaced = False
         try:
             r = subprocess.run(['dpkg', '-V', 'myst'], capture_output=True, text=True, timeout=15)
             # dpkg -V prints one line per file that differs; '5' in the flags
             # column is a changed checksum.
             for line in (r.stdout or '').splitlines():
                 if line.rstrip().endswith(' /usr/bin/myst') and '5' in line[:9]:
-                    val = {'binary': '/usr/bin/myst', 'reason': 'replaced_binary'}
+                    replaced = True
                     break
         except Exception as e:
             logger.debug(f'dpkg -V myst not available: {e}')
+        parsed = _parse_node_version(live)
+        package = ((_apt_myst_state_cached() or {}).get('installed_full') or '') if not replaced else ''
+        if replaced:
+            val = {'binary': '/usr/bin/myst', 'reason': 'replaced_binary'}
+        elif _restart_pending(live, package):
+            val = {'binary': '/usr/bin/myst', 'reason': 'pending_restart',
+                   'version': live, 'package': package}
+        elif parsed and parsed[4]:
+            val = {'binary': '/usr/bin/myst', 'reason': 'version_tag', 'version': live}
     _node_exec_cache.update(t=now, val=val)
     return val
 
 
+def _restart_pending(running, package):
+    """True only when the running node is certainly not the installed package.
+
+    v1.4.75. After a drop-in is removed, ExecStart points at /usr/bin/myst again
+    but the old process keeps running until the next start; the card then called
+    the official package "a custom build in /usr/bin/myst". Said only when it is
+    certain: the x.y.z versions differ, or the package is a PPA build
+    (1.39.7+build123+noble) while the process reports its own build tag. A fork
+    package against a fork process (1.39.7+fix6221 vs 1.39.7+fix6221.pricecheck)
+    cannot be compared reliably — the binary's version string is not the
+    package's — so that says nothing."""
+    if not running or not package:
+        return False
+    run_p, pkg_p = _parse_node_version(running), _parse_node_version(_deb_version_short(package))
+    if not run_p or not pkg_p:
+        return False
+    if run_p[:3] != pkg_p[:3]:
+        return True
+    return bool(re.match(r'^\d+\.\d+\.\d+\+build\d+', package)) and '+' in running
+
+
 def _custom_build_note(cb):
     """What installing the official release would do on this custom build."""
+    if cb.get('reason') == 'pending_restart':
+        return (f'The node process still runs {cb["version"]}; the installed package is '
+                f'{cb["package"]}. The next node start runs the package. Nothing to install.')
     if cb.get('reason') == 'drop_in':
         return (f'This node runs {cb["binary"]}, not the packaged /usr/bin/myst. Installing the '
                 f'official release would replace /usr/bin/myst only; the node would restart on the '

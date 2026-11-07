@@ -3855,6 +3855,7 @@ const MysteriumDashboard = () => {
                                   <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${dotColor(peer)}`} />
                                   <span className="text-cyan-400 font-mono text-sm font-semibold">{peer.interface}</span>
                                   {peer.is_idle && <span className="text-[9px] uppercase tracking-wide text-slate-500" title="Connected but quiet: no traffic in the last minute. Not a dead tunnel — a tunnel that has stopped is not counted as live at all.">idle</span>}
+                                  {typeof peer.handshake_age_s === 'number' && (peer.is_idle || peer.handshake_age_s > 180) && <span className={`text-[9px] font-mono ${peer.handshake_age_s > 180 ? 'text-amber-400/80' : 'text-slate-500'}`} title="Time since the consumer's latest WireGuard handshake. A live peer renews it about every 2 minutes; older than 3 minutes means the consumer is gone.">{'handshake ' + (peer.handshake_age_s < 120 ? peer.handshake_age_s + 's' : Math.round(peer.handshake_age_s / 60) + 'm') + ' ago'}</span>}
                                 </div>
                                 <span className="text-slate-300 text-xs">{peer.duration}</span>
                               </div>
@@ -3883,7 +3884,7 @@ const MysteriumDashboard = () => {
                               <div className="col-span-1 flex items-center">
                                 <div className={`w-2.5 h-2.5 rounded-full ${dotColor(peer)}`} />
                               </div>
-                              <div className="col-span-2 text-cyan-400 font-mono text-xs font-semibold">{peer.interface}{peer.is_idle && <span className="ml-1.5 text-[9px] uppercase tracking-wide text-slate-500" title="Connected but quiet: no traffic in the last minute. Not a dead tunnel — a tunnel that has stopped is not counted as live at all.">idle</span>}</div>
+                              <div className="col-span-2 text-cyan-400 font-mono text-xs font-semibold">{peer.interface}{peer.is_idle && <span className="ml-1.5 text-[9px] uppercase tracking-wide text-slate-500" title="Connected but quiet: no traffic in the last minute. Not a dead tunnel — a tunnel that has stopped is not counted as live at all.">idle</span>}{typeof peer.handshake_age_s === 'number' && (peer.is_idle || peer.handshake_age_s > 180) && <span className={`ml-1.5 text-[9px] font-normal ${peer.handshake_age_s > 180 ? 'text-amber-400/80' : 'text-slate-500'}`} title="Time since the consumer's latest WireGuard handshake. A live peer renews it about every 2 minutes; older than 3 minutes means the consumer is gone.">{'hs ' + (peer.handshake_age_s < 120 ? peer.handshake_age_s + 's' : Math.round(peer.handshake_age_s / 60) + 'm')}</span>}</div>
                               <div className="col-span-2 text-slate-400">{peer.duration}</div>
                               <div className="col-span-2 text-emerald-300">{formatDataSize(peer.download_mb)}</div>
                               <div className="col-span-2 text-slate-300">{formatDataSize(peer.upload_mb)}</div>
@@ -4792,18 +4793,22 @@ const MysteriumDashboard = () => {
             const split = typeof pe.ended_unpaid === 'number';
             const plural = (n, one, many) => (n === 1 ? one : many);
             const alarming = !split || (pe.unknown_cause || 0) > 0;
+            // v1.4.75: the hint counts by reason. The node colours its journal
+            // fields, and "did not get paid" carries a hashlock per session; both
+            // are removed so identical reasons are counted together.
+            const peCmd = 'journalctl -u mysterium-node --since "24 hours ago" -o cat --no-pager | grep "Payment engine error" | sed \'s/\\x1b\\[[0-9;]*m//g\' | grep -oE \'error="[^"]{1,90}\' | sed \'s/^error="//; s/ with hashlock.*//\' | sort | uniq -c | sort -rn';
             const countedAt = pe.counted_at
               ? new Date(pe.counted_at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
               : null;
             const Row = ({ n, children }) => (
               <p className="text-sm text-slate-300">
-                <span className="text-sky-300 font-semibold">{n}</span> {children}
+                <span className="text-blue-300 font-semibold">{n}</span> {children}
               </p>
             );
             return (
-              <div className={`mb-6 p-4 bg-slate-800/30 border rounded-lg backdrop-blur ${alarming ? 'border-amber-500/20' : 'border-sky-500/20'}`}>
+              <div className={`mb-6 p-4 bg-slate-800/30 border rounded-lg backdrop-blur ${alarming ? 'border-amber-500/20' : 'border-blue-500/20'}`}>
                 <div className="flex items-center gap-3">
-                  <AlertCircle className={`w-5 h-5 ${alarming ? 'text-amber-400' : 'text-sky-400'}`} />
+                  <AlertCircle className={`w-5 h-5 ${alarming ? 'text-amber-400' : 'text-blue-400'}`} />
                   <div className="flex-1">
                     <h3 className="text-xs font-semibold text-slate-300 tracking-wide mb-1">Payment errors (last 24h)</h3>
                     {!split && (
@@ -4839,7 +4844,7 @@ const MysteriumDashboard = () => {
                     {split && pe.ended_other > 0 && (
                       <Row n={pe.ended_other}>
                         {plural(pe.ended_other, 'session', 'sessions')} ended with another payment error
-                        {(pe.other_causes || []).length > 0 && <span className="text-slate-500">: {pe.other_causes.join('; ')}</span>}.
+                        {(pe.other_causes || []).length > 0 && <span className="text-slate-500">: {pe.other_causes.map(c => String(c).replace(/\x1b\[[0-9;]*m/g, '')).join('; ')}</span>}.
                       </Row>
                     )}
                     {split && pe.unknown_cause > 0 && (
@@ -4851,7 +4856,7 @@ const MysteriumDashboard = () => {
                     <p className="text-[10px] text-slate-500 mt-1">
                       {countedAt && <>Counted at {countedAt} from this node's journal. </>}
                       This happens inside the node's payment code, not in the toolkit — the toolkit only counts it.
-                      Check with: journalctl -u mysterium-node --since "24 hours ago" | grep "Payment engine error"
+                      Count by reason with: <span className="font-mono select-all break-all">{peCmd}</span>
                     </p>
                   </div>
                 </div>
@@ -4903,7 +4908,7 @@ const MysteriumDashboard = () => {
                   <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
                     {(metrics.systemHealth.subsystems || []).map((sub) => {
                       const icon = sub.status === 'ok' ? '●' : sub.status === 'info' ? 'ⓘ' : sub.status === 'warning' ? '▲' : '✗';
-                      const color = sub.status === 'ok' ? 'text-emerald-400' : sub.status === 'info' ? 'text-sky-400' : sub.status === 'warning' ? 'text-amber-400' : 'text-red-400';
+                      const color = sub.status === 'ok' ? 'text-emerald-400' : sub.status === 'info' ? 'text-blue-400' : sub.status === 'warning' ? 'text-amber-400' : 'text-red-400';
                       return <span key={sub.name} className={color}>{icon} {sub.title || sub.name}</span>;
                     })}
                   </div>
@@ -4985,18 +4990,18 @@ const MysteriumDashboard = () => {
                   {(metrics.systemHealth.subsystems || []).map((sub) => (
                     <div key={sub.name} className={`p-3 rounded-lg border ${
                       sub.status === 'ok'      ? 'bg-emerald-500/5 border-emerald-500/20' :
-                      sub.status === 'info'    ? 'bg-sky-500/5    border-sky-500/20'     :
+                      sub.status === 'info'    ? 'bg-blue-500/5    border-blue-500/20'     :
                       sub.status === 'warning' ? 'bg-amber-500/5  border-amber-500/20'   :
                                                  'bg-red-500/5    border-red-500/20'
                     }`}>
                       <div className="flex items-center gap-2 mb-2">
                         <span className={`text-sm font-semibold flex-shrink-0 ${
-                          sub.status === 'ok' ? 'text-emerald-400' : sub.status === 'info' ? 'text-sky-400' : sub.status === 'warning' ? 'text-amber-400' : 'text-red-400'
+                          sub.status === 'ok' ? 'text-emerald-400' : sub.status === 'info' ? 'text-blue-400' : sub.status === 'warning' ? 'text-amber-400' : 'text-red-400'
                         }`}>{sub.status === 'ok' ? '●' : sub.status === 'info' ? 'ⓘ' : sub.status === 'warning' ? '▲' : '✗'}</span>
                         <h4 className="text-xs font-semibold text-slate-200 flex-1 min-w-0 truncate">{sub.title || sub.name}</h4>
                         <span className={`text-xs px-1.5 py-0.5 rounded flex-shrink-0 ${
                           sub.status === 'ok' ? 'bg-emerald-500/10 text-emerald-400' :
-                          sub.status === 'info' ? 'bg-sky-500/10 text-sky-400' : sub.status === 'warning' ? 'bg-amber-500/10 text-amber-400' : 'bg-red-500/10 text-red-400'
+                          sub.status === 'info' ? 'bg-blue-500/10 text-blue-400' : sub.status === 'warning' ? 'bg-amber-500/10 text-amber-400' : 'bg-red-500/10 text-red-400'
                         }`}>{sub.status}</span>
                       </div>
                       {/* Three subsystems report fixable:false — their fix is a
@@ -5094,7 +5099,7 @@ const MysteriumDashboard = () => {
                         {(sub.checks || []).map((check, ci) => (
                           <div key={ci} className="flex items-start gap-2 text-xs">
                             <span className={`w-2 h-2 rounded-full flex-shrink-0 mt-1 ${
-                              check.status === 'ok' ? 'bg-emerald-400' : check.status === 'info' ? 'bg-sky-400' : check.status === 'warning' ? 'bg-amber-400' : 'bg-red-400'
+                              check.status === 'ok' ? 'bg-emerald-400' : check.status === 'info' ? 'bg-blue-400' : check.status === 'warning' ? 'bg-amber-400' : 'bg-red-400'
                             }`} />
                             <span className="text-slate-400 w-36 flex-shrink-0 leading-relaxed">{check.name}</span>
                             <span className="text-slate-500 flex-1 leading-relaxed break-words">{check.detail}</span>
@@ -5104,7 +5109,7 @@ const MysteriumDashboard = () => {
                       {sub.recommendations && sub.recommendations.length > 0 && (
                         <div className="mt-2 pt-2 border-t border-slate-700/30 space-y-1">
                           {sub.recommendations.map((rec, ri) => (
-                            <div key={ri} className="text-xs text-amber-400/80 flex items-start gap-1">
+                            <div key={ri} className={`text-xs ${sub.status === 'info' || sub.status === 'ok' ? 'text-slate-400' : 'text-amber-400/80'} flex items-start gap-1`}>
                               <span className="flex-shrink-0">→</span>
                               <span className="break-words">{rec}</span>
                             </div>
@@ -7981,7 +7986,14 @@ const StatusCard = ({ nodeStatus, resources, earnings, clients, activeSessions, 
                 </button>
               </div>
             )}
-            {nodeUpdateInfo?.custom_build && nodeUpdateInfo?.latest && nodeUpdateInfo.latest !== nodeUpdateInfo.current && (
+            {nodeUpdateInfo?.custom_build?.reason === 'pending_restart' && (
+              <div className="mt-0.5">
+                <span className="text-xs text-slate-500 border border-slate-700 rounded px-1.5 py-0.5" title={nodeUpdateInfo.custom_build_note || ''}>
+                  {'running ' + nodeUpdateInfo.custom_build.version + ', package ' + nodeUpdateInfo.custom_build.package + ' — next restart starts the package'}
+                </span>
+              </div>
+            )}
+            {nodeUpdateInfo?.custom_build && nodeUpdateInfo.custom_build.reason !== 'pending_restart' && nodeUpdateInfo?.latest && nodeUpdateInfo.latest !== nodeUpdateInfo.current && (
               <div className="mt-0.5">
                 <span className="text-xs text-slate-500 border border-slate-700 rounded px-1.5 py-0.5" title={nodeUpdateInfo.custom_build_note || ''}>
                   {nodeUpdateInfo.latest} released — this node runs its own build ({nodeUpdateInfo.custom_build.binary})
