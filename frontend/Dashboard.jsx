@@ -3816,6 +3816,23 @@ const MysteriumDashboard = () => {
                     Consumers ({safeNum(metrics.sessions?.unique_consumers || 0)})
                   </button>
                 </div>
+                {/* v1.4.76: the node answered /sessions with an error. Active and History
+                    are then empty because the node cannot list its sessions, not because
+                    there are none — say so instead of showing empty lists. */}
+                {metrics.sessions?.list_error && (
+                  <div className="p-3 rounded border border-amber-500/30 bg-amber-500/10 text-xs">
+                    <p className="text-amber-300 font-semibold">
+                      {'The node cannot list its sessions (HTTP ' + metrics.sessions.list_error.status + ').'}
+                    </p>
+                    <p className="text-slate-300 mt-1 break-words">
+                      {'Node error: ' + metrics.sessions.list_error.message}
+                    </p>
+                    <p className="text-slate-400 mt-1">
+                      Active and History stay empty until the node answers again. Tunnels and earnings are not affected.
+                      This is inside the node (often its session database, myst.db), not in the toolkit.
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* ======= TUNNELS TAB (myst* interfaces) ======= */}
@@ -4044,10 +4061,12 @@ const MysteriumDashboard = () => {
                               ))}
                             </>
                           )}
-                          {liveTunnels > 0 && (
+                          {liveTunnels > 0 && !metrics.sessions?.list_error && (
                             <div className="text-xs text-slate-500 py-3 text-center">
-                              The node reports no active sessions, but {liveTunnels} live tunnel{liveTunnels === 1 ? ' is' : 's are'} carrying traffic.<br />
-                              <span className="text-slate-600">Mysterium doesn't expose which consumer is on a live tunnel once the session status is dropped — see the <span className="text-cyan-400">Tunnels</span> tab for what's actually flowing.</span>
+                              {observed.length > 0
+                                ? <>{liveTunnels} live tunnel{liveTunnels === 1 ? ' is' : 's are'} carrying traffic without a session in the node's live list. The observed {observed.length === 1 ? 'session above is' : 'sessions above are'} the likely {observed.length === 1 ? 'consumer' : 'consumers'}.<br /></>
+                                : <>The node's live list shows no active session, but {liveTunnels} live tunnel{liveTunnels === 1 ? ' is' : 's are'} carrying traffic.<br /></>}
+                              <span className="text-slate-600">The node does not say which consumer is on a tunnel without a session — see the <span className="text-cyan-400">Tunnels</span> tab for what's actually flowing.</span>
                             </div>
                           )}
                           {recent.length > 0 ? (
@@ -4797,6 +4816,8 @@ const MysteriumDashboard = () => {
             // fields, and "did not get paid" carries a hashlock per session; both
             // are removed so identical reasons are counted together.
             const peCmd = 'journalctl -u mysterium-node --since "24 hours ago" -o cat --no-pager | grep "Payment engine error" | sed \'s/\\x1b\\[[0-9;]*m//g\' | grep -oE \'error="[^"]{1,90}\' | sed \'s/^error="//; s/ with hashlock.*//\' | sort | uniq -c | sort -rn';
+            // v1.4.76: the Hermes retries are separate lines; this counts them per hour.
+            const peRetryCmd = 'journalctl -u mysterium-node --since "24 hours ago" -o short-iso --no-pager | grep "unknown hermes error encountered" | cut -c1-13 | uniq -c';
             const countedAt = pe.counted_at
               ? new Date(pe.counted_at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
               : null;
@@ -4849,14 +4870,26 @@ const MysteriumDashboard = () => {
                     )}
                     {split && pe.unknown_cause > 0 && (
                       <p className="text-sm text-slate-300">
-                        <span className="text-amber-300 font-semibold">{pe.unknown_cause}</span> Hermes {plural(pe.unknown_cause, 'reply', 'replies')} the node could not interpret.
-                        <span className="text-slate-500"> A known issue between the node and Hermes; the node retries and ends the session if it keeps failing.</span>
+                        <span className="text-amber-300 font-semibold">{pe.unknown_cause}</span> {plural(pe.unknown_cause, 'time', 'times')} Hermes gave no usable answer to a payment request
+                        {typeof pe.unknown_empty === 'number' && (
+                          <span className="text-slate-400">
+                            {' (' + [
+                              pe.unknown_empty > 0 ? pe.unknown_empty + ' empty error' : null,
+                              pe.unknown_timeout > 0 ? pe.unknown_timeout + ' timed out' : null,
+                              pe.unknown_other > 0 ? pe.unknown_other + ' other' : null,
+                            ].filter(Boolean).join(', ') + ')'}
+                          </span>
+                        )}.
+                        <span className="text-slate-500"> The node retried each time and ends a session only if it keeps failing. A short burst is a hiccup on the Hermes side; if it goes on for hours, tell Mysterium.</span>
                       </p>
                     )}
                     <p className="text-[10px] text-slate-500 mt-1">
                       {countedAt && <>Counted at {countedAt} from this node's journal. </>}
                       This happens inside the node's payment code, not in the toolkit — the toolkit only counts it.
                       Count by reason with: <span className="font-mono select-all break-all">{peCmd}</span>
+                      {split && pe.unknown_cause > 0 && (
+                        <> Hermes retries per hour: <span className="font-mono select-all break-all">{peRetryCmd}</span></>
+                      )}
                     </p>
                   </div>
                 </div>

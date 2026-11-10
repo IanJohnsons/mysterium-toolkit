@@ -2030,6 +2030,55 @@ class SessionStore:
     _initialized = {}       # {node_url: bool} — True once full fetch completes
     _total_items = {}       # {node_url: int} — API-reported total
     _loading = {}           # {node_url: bool} — startup fetch in progress
+    # v1.4.76: the node's own /sessions error, per node. Until now a non-200 answer
+    # was dropped (page 1) or only logged (full fetch), and the dashboard showed
+    # "Active (0)" and "History (0)" as if the node simply had no sessions. Seen on
+    # a node whose session database held a damaged record: every /sessions call
+    # answered HTTP 500 "Could not list sessions: json: cannot unmarshal string
+    # into Go value of type session.History".
+    _list_error = {}        # {node_url: {'status': int, 'message': str, 'since': float}}
+    _history_failed = {}    # {node_url: True} — the full fetch got no history; retried once /sessions answers again
+
+    @staticmethod
+    def _error_text(resp):
+        """The node's own error message from a non-200 /sessions answer."""
+        try:
+            body = resp.json()
+            err = body.get('error') if isinstance(body, dict) else None
+            msg = err.get('message') if isinstance(err, dict) else None
+            if not msg and isinstance(body, dict):
+                msg = body.get('message')
+            if msg:
+                return str(msg)[:300]
+        except Exception:
+            pass
+        return (resp.text or '').strip()[:300] or f'HTTP {resp.status_code}'
+
+    @classmethod
+    def _note_list_error(cls, node_url, resp):
+        """Remember a non-200 /sessions answer and log it once per new message."""
+        msg = cls._error_text(resp)
+        prev = cls._list_error.get(node_url)
+        if prev and prev.get('message') == msg and prev.get('status') == resp.status_code:
+            return
+        cls._list_error[node_url] = {'status': resp.status_code, 'message': msg,
+                                     'since': prev.get('since') if prev else time.time()}
+        logger.warning(f"SessionStore: {node_url}/sessions answered HTTP {resp.status_code}: {msg}")
+
+    @classmethod
+    def _clear_list_error(cls, node_url):
+        if cls._list_error.pop(node_url, None) is not None:
+            logger.info(f"SessionStore: {node_url}/sessions answers normally again")
+
+    @classmethod
+    def list_error(cls, node_urls):
+        """The first node in node_urls whose /sessions currently answers with an error,
+        as {'status', 'message', 'since'}, or None."""
+        for url in node_urls:
+            err = cls._list_error.get(url)
+            if err:
+                return dict(err)
+        return None
 
     @classmethod
     def fetch_all_pages(cls, node_url, headers):
@@ -2048,8 +2097,12 @@ class SessionStore:
                         headers=headers, timeout=15
                     )
                     if resp.status_code != 200:
-                        logger.warning(f"SessionStore: /sessions page {page} returned {resp.status_code}")
+                        cls._note_list_error(node_url, resp)
+                        if fetched == 0:
+                            cls._history_failed[node_url] = True
                         break
+                    cls._clear_list_error(node_url)
+                    cls._history_failed.pop(node_url, None)
                     data = resp.json()
                     items = data.get('items', [])
                     if not items:
@@ -2137,7 +2190,17 @@ class SessionStore:
                 params={'page': 1, 'page_size': 50},
                 headers=headers, timeout=8
             )
+            if resp.status_code != 200:
+                cls._note_list_error(node_url, resp)
             if resp.status_code == 200:
+                cls._clear_list_error(node_url)
+                # The startup fetch got no history because /sessions answered with an
+                # error; now that it answers, load the full history once more.
+                if cls._history_failed.get(node_url) and not cls._loading.get(node_url):
+                    cls._history_failed.pop(node_url, None)
+                    cls._loading[node_url] = True
+                    logger.info(f"SessionStore: {node_url}/sessions answers again — reloading the full history")
+                    Thread(target=cls.fetch_all_pages, args=(node_url, headers), daemon=True).start()
                 data = resp.json()
                 items = data.get('items', [])
                 with cls._lock:
@@ -5582,6 +5645,10 @@ class MetricsCollector:
                 'total_in_store': len(sessions),
                 'total_items_api': SessionStore._total_items.get(NODE_API_URLS[0] if NODE_API_URLS else '', 0),
                 'history_loaded': SessionStore.is_ready(NODE_API_URLS[0] if NODE_API_URLS else ''),
+                # v1.4.76: the node's own /sessions error, or None. When set, "Active"
+                # and "History" are empty because the node cannot list its sessions,
+                # not because there are none.
+                'list_error': SessionStore.list_error(NODE_API_URLS),
                 'active': active_count if (active_count > 0 or _live is not None) else len(_observed_active),
                 'active_api': active_count,
                 'recently_closed_count': sum(1 for s in sessions if s.get('recently_closed')),
@@ -7565,6 +7632,7 @@ class MetricsCollector:
         result = {'available': False, 'window_hours': 24, 'unknown_cause': 0,
                   'sessions_lost': 0, 'ended_unpaid': 0, 'ended_first_invoice': 0,
                   'ended_hermes': 0, 'ended_other': 0, 'other_causes': [],
+                  'unknown_empty': 0, 'unknown_timeout': 0, 'unknown_other': 0,
                   'counted_at': int(time.time()), 'note': ''}
         try:
             import subprocess
@@ -7586,7 +7654,20 @@ class MetricsCollector:
             result['available'] = True
             result['unknown_cause'] = out.count('unknown hermes error encountered')
             result['sessions_lost'] = out.count('Payment engine error')
+            # v1.4.76: what the "unknown hermes error" retries were. The node logs
+            # every Hermes answer it has no case for under that one line: an empty
+            # error body from Hermes, but also a request that timed out. Counted on
+            # 10 Nov 2026 on one node: 20 empty, 1 timeout, all in one hour.
             for _line in out.splitlines():
+                if 'unknown hermes error encountered' in _line:
+                    _l = _line.lower()
+                    if 'could not unmarshal error body' in _l:
+                        result['unknown_empty'] += 1
+                    elif 'timeout' in _l or 'deadline exceeded' in _l:
+                        result['unknown_timeout'] += 1
+                    else:
+                        result['unknown_other'] += 1
+                    continue
                 if 'Payment engine error' not in _line:
                     continue
                 _kind = MetricsCollector._payment_error_kind(_line)
