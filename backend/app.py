@@ -925,6 +925,10 @@ def reload_node_registry():
         _node_registry = loaded
         MULTI_NODE_MODE = True
         logger.info(f"Multi-node mode: {len(loaded)} nodes registered")
+        # v1.4.78: removed nodes leave the fleet view now, not at the next restart.
+        # Called at import too, before the caches exist — nothing to drop then.
+        if '_per_node_metrics' in globals():
+            _fleet_forget_removed()
         return True
     return False
 
@@ -8520,6 +8524,31 @@ def _build_fleet_aggregate():
     return agg
 
 
+def _fleet_forget_removed():
+    """Drop cached data of nodes no longer in the registry and rebuild the aggregate.
+
+    v1.4.78: the fleet view is built from _per_node_metrics, which was filled by
+    the collector and never pruned. A node removed from nodes.json kept its card
+    and kept counting in the fleet totals until the toolkit restarted."""
+    keep = {e.get('id') for e in _node_registry}
+    with _per_node_lock:
+        gone = [k for k in _per_node_metrics if k not in keep]
+        for k in gone:
+            _per_node_metrics.pop(k, None)
+    for k in [k for k in _fleet_node_viewed if k not in keep]:
+        _fleet_node_viewed.pop(k, None)
+    _fleet_detail_inflight.difference_update(set(_fleet_detail_inflight) - keep)
+    with _node_heavy_cache_lock:
+        for k in [k for k in _node_heavy_cache if k not in keep]:
+            _node_heavy_cache.pop(k, None)
+    agg = _build_fleet_aggregate()
+    with _fleet_lock:
+        _fleet_aggregate.clear()
+        _fleet_aggregate.update(agg)
+    if gone:
+        logger.info(f"Fleet: dropped cached data of removed node(s): {', '.join(map(str, gone))}")
+
+
 def _fleet_poll_node(node_entry, detail):
     """Poll one fleet node and store the result; returns it, or None on an error.
 
@@ -8528,6 +8557,10 @@ def _fleet_poll_node(node_entry, detail):
     try:
         node_data = _apply_scheme_hint(node_entry, _collect_single_node(node_entry, detail=detail))
         with _per_node_lock:
+            # v1.4.78: a poll that was running when the node was removed must not
+            # put it back in the cache.
+            if not any(e.get('id') == node_entry['id'] for e in _node_registry):
+                return None
             prev = _per_node_metrics.get(node_entry['id'])
             # A round that started before the page opened brings a summary; it
             # must not wipe the session lists the page has just been given.
@@ -11527,6 +11560,15 @@ def save_fleet_config():
         # it to the nodes.json watcher, up to 30 seconds later.
         if reload_node_registry():
             _ensure_fleet_collector('fleet saved')
+        elif not nodes:
+            # v1.4.78: the last node was removed. The registry kept the old list and
+            # the dashboard stayed in fleet mode until a restart; end it now, as a
+            # restart with an empty nodes.json would.
+            global _node_registry, MULTI_NODE_MODE
+            _node_registry = []
+            MULTI_NODE_MODE = False
+            _fleet_forget_removed()
+            logger.info("Fleet emptied — back to single-node mode")
         return jsonify({'success': True, 'nodes': len(nodes), 'path': str(config_path)}), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500

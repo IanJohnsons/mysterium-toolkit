@@ -4,6 +4,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.78
+
+- fix: **a removed fleet node leaves the fleet view at once.** Its card stayed, and it kept counting in the fleet totals — nodes, offline, earnings — until the toolkit restarted: the view is built from the collector's per-node cache, which was never pruned. Every reload of `nodes.json` (a save in the dashboard or an edit by hand) now drops the cached data of nodes no longer configured and rebuilds the totals; a poll still running for the removed node does not bring it back.
+- fix: **removing the last node ends fleet mode.** The dashboard stayed in the fleet view with the old list until a restart. It now returns to the single-node view, as a restart with an empty `nodes.json` would.
+
 ## v1.4.77
 
 - fix: **adding a node can no longer wipe the fleet.** Add Node saved the fleet list it had loaded plus the new node. When that list had not loaded — a slow or failed request — the save replaced `nodes.json`, and its safety copy, with the one new node. Edit already refused to save without the list; Add did not. Both now refuse, and the backend refuses any save that would drop a configured node that is not named for removal: it answers 409, names the nodes that would disappear, and writes nothing.
