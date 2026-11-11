@@ -11444,11 +11444,30 @@ def save_fleet_config():
         except Exception as e:
             logger.warning(f"save_fleet_config: could not read existing nodes.json: {e}")
 
-        if existing and not nodes and not confirm_empty:
-            return jsonify({
-                'error': f'Refusing to save an empty fleet — {len(existing)} node(s) are '
-                         f'configured. Remove them individually, or pass confirm_empty.'
-            }), 400
+        # v1.4.77: every node already configured must be in the new list or be
+        # named in remove_ids. Add Node used to send [...loadedList, newNode];
+        # when that list had not loaded, the save replaced nodes.json and its
+        # safety copy with the one new node. A node is "kept" when its id or its
+        # toolkit_url appears in the new list — an edit may change either, not both.
+        remove_ids = {str(x) for x in (body.get('remove_ids') or []) if x}
+        if not (confirm_empty and not nodes):
+            _new_ids  = {n.get('id') for n in nodes if isinstance(n, dict) and n.get('id')}
+            _new_urls = {n.get('toolkit_url') for n in nodes if isinstance(n, dict) and n.get('toolkit_url')}
+            missing = [n for n in existing
+                       if isinstance(n, dict)
+                       and n.get('id') not in _new_ids
+                       and n.get('toolkit_url') not in _new_urls
+                       and str(n.get('id') or '') not in remove_ids
+                       and str(n.get('toolkit_url') or '') not in remove_ids]
+            if missing:
+                names = [n.get('label') or n.get('id') or n.get('toolkit_url') or '?' for n in missing]
+                logger.warning(f"save_fleet_config: refused — would drop {len(missing)} node(s): {', '.join(names)}")
+                return jsonify({
+                    'error': f'Not saved: {len(missing)} configured node(s) would be removed '
+                             f'({", ".join(names)}). The fleet list may not have loaded — '
+                             f'close and reopen, then try again.',
+                    'missing': names,
+                }), 409
 
         by_id  = {n.get('id'): n for n in existing if n.get('id')}
         by_url = {n.get('toolkit_url'): n for n in existing if n.get('toolkit_url')}

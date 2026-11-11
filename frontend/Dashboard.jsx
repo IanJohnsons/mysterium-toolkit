@@ -1449,6 +1449,9 @@ const MysteriumDashboard = () => {
   const [fleetSaving, setFleetSaving] = useState(false);
   const [fleetSaveError, setFleetSaveError] = useState('');
   const [fleetConfigNodes, setFleetConfigNodes] = useState([]);
+  // v1.4.77: true only after GET /fleet/config returned a real list for the open dialog.
+  const [fleetConfigLoaded, setFleetConfigLoaded] = useState(false);
+  const [fleetRemoveError, setFleetRemoveError] = useState('');
   const [healthBusy, setHealthBusy] = useState(false);   // scan in progress
   const [fixResults, setFixResults] = useState({});       // subsystem name → actions[]
   const [fixStamp, setFixStamp] = useState({});           // subsystem name → Date of that fix
@@ -2432,9 +2435,16 @@ const MysteriumDashboard = () => {
         setFleetCert({ loading: false, result: null, pin: false });
         setFleetProbeResult(null);
         setFleetSaveError('');
+        setFleetConfigLoaded(false);
         setFleetModalOpen(true);
         fetch(`${backendUrlRef.current}/fleet/config`, { headers: authHeaderRef.current })
-          .then(r => r.json()).then(d => setFleetConfigNodes(d.nodes || [])).catch(e => console.warn('/fleet/config failed:', e?.message || e));
+          .then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)))
+          .then(d => {
+            if (!Array.isArray(d.nodes)) throw new Error('no node list in response');
+            setFleetConfigNodes(d.nodes);
+            setFleetConfigLoaded(true);
+          })
+          .catch(e => setFleetSaveError('Could not read the fleet list (' + (e?.message || e) + ') — close and reopen before saving.'));
       };
 
       // v1.4.5: the form used to be filled from the fleet status payload, which
@@ -2452,13 +2462,16 @@ const MysteriumDashboard = () => {
         });
         setFleetProbeResult(null);
         setFleetSaveError('');
+        setFleetConfigLoaded(false);
         setFleetModalOpen(true);
         const _openedFor = node.id || node.toolkit_url;
         fetch(`${backendUrlRef.current}/fleet/config`, { headers: authHeaderRef.current })
-          .then(r => r.json())
+          .then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)))
           .then(d => {
-            const list = d.nodes || [];
+            if (!Array.isArray(d.nodes)) throw new Error('no node list in response');
+            const list = d.nodes;
             setFleetConfigNodes(list);
+            setFleetConfigLoaded(true);
             const cfg = list.find(n => n.id === node.id) || list.find(n => n.toolkit_url === node.toolkit_url);
             if (!cfg) return;
             // v1.4.5: this arrives a moment after the dialog opens, and it used to
@@ -2537,8 +2550,11 @@ const MysteriumDashboard = () => {
         // v1.4.5: this POST rewrites the whole of nodes.json from fleetConfigNodes.
         // If that fetch had not finished, or failed, the list is empty and the save
         // wiped every configured node. Two entries were lost that way in August.
-        if (fleetEditNode && fleetConfigNodes.length === 0) {
-          setFleetSaveError('Fleet config not loaded yet — not saving, as that would erase nodes.json. Close and reopen.');
+        // v1.4.77: the check covered Edit only — Add did the same with
+        // [...emptyList, newNode]. It now applies to both, and the backend refuses
+        // any save that drops a configured node not named in remove_ids.
+        if (!fleetConfigLoaded) {
+          setFleetSaveError('Fleet list not loaded — not saving, as that could erase configured nodes. Close and reopen.');
           return;
         }
         setFleetSaving(true);
@@ -2612,20 +2628,33 @@ const MysteriumDashboard = () => {
 
       const handleFleetRemove = async (node) => {
         if (!window.confirm(`Remove "${node.label || node.toolkit_url}" from fleet?`)) return;
+        setFleetRemoveError('');
+        const _name = node.label || node.id || node.toolkit_url;
         try {
           const cfgR = await fetch(`${backendUrlRef.current}/fleet/config`, { headers: authHeaderRef.current });
+          if (!cfgR.ok) throw new Error('could not read the fleet list (HTTP ' + cfgR.status + ')');
           const cfg = await cfgR.json();
-          const updated = (cfg.nodes || []).filter(n => n.toolkit_url !== node.toolkit_url);
-          await fetch(`${backendUrlRef.current}/fleet/config`, {
+          if (!Array.isArray(cfg.nodes)) throw new Error('could not read the fleet list');
+          // v1.4.77: match on id first — the URL alone could also hit a second entry
+          // with the same address. remove_ids tells the backend this drop is meant.
+          const isTarget = n => node.id ? n.id === node.id : n.toolkit_url === node.toolkit_url;
+          const target = cfg.nodes.find(isTarget);
+          if (!target) throw new Error('node not found in the saved config');
+          const updated = cfg.nodes.filter(n => !isTarget(n)).map(n => {
+            const c = { ...n }; delete c.has_api_key; delete c.api_key_hint; return c;
+          });
+          const r = await fetch(`${backendUrlRef.current}/fleet/config`, {
             method: 'POST',
             headers: { ...authHeaderRef.current, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ nodes: updated }),
+            body: JSON.stringify({ nodes: updated, remove_ids: [target.id || target.toolkit_url] }),
           });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok || !d.success) throw new Error(d.error || ('HTTP ' + r.status));
           // Immediately sync local state so the node disappears without waiting for metrics refresh
           setFleetConfigNodes(updated);
           setTimeout(fetchMetrics, 500);
         } catch (e) {
-          console.error('Remove failed:', e);
+          setFleetRemoveError('Could not remove ' + _name + ': ' + (e?.message || e));
         }
       };
 
@@ -3066,6 +3095,12 @@ const MysteriumDashboard = () => {
               <span>Nodes: <span className="text-slate-300">{metrics.fleet.fleet_nodes}</span></span>
             </div>
 
+            {fleetRemoveError && (
+              <div className="mb-3 flex items-start justify-between gap-3 text-xs text-red-300 bg-red-950/40 border border-red-500/30 rounded px-3 py-2">
+                <span>✗ {fleetRemoveError}</span>
+                <button onClick={() => setFleetRemoveError('')} className="text-red-400/70 hover:text-red-300" title="Dismiss">✕</button>
+              </div>
+            )}
             {/* Node cards grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {fleetNodes.map(n => {

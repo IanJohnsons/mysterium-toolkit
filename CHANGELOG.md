@@ -4,6 +4,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.77
+
+- fix: **adding a node can no longer wipe the fleet.** Add Node saved the fleet list it had loaded plus the new node. When that list had not loaded — a slow or failed request — the save replaced `nodes.json`, and its safety copy, with the one new node. Edit already refused to save without the list; Add did not. Both now refuse, and the backend refuses any save that would drop a configured node that is not named for removal: it answers 409, names the nodes that would disappear, and writes nothing.
+- fix: **removing a node reports failure.** Remove matched on the address only, did not check whether the save succeeded and logged errors to the browser console. It now matches on the node id, names the node it removes, and shows an error above the node cards when it fails. Removing the last node works without a separate confirmation step.
+
 ## v1.4.76
 
 - fix: **a node that cannot list its sessions says so.** When the node answered `/sessions` with an error, the toolkit dropped the answer (the 2-minute refresh) or only logged it (the startup load) and showed "Active (0)" and "History (0)", with a note that Mysterium does not expose the consumer. Seen on a node whose session database held a damaged record: every call answered HTTP 500 "Could not list sessions: json: cannot unmarshal string into Go value of type session.History". The Connections panel now shows the node's own error and says that Active and History stay empty until the node answers again, and that tunnels and earnings are not affected. The full history is loaded again as soon as the node answers.
