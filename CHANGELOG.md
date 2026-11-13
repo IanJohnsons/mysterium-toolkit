@@ -4,6 +4,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.80
+
+- fix: **the node installer no longer starts a second node as root.** After installing the package it ran `sudo myst service --agreed-terms-and-conditions`, which is the node itself: it ran as root in the foreground with its own identity in `/root/.mysterium`, until a 30-second timeout killed it. The package's own service already accepts the terms and is started by the package, so the call is gone.
+
 ## v1.4.79
 
 - fix: **the node installer no longer changes your kernel without asking.** It installed the node package with `dpkg -i` and then `apt-get install -f -y`, which accepted whatever apt chose to satisfy the dependencies — on one Parrot machine a realtime kernel, which changed the default boot entry. apt now installs the package in one step, after a dry run: if that run would install a kernel, a boot loader or a DKMS module, or remove any package, the installer lists them and asks first. Enter means no, and nothing is changed.

@@ -415,7 +415,10 @@ def _install_deb_direct():
         if not ok:
             return False
 
-        run(sudo("myst service --agreed-terms-and-conditions"), timeout=30)
+        # v1.4.80: no `sudo myst service --agreed-terms-and-conditions` here. That
+        # starts a second node as root in the foreground, with its own identity in
+        # /root/.mysterium, until the timeout kills it. The package's own unit
+        # already passes --agreed-terms-and-conditions and post-install starts it.
         run(sudo("systemctl enable --now mysterium-node"), timeout=15)
         time.sleep(3)
 
