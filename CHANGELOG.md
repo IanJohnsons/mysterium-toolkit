@@ -4,6 +4,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.82
+
+- fix: **the installer's Docker path runs the node the way Mysterium documents it.** The container used Docker's bridge network with only port 4449 mapped; the node needs the host network (`--net host`) to work out the address it publishes for its VPN service. Docker commands now run with sudo, so they also work for a user outside the `docker` group, and the container's log is capped at 3 × 10 MB.
+- fix: **an existing `myst` container is no longer replaced without asking.** The installer stopped and removed it silently; it now shows the container and asks first. Enter means no. The node's data in the `myst-data` volume is kept either way.
+- fix: **an existing Docker node is detected for users outside the `docker` group**, so the installer no longer offers to install a second node next to it.
+
 ## v1.4.81
 
 - fix: **the node installer no longer asks for a password the node does not use.** It asked for a "TequilAPI password", wrote it with `myst config set` and told you to remember it for the toolkit setup — but the node's login does not read that setting, so the password you chose did nothing. The step is gone. You choose your node password in NodeUI's onboarding, as the closing text now says.

@@ -281,7 +281,8 @@ def detect_node():
     if rc == 0:
         return True, 'systemd', 'mysterium-node service is active'
 
-    rc, out = run(['docker', 'ps', '--filter', 'name=myst', '--format', '{{.Names}}'],
+    # v1.4.82: with sudo — without it a user outside the docker group never sees the container.
+    rc, out = run(sudo(['docker', 'ps', '--filter', 'name=^myst$', '--format', '{{.Names}}']),
                   capture=True)
     if rc == 0 and out:
         return True, 'docker', f'Docker container: {out.splitlines()[0]}'
@@ -504,50 +505,68 @@ def install_docker():
     c(GREEN, '✓', f"Docker found: {docker_ver}")
     print()
 
+    # v1.4.82: the container ran with `-p 4449:4449` in Docker's bridge network.
+    # The node image needs the host network (WireGuard interfaces, NAT discovery,
+    # its UDP port range), docker needs root for a user outside the docker group,
+    # an existing container was stopped and removed without a word, and the
+    # container's log grew without limit.
     c(CYAN, '·', "This will create a Docker container named 'myst' with:")
-    print(f"    · Port 4449 mapped (TequilAPI)")
-    print(f"    · Volume 'myst-data' for persistent storage")
+    print(f"    · Host networking (--net host) — the node needs it for WireGuard")
+    print(f"    · Volume 'myst-data' for persistent storage (identity and settings)")
     print(f"    · NET_ADMIN capability (required for WireGuard)")
+    print(f"    · Log size capped at 3 × 10 MB")
     print()
 
     val = ask("Continue? [Y/n]:", options=['y', 'Y', 'n', 'N', ''], default='y')
     if val.lower() == 'n':
         return False
 
+    # An existing container is replaced only with the operator's consent.
+    rc, existing = run(sudo(['docker', 'ps', '-a', '--filter', 'name=^myst$', '--format', '{{.Names}} {{.Status}}']),
+                       capture=True)
+    replace_existing = rc == 0 and bool(existing.strip())
+    if replace_existing:
+        print()
+        c(YELLOW, '⚠', f"A container named 'myst' already exists: {existing.strip()}")
+        c(CYAN, '·', "Replacing it stops that node. Its data in the 'myst-data' volume is kept.")
+        val = ask("Replace the existing container? [y/N]:", options=['y', 'Y', 'n', 'N', ''], default='n')
+        if val.lower() != 'y':
+            c(YELLOW, '⚠', "Docker install cancelled — the existing container was not touched.")
+            return False
+
     # Pull image
     c(CYAN, '→', "Pulling Mysterium node image...")
-    rc, _ = run("docker pull mysteriumnetwork/myst:latest", timeout=300)
+    rc, _ = run(sudo("docker pull mysteriumnetwork/myst:latest"), timeout=None)
     if rc != 0:
         c(RED, '✗', "Failed to pull Docker image. Check your internet connection.")
         return False
     c(GREEN, '✓', "Image pulled.")
 
-    # Stop existing container if any
-    run("docker stop myst 2>/dev/null; docker rm myst 2>/dev/null", timeout=15)
+    if replace_existing:
+        run(sudo("docker rm -f myst"), timeout=60)
 
     # Run container
     c(CYAN, '→', "Creating and starting container...")
-    cmd = (
-        "docker run --cap-add NET_ADMIN -d --name myst --restart=unless-stopped "
-        "-p 4449:4449 "
+    cmd = sudo(
+        "docker run --cap-add NET_ADMIN --net host -d --name myst --restart=unless-stopped "
+        "--log-opt max-size=10m --log-opt max-file=3 "
         "-v myst-data:/var/lib/mysterium-node "
         "mysteriumnetwork/myst:latest "
         "service --agreed-terms-and-conditions"
     )
-    rc, _ = run(cmd, timeout=60)
+    rc, _ = run(cmd, timeout=120)
     if rc != 0:
         c(RED, '✗', "Failed to start container.")
         return False
 
     time.sleep(5)
-    rc, out = run("docker ps --filter name=myst --format '{{.Status}}'", capture=True)
+    rc, out = run(sudo("docker ps --filter name=^myst$ --format '{{.Status}}'"), capture=True)
     if 'Up' in out:
         c(GREEN, '✓', "Container is running!")
-        c(CYAN, '·', "TequilAPI available at: http://localhost:4449")
-        c(CYAN, '·', "Set password with: docker exec -it myst myst cli --agreed-terms-and-conditions")
+        c(CYAN, '·', "NodeUI: http://localhost:4449 — follow the onboarding there.")
         return True
     else:
-        c(RED, '✗', "Container not running. Check: docker logs myst")
+        c(RED, '✗', "Container not running. Check: sudo docker logs myst")
         return False
 
 
