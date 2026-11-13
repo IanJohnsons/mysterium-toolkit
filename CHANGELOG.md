@@ -4,6 +4,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.79
+
+- fix: **the node installer no longer changes your kernel without asking.** It installed the node package with `dpkg -i` and then `apt-get install -f -y`, which accepted whatever apt chose to satisfy the dependencies — on one Parrot machine a realtime kernel, which changed the default boot entry. apt now installs the package in one step, after a dry run: if that run would install a kernel, a boot loader or a DKMS module, or remove any package, the installer lists them and asks first. Enter means no, and nothing is changed.
+- fix: **the installer waits for apt instead of giving up.** apt, dpkg and the official install script ran with time limits of one to five minutes; on a slow mirror the installer reported failure and carried on while dpkg was still configuring packages. They now run until they finish, and wait for another apt or dpkg run to release its lock.
+
 ## v1.4.78
 
 - fix: **a removed fleet node leaves the fleet view at once.** Its card stayed, and it kept counting in the fleet totals — nodes, offline, earnings — until the toolkit restarted: the view is built from the collector's per-node cache, which was never pruned. Every reload of `nodes.json` (a save in the dashboard or an edit by hand) now drops the cached data of nodes no longer configured and rebuilds the totals; a poll still running for the removed node does not bring it back.

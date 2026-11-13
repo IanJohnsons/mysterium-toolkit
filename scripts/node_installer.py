@@ -99,6 +99,89 @@ def sudo(cmd):
         return 'sudo ' + cmd
     return cmd
 
+# v1.4.79: packages an install may only touch with the operator's consent. On a
+# Parrot test machine `dpkg -i` + `apt-get install -f -y` satisfied the node's
+# `wireguard` dependency by installing the realtime kernel, which changed the
+# GRUB default — and a 60 s timeout let the installer carry on while dpkg ran.
+_RISKY_PREFIXES = ('linux-image', 'linux-headers', 'linux-modules', 'linux-kbuild',
+                   'grub', 'shim-signed', 'systemd-boot')
+
+# Wait for another apt or dpkg run instead of failing on its lock (apt >= 1.9.11;
+# older apt ignores the option).
+_APT_LOCK = '-o DPkg::Lock::Timeout=600'
+
+
+def _apt_plan(sim_output):
+    """Split `apt-get -s` output into (installs, removals)."""
+    inst, remv = [], []
+    for line in (sim_output or '').splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0] == 'Inst':
+            inst.append(parts[1])
+        elif len(parts) >= 2 and parts[0] == 'Remv':
+            remv.append(parts[1])
+    return inst, remv
+
+
+def _risky_changes(inst, remv):
+    """Kernel or boot packages to be installed, plus every removal."""
+    risky = [p for p in inst if p.startswith(_RISKY_PREFIXES) or p.endswith('-dkms')]
+    return risky, list(remv)
+
+
+def apt_install_deb(deb_path):
+    """Install a local .deb with apt, after showing what else apt would change.
+
+    Replaces `dpkg -i` + `apt-get install -f -y`. apt resolves the dependencies
+    in one step; a simulation runs first, and a plan that installs a kernel, a
+    boot loader or a DKMS module, or removes anything, is shown and needs an
+    explicit yes. No time limit: a slow mirror must not leave dpkg running behind
+    the installer's back."""
+    deb = str(Path(deb_path).resolve())
+
+    c(CYAN, '·', "Refreshing package lists...")
+    rc, _ = run(sudo(f"apt-get {_APT_LOCK} update -qq"), timeout=None)
+    if rc != 0:
+        c(YELLOW, '⚠', "apt-get update reported errors — continuing with the lists already present.")
+
+    rc, sim = run(f"apt-get -s --no-install-recommends install '{deb}'", timeout=None, capture=True)
+    if rc != 0:
+        c(RED, '✗', "apt cannot resolve the node's dependencies on this system:")
+        for line in (sim or '').splitlines()[-8:]:
+            print(f"    {line}")
+        c(CYAN, '·', "Nothing was installed.")
+        return False
+
+    inst, remv = _apt_plan(sim)
+    risky, removals = _risky_changes(inst, remv)
+    others = [p for p in inst if p not in risky]
+    if others:
+        c(CYAN, '·', f"apt will also install: {', '.join(others)}")
+    if risky or removals:
+        print()
+        c(YELLOW, '⚠', "To install the node, apt also wants to change your system:")
+        for p in risky:
+            print(f"    install  {p}")
+        for p in removals:
+            print(f"    REMOVE   {p}")
+        print()
+        c(CYAN, '·', "A new kernel or boot loader can change what your machine boots into.")
+        c(CYAN, '·', f"Your running kernel: {os.uname().release}")
+        c(CYAN, '·', "If unsure, answer N and ask for help — nothing will be changed.")
+        val = ask("Install anyway? [y/N]:", options=['y', 'Y', 'n', 'N', ''], default='n')
+        if val.lower() != 'y':
+            c(YELLOW, '⚠', "Node install cancelled — your system was not changed.")
+            return False
+
+    c(CYAN, '→', "Installing the node package (this can take a few minutes)...")
+    rc, _ = run(sudo(f"apt-get {_APT_LOCK} install -y --no-install-recommends '{deb}'"), timeout=None)
+    if rc != 0:
+        c(RED, '✗', "Package install failed — see the apt output above.")
+        return False
+    c(GREEN, '✓', "Node package installed.")
+    return True
+
+
 def detect_container():
     """Return the container type this is running in, or '' on bare metal / a VM.
 
@@ -252,7 +335,7 @@ def install_apt(distro):
         c(CYAN, '→', "Using official Mysterium install script...")
         rc, _ = run(
             "curl -sSf https://raw.githubusercontent.com/mysteriumnetwork/node/master/install.sh | bash",
-            timeout=300,
+            timeout=None,  # v1.4.79: never give up while apt or dpkg may still run
             env=_container_env() if ctype else None
         )
         if rc == 0:
@@ -325,10 +408,12 @@ def _install_deb_direct():
             c(RED, '✗', "Download failed.")
             return False
 
-        c(CYAN, '·', "Installing .deb...")
-        rc, out = run(sudo(f"dpkg -i {tmp}"), timeout=120)
-        run(sudo("apt-get install -f -y"), timeout=60)
-        os.unlink(tmp)
+        try:
+            ok = apt_install_deb(tmp)
+        finally:
+            os.unlink(tmp)
+        if not ok:
+            return False
 
         run(sudo("myst service --agreed-terms-and-conditions"), timeout=30)
         run(sudo("systemctl enable --now mysterium-node"), timeout=15)
@@ -352,11 +437,12 @@ def install_apt_manual(distro):
     ]
 
     c(CYAN, '·', "Running manual install...")
-    rc, _ = run(sudo("apt-get update -qq"), timeout=120)
-    rc, _ = run(sudo("apt-get install -y curl"), timeout=60)
+    # v1.4.79: no time limits — a timeout here left dpkg running behind the installer.
+    rc, _ = run(sudo(f"apt-get {_APT_LOCK} update -qq"), timeout=None)
+    rc, _ = run(sudo(f"apt-get {_APT_LOCK} install -y curl"), timeout=None)
     rc, _ = run(
         "curl -sSf https://raw.githubusercontent.com/mysteriumnetwork/node/master/install.sh | sudo bash",
-        timeout=300
+        timeout=None
     )
     if rc == 0:
         c(GREEN, '✓', "Install complete.")
@@ -377,7 +463,7 @@ def install_dnf(distro):
 
     rc, _ = run(
         "curl -sSf https://raw.githubusercontent.com/mysteriumnetwork/node/master/install.sh | sudo bash",
-        timeout=300
+        timeout=None  # v1.4.79: never give up while the package manager may still run
     )
     if rc == 0:
         c(GREEN, '✓', "Install complete.")
@@ -503,7 +589,7 @@ def install_script():
     print()
     rc, _ = run(
         "curl -sSf https://raw.githubusercontent.com/mysteriumnetwork/node/master/install.sh | sudo bash",
-        timeout=300,
+        timeout=None,  # v1.4.79: never give up while apt or dpkg may still run
         env=_container_env() if ctype else None
     )
     if rc == 0:
@@ -569,10 +655,8 @@ def install_deb_manual():
                 return False
 
         c(CYAN, '→', f"Installing {local_path.name}...")
-        rc, _ = run(sudo(f"dpkg -i '{local_path}'"), timeout=120)
-        if rc != 0:
-            c(YELLOW, '⚠', "dpkg had issues — fixing dependencies...")
-            run(sudo("apt-get install -f -y"), timeout=120)
+        if not apt_install_deb(local_path):
+            return False
 
         run(sudo("systemctl enable --now mysterium-node"))
         time.sleep(3)
