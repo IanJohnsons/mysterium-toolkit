@@ -707,47 +707,9 @@ def install_alpine():
     return install_docker()
 
 
-# ── Post-install: node password setup ─────────────────────────────────────────
-def setup_node_password(is_docker=False):
-    """Set node password automatically via myst config set, then restart."""
-    header("Set Node Password")
-
-    c(CYAN, '·', "Setting TequilAPI password via myst config set...")
-    print()
-
-    password = ask("Choose a TequilAPI password (press Enter to use default 'mystberry'):", default='mystberry')
-    if not password:
-        password = 'mystberry'
-
-    if is_docker:
-        rc, _ = run(
-            f"docker exec myst myst config set tequilapi.auth.password '{password}'",
-            timeout=15
-        )
-    else:
-        rc, _ = run(
-            f"myst config set tequilapi.auth.password '{password}'",
-            timeout=15
-        )
-
-    if rc == 0:
-        c(GREEN, '✓', f"Password set successfully.")
-        c(CYAN, '·', "Restarting node to apply password...")
-        run(sudo('systemctl restart mysterium-node'), timeout=15)
-        time.sleep(3)
-        c(GREEN, '✓', "Node restarted with new password.")
-    else:
-        c(YELLOW, '⚠', "Could not set password automatically.")
-        c(CYAN, '·', f"Set it manually: myst config set tequilapi.auth.password YOUR_PASSWORD")
-        c(CYAN, '·', f"Then restart: sudo systemctl restart mysterium-node")
-
-    print()
-    c(CYAN, '·', f"Remember this password — you need it in the toolkit setup wizard.")
-    print()
-
-    return password
-
-
+# v1.4.81: no password step. It wrote tequilapi.auth.password with `myst config
+# set`, which the node does not use to log in, and told the operator to remember
+# the password for the toolkit. The password is set in NodeUI's onboarding.
 def _start_all_services(is_docker=False, password='mystberry'):
     """Start all Mysterium services and make them persistent via myst config set."""
     import urllib.request, json as _json, time as _time
@@ -926,22 +888,22 @@ def main(args=None):
 
     if success:
         print()
-        node_password = setup_node_password(is_docker=is_docker)
-        print()
-        _start_all_services(is_docker=is_docker, password=node_password)
+        # Before the onboarding the node still has its default password.
+        _start_all_services(is_docker=is_docker)
         c(GREEN, '✓', "Node install complete!")
         print()
         c(CYAN, '·', "━" * 55)
         c(CYAN, '·', "IMPORTANT: Complete your node setup in the browser:")
         print()
         c(CYAN, '·', "  1. Open the Node UI to claim it:")
-        c(CYAN, '·', "     • On this machine:  http://localhost:4449/ui")
+        c(CYAN, '·', "     • On this machine:  http://localhost:4449")
         c(CYAN, '·', "     • Remote / VPS:     open an SSH tunnel first, then use localhost:")
         c(CYAN, '·', "         ssh -L 4449:127.0.0.1:4449 USER@THIS_SERVER_IP")
-        c(CYAN, '·', "       then open http://localhost:4449/ui on your own computer.")
+        c(CYAN, '·', "       then open http://localhost:4449 on your own computer.")
         c(CYAN, '·', "     (Port 4449 is not exposed to the internet, by design.)")
         print()
-        c(CYAN, '·', "  2. Log in and accept the Terms & Conditions")
+        c(CYAN, '·', "  2. Follow the onboarding: accept the Terms & Conditions and")
+        c(CYAN, '·', "     choose your own node password (it replaces the default)")
         c(CYAN, '·', "  3. Claim your node on mystnodes.com:")
         c(CYAN, '·', "     Settings → MMN API Key → paste your key")
         c(CYAN, '·', "  4. Set your payout wallet (beneficiary address)")

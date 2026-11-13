@@ -4,6 +4,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.81
+
+- fix: **the node installer no longer asks for a password the node does not use.** It asked for a "TequilAPI password", wrote it with `myst config set` and told you to remember it for the toolkit setup — but the node's login does not read that setting, so the password you chose did nothing. The step is gone. You choose your node password in NodeUI's onboarding, as the closing text now says.
+- fix: **the NodeUI address in the installer's closing text.** It pointed to `http://localhost:4449/ui`, which answers 404; NodeUI is at `http://localhost:4449`.
+
 ## v1.4.80
 
 - fix: **the node installer no longer starts a second node as root.** After installing the package it ran `sudo myst service --agreed-terms-and-conditions`, which is the node itself: it ran as root in the foreground with its own identity in `/root/.mysterium`, until a 30-second timeout killed it. The package's own service already accepts the terms and is started by the package, so the call is gone.
