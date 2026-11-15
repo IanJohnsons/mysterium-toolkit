@@ -4,6 +4,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.83
+
+- fix: **Fedora and RHEL are offered the Docker install.** The recommended option there was a DNF install that ran Mysterium's install script — which supports Debian and Ubuntu only — and then asked for an `.rpm` link, but Mysterium publishes no RPM packages. It could only fail. Docker is the official route on these systems and is now the recommended option. The "Official script" option is shown only on Debian and Ubuntu based systems, and no longer calls itself universal.
+- fix: **the node installer no longer starts services on its own.** After installing, it logged in with the default password, started the public VPN service (`wireguard`) and `noop` on top of the node's own defaults, and wrote the list of active services to the wrong configuration file. The node now starts with its own defaults (scraping, data transfer, dVPN, monitoring); whether to offer public VPN is your choice in NodeUI.
+
 ## v1.4.82
 
 - fix: **the installer's Docker path runs the node the way Mysterium documents it.** The container used Docker's bridge network with only port 4449 mapped; the node needs the host network (`--net host`) to work out the address it publishes for its VPN service. Docker commands now run with sudo, so they also work for a user outside the `docker` group, and the container's log is capped at 3 × 10 MB.

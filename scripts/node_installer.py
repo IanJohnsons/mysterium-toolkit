@@ -6,12 +6,11 @@ Full interactive installer for the Mysterium node on any Linux distro.
 
 Supports:
   - APT install       (Debian / Ubuntu / Parrot / Mint / Pop / Kali)
-  - DNF/YUM install   (Fedora / RHEL / CentOS / Rocky / Alma)
-  - Pacman install    (Arch / Manjaro / EndeavourOS)
-  - APK install       (Alpine)
-  - Docker install    (any distro with Docker)
+  - Docker install    (any distro with Docker; the route for Fedora / RHEL,
+                       which have no Mysterium packages, and for Alpine)
+  - AUR install       (Arch / Manjaro / EndeavourOS)
   - Manual .deb       (offline / specific version)
-  - Script install    (curl | bash — Mysterium official)
+  - Script install    (curl | bash — Mysterium official, Debian / Ubuntu only)
 
 Author: Ian Johnsons
 License: CC BY-NC-SA 4.0
@@ -455,39 +454,6 @@ def install_apt_manual(distro):
     return False
 
 
-def install_dnf(distro):
-    """Install via DNF (Fedora/RHEL/Rocky/Alma)."""
-    header(f"DNF Install — {distro['pretty']}")
-
-    c(CYAN, '·', "Installing via official Mysterium install script...")
-    print()
-    val = ask("Continue? [Y/n]:", options=['y', 'Y', 'n', 'N', ''], default='y')
-    if val.lower() == 'n':
-        return False
-
-    rc, _ = run(
-        "curl -sSf https://raw.githubusercontent.com/mysteriumnetwork/node/master/install.sh | sudo bash",
-        timeout=None  # v1.4.79: never give up while the package manager may still run
-    )
-    if rc == 0:
-        c(GREEN, '✓', "Install complete.")
-        run(sudo("systemctl enable --now mysterium-node"))
-        return True
-
-    # Manual RPM fallback
-    c(YELLOW, '⚠', "Script failed — trying manual RPM install...")
-    latest_url = "https://github.com/mysteriumnetwork/node/releases/latest"
-    c(DIM, '·', f"Get the latest .rpm from: {latest_url}")
-    rpm_url = ask("Paste the direct .rpm download URL (or press Enter to skip):")
-    if rpm_url:
-        rc, _ = run(sudo(f"dnf install -y '{rpm_url}'"), timeout=300)
-        if rc == 0:
-            c(GREEN, '✓', "RPM installed.")
-            return True
-    c(RED, '✗', "DNF install failed.")
-    return False
-
-
 def install_docker():
     """Install Mysterium node via Docker."""
     header("Docker Install")
@@ -590,11 +556,11 @@ def install_docker_engine():
 
 
 def install_script():
-    """Install via official Mysterium install script (universal)."""
+    """Install via the official Mysterium install script (Debian and Ubuntu based systems)."""
     header("Script Install — Official Mysterium Installer")
 
     c(CYAN, '·', "Uses the official install.sh from mysteriumnetwork/node on GitHub.")
-    c(CYAN, '·', "Works on Debian, Ubuntu, Fedora, and most systemd-based distros.")
+    c(CYAN, '·', "For Debian and Ubuntu based systems only.")
     print()
     val = ask("Continue? [Y/n]:", options=['y', 'Y', 'n', 'N', ''], default='y')
     if val.lower() == 'n':
@@ -729,79 +695,6 @@ def install_alpine():
 # v1.4.81: no password step. It wrote tequilapi.auth.password with `myst config
 # set`, which the node does not use to log in, and told the operator to remember
 # the password for the toolkit. The password is set in NodeUI's onboarding.
-def _start_all_services(is_docker=False, password='mystberry'):
-    """Start all Mysterium services and make them persistent via myst config set."""
-    import urllib.request, json as _json, time as _time
-
-    c(CYAN, '·', "Starting all Mysterium services...")
-    print()
-
-    # Wait for TequilAPI to be ready
-    for _ in range(10):
-        try:
-            urllib.request.urlopen('http://localhost:4449/healthcheck', timeout=2)
-            break
-        except Exception:
-            _time.sleep(2)
-
-    # Get identity via TequilAPI
-    identity = None
-    try:
-        # Authenticate first
-        auth_data = _json.dumps({"username": "myst", "password": password}).encode()
-        req = urllib.request.Request(
-            'http://localhost:4449/auth/authenticate',
-            data=auth_data,
-            headers={'Content-Type': 'application/json'},
-            method='POST'
-        )
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            token = _json.loads(resp.read())['token']
-
-        # Get identity
-        req2 = urllib.request.Request(
-            'http://localhost:4449/identities',
-            headers={'Authorization': f'Bearer {token}'}
-        )
-        with urllib.request.urlopen(req2, timeout=5) as resp2:
-            ids = _json.loads(resp2.read())
-            if ids.get('identities'):
-                identity = ids['identities'][0]['id']
-    except Exception as e:
-        c(YELLOW, '⚠', f"Could not get identity via API: {e}")
-
-    if not identity:
-        c(YELLOW, '⚠', "Could not detect identity — skipping service start.")
-        c(CYAN, '·', "Start services manually: myst cli → service start <identity> wireguard")
-        return
-
-    c(CYAN, '·', f"Identity: {identity}")
-
-    services = ['wireguard', 'dvpn', 'data_transfer', 'scraping', 'noop', 'monitoring']
-    started = []
-
-    for svc in services:
-        if is_docker:
-            cmd = f"docker exec myst myst cli service start {identity} {svc}"
-        else:
-            cmd = f"myst cli service start {identity} {svc}"
-        rc, out = run(cmd, timeout=15)
-        if rc == 0:
-            c(GREEN, '✓', f"{svc} started")
-            started.append(svc)
-        else:
-            c(YELLOW, '·', f"{svc} — skipped or already running")
-
-    # Persist active services via config
-    if started:
-        services_str = ','.join(started)
-        run(f"myst config set active-services '{services_str}'", timeout=10)
-        c(GREEN, '✓', f"Services persisted: {services_str}")
-
-    print()
-
-
-
 def main(args=None):
     import argparse
     parser = argparse.ArgumentParser(description='Mysterium Node Installer')
@@ -845,8 +738,11 @@ def main(args=None):
         options[str(num)] = ('apt', False)
         num += 1
     elif pkg in ('dnf', 'yum'):
-        print(f"  {CYAN}{num}{NC}. {BOLD}DNF/YUM install{NC} (recommended for {distro['pretty']})")
-        options[str(num)] = ('dnf', False)
+        # v1.4.83: Mysterium publishes no RPM packages and its install script is
+        # for Debian/Ubuntu only, so the old DNF option could only fail.
+        print(f"  {CYAN}{num}{NC}. {BOLD}Docker install{NC} (recommended for {distro['pretty']})")
+        print(f"     Mysterium publishes no RPM packages — Docker is the official route here")
+        options[str(num)] = ('docker', False)
         num += 1
     elif pkg == 'pacman':
         print(f"  {CYAN}{num}{NC}. {BOLD}AUR install{NC} (recommended for Arch)")
@@ -867,9 +763,10 @@ def main(args=None):
         options[str(num)] = ('deb', False)
         num += 1
 
-    print(f"  {CYAN}{num}{NC}. {BOLD}Official script{NC} — curl | bash (universal)")
-    options[str(num)] = ('script', False)
-    num += 1
+    if pkg == 'apt':
+        print(f"  {CYAN}{num}{NC}. {BOLD}Official script{NC} — curl | bash (Debian / Ubuntu)")
+        options[str(num)] = ('script', False)
+        num += 1
 
     print(f"  {CYAN}0{NC}. Cancel")
     options['0'] = ('cancel', False)
@@ -886,13 +783,9 @@ def main(args=None):
         return False
 
     # Run chosen installer
-    is_docker = False
     if method_key == 'apt':
         success = install_apt(distro)
-    elif method_key == 'dnf':
-        success = install_dnf(distro)
     elif method_key == 'docker':
-        is_docker = True
         success = install_docker()
     elif method_key == 'deb':
         success = install_deb_manual()
@@ -907,8 +800,11 @@ def main(args=None):
 
     if success:
         print()
-        # Before the onboarding the node still has its default password.
-        _start_all_services(is_docker=is_docker)
+        # v1.4.83: no services are started here. The node starts its own defaults
+        # (scraping, data_transfer, dvpn, monitoring); the public VPN service is
+        # the operator's choice in NodeUI. The removed step also started
+        # wireguard and noop before the onboarding and wrote active-services to
+        # the invoking user's config, which the node service does not read.
         c(GREEN, '✓', "Node install complete!")
         print()
         c(CYAN, '·', "━" * 55)
