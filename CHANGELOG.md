@@ -4,6 +4,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.85
+
+- fix: **the wallet card opens at once and fills in by itself.** It waited for Etherscan while the page loaded — up to ten seconds for the balance and ten for the transfers — and a failed call was not remembered, so every page load during an Etherscan hang waited again. The card also loaded only once. Etherscan is now asked in the background: the card gets the last known data immediately, shows "updating Polygon data…" while a refresh runs and asks again by itself. After a failed call the next attempt waits three minutes.
+- new: **set the update branch of the whole fleet at once.** The ⎇ button on the fleet page now offers "all → main" and "all → dev". The master sends the choice to every node through the fleet proxy and shows the result per node; each node still accepts only `main` or `dev`, refuses a branch behind the version it runs and refuses to switch over local changes. Each node switches at its next update — the update button, or its hourly auto-update.
+- fix: **"update available" appears on every fleet card together.** Each node keeps its update check for five minutes, so after a release the tag appeared card by card. When the master sees a new version it now asks every node that does not show it yet to check again. A node allows such a forced check once every 30 seconds.
+- new: **add the master's own node to the fleet in one click.** Adding a first remote node switches a toolkit into fleet mode, and its own node then had no card until it was added by hand. The fleet page now says so and offers "Add this toolkit's own node"; the toolkit fills in its own API key and pins its own certificate itself.
+
 ## v1.4.84
 
 - fix: **the On-Chain Wallet card counted settlements up to 20 times.** When Polygon data was not available, the card listed the node's settle history — paged until an empty page. The node never sends one: asked for a page past the last, it returns the last page again. The last page was collected up to 20 times; one node showed 867 settlements and 6068 MYST settled against 1813 MYST ever earned. Paging now stops at the node's own page count, and at a page that repeats.

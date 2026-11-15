@@ -4198,6 +4198,151 @@ POLYGONSCAN_CACHE_TTL = 3600  # 1 hour
 _onchain_tx_cache = {'address': None, 'txs': None, 'at': 0.0}
 ONCHAIN_TX_TTL = 600  # 10 minutes
 
+# v1.4.85: Etherscan is asked in the background, never while a page waits. The
+# settle-history route answered only after up to two 10-second Etherscan calls,
+# and a failed call was not remembered, so every page load while Etherscan hung
+# waited again. The route now returns the cached data at once and starts one
+# refresh; after a failure the next attempt waits WALLET_RETRY_AFTER seconds.
+MYST_POLYGON_CONTRACT = '0x1379e8886a944d2d9d440b3d88df536aea08d9f3'
+WALLET_RETRY_AFTER = 180
+_wallet_refresh = {'running': False, 'address': None, 'last_fail': 0.0,
+                   'balance_error': None, 'tx_error': None}
+_wallet_refresh_lock = Lock()
+
+
+def _etherscan_get(params, what):
+    """One Etherscan v2 call (chainid 137 = Polygon): (json, None) or (None, reason).
+
+    The legacy api.polygonscan.com endpoint only answers with a 301 since the
+    Etherscan V2 migration; V2 accepts legacy Polygonscan keys too."""
+    try:
+        r = requests.get('https://api.etherscan.io/v2/api',
+                         params=dict(params, chainid='137'), timeout=10)
+    except requests.exceptions.Timeout:
+        logger.warning(f'Wallet {what}: Etherscan did not answer within 10 s')
+        return None, 'timeout'
+    except Exception as e:
+        logger.warning(f'Wallet {what}: Etherscan request failed: {e}')
+        return None, 'error'
+    if r.status_code != 200:
+        logger.warning(f'Wallet {what}: Etherscan HTTP {r.status_code}')
+        return None, 'error'
+    try:
+        return r.json(), None
+    except Exception:
+        logger.warning(f'Wallet {what}: Etherscan answered with something that is not JSON')
+        return None, 'error'
+
+
+def _etherscan_balance(beneficiary, api_key):
+    """MYST balance on Polygon: (float, None) or (None, reason)."""
+    d, err = _etherscan_get({'module': 'account', 'action': 'tokenbalance',
+                             'contractaddress': MYST_POLYGON_CONTRACT, 'address': beneficiary,
+                             'tag': 'latest', 'apikey': api_key}, 'balance')
+    if err:
+        return None, err
+    if d.get('status') == '1' and str(d.get('result', '')).isdigit():
+        return round(int(d['result']) / 1e18, 6), None
+    msg = f"{d.get('message', '')} {d.get('result', '')}"
+    if 'rate limit' in msg.lower():
+        logger.warning('Wallet balance: Etherscan rate limit')
+        return None, 'rate_limit'
+    logger.warning(f'Wallet balance: Etherscan answered {msg[:120]}')
+    return None, 'error'
+
+
+def _etherscan_transfers(beneficiary, api_key):
+    """MYST transfers of the wallet, as card rows: (list, None) or (None, reason).
+    A wallet without transfers is ([], None)."""
+    import datetime as _dt
+    d, err = _etherscan_get({'module': 'account', 'action': 'tokentx',
+                             'contractaddress': MYST_POLYGON_CONTRACT, 'address': beneficiary,
+                             'sort': 'desc', 'apikey': api_key}, 'transfers')
+    if err:
+        return None, err
+    if not (d.get('status') == '1' and isinstance(d.get('result'), list)):
+        msg = f"{d.get('message', '')} {d.get('result', '')}"
+        if 'no transactions found' in msg.lower():
+            return [], None
+        if 'rate limit' in msg.lower():
+            logger.warning('Wallet transfers: Etherscan rate limit')
+            return None, 'rate_limit'
+        logger.warning(f'Wallet transfers: Etherscan answered {msg[:120]}')
+        return None, 'error'
+    ben_lower, rows = beneficiary.lower(), []
+    for tx in d['result']:
+        try:
+            ts = int(tx.get('timeStamp', 0) or 0)
+            tx_hash = tx.get('hash', '')
+            rows.append({
+                'date':            _dt.datetime.fromtimestamp(ts, _dt.timezone.utc).strftime('%Y-%m-%d %H:%M') if ts else '—',
+                'amount_myst':     round(int(tx.get('value', 0) or 0) / 1e18, 6),
+                'direction':       'in' if tx.get('to', '').lower() == ben_lower else 'out',
+                'tx_hash':         tx_hash,
+                'polygonscan_url': f'https://polygonscan.com/tx/{tx_hash}' if tx_hash else None,
+                'from':            tx.get('from', ''),
+                'to':              tx.get('to', ''),
+            })
+        except Exception:
+            pass
+    return rows, None
+
+
+def _wallet_stale(beneficiary, now):
+    """(balance stale, transfers stale) for this wallet."""
+    bal_fresh = (_polygonscan_cache['address'] == beneficiary and _polygonscan_cache['balance'] is not None
+                 and now - _polygonscan_cache['timestamp'] < POLYGONSCAN_CACHE_TTL)
+    tx_fresh = (_onchain_tx_cache['address'] == beneficiary and _onchain_tx_cache['txs'] is not None
+                and now - _onchain_tx_cache['at'] < ONCHAIN_TX_TTL)
+    return not bal_fresh, not tx_fresh
+
+
+def _wallet_refresh_worker(beneficiary, api_key, need_balance, need_tx):
+    failed = False
+    try:
+        if need_balance:
+            bal, err = _etherscan_balance(beneficiary, api_key)
+            if bal is not None:
+                _polygonscan_cache.update({'balance': bal, 'timestamp': time.time(), 'address': beneficiary})
+            _wallet_refresh['balance_error'] = err
+            failed = failed or err is not None
+        if need_tx:
+            rows, err = _etherscan_transfers(beneficiary, api_key)
+            if rows is not None:
+                _onchain_tx_cache.update({'address': beneficiary, 'txs': rows, 'at': time.time()})
+            _wallet_refresh['tx_error'] = err
+            failed = failed or err is not None
+    except Exception as e:
+        logger.warning(f'Wallet refresh failed: {e}')
+        failed = True
+    finally:
+        with _wallet_refresh_lock:
+            if failed:
+                _wallet_refresh['last_fail'] = time.time()
+            _wallet_refresh['running'] = False
+
+
+def _wallet_start(target, args):
+    Thread(target=target, args=args, daemon=True, name='wallet-refresh').start()
+
+
+def _wallet_kick(beneficiary, api_key):
+    """Start one background refresh when the wallet data is stale."""
+    now = time.time()
+    need_balance, need_tx = _wallet_stale(beneficiary, now)
+    if not (need_balance or need_tx):
+        return
+    with _wallet_refresh_lock:
+        if _wallet_refresh['running']:
+            return
+        if _wallet_refresh['address'] != beneficiary:
+            _wallet_refresh.update({'address': beneficiary, 'last_fail': 0.0,
+                                    'balance_error': None, 'tx_error': None})
+        elif now - _wallet_refresh['last_fail'] < WALLET_RETRY_AFTER:
+            return
+        _wallet_refresh['running'] = True
+    _wallet_start(_wallet_refresh_worker, (beneficiary, api_key, need_balance, need_tx))
+
 
 class EarningsDeltaTracker:
     """Track earnings over time by recording unsettled balance snapshots.
@@ -9212,7 +9357,16 @@ def check_for_update():
     branch then permanently reported an update, because main carries a different
     version number. Reading the branch from git keeps testing quiet without having
     to disable the auto-update timer.
+
+    v1.4.85: ?refresh=1 skips the five-minute cache, at most once per 30 seconds.
+    A fleet master that sees a new version asks every node to look again, so the
+    "update available" tag appears on all cards together instead of one by one.
     """
+    if request.args.get('refresh') == '1':
+        with _TOOLKIT_UPDATE_LOCK:
+            age = time.time() - _TOOLKIT_UPDATE['at']
+        if age >= 30:
+            return jsonify(_toolkit_update_refresh()), 200
     return jsonify(_toolkit_update_status()), 200
 
 
@@ -11247,6 +11401,19 @@ def get_all_metrics():
         with _fleet_lock:
             fleet = {k: copy.deepcopy(v) for k, v in _fleet_aggregate.items() if k != 'nodes'}
             fleet['nodes'] = _fleet_nodes_for_ui(_fleet_aggregate.get('nodes') or [])
+        # v1.4.85: is this master's own node one of the fleet nodes? A first remote
+        # node switches the master into fleet mode, and its own node then vanished
+        # from view until the operator added it by hand. None = cannot tell (no
+        # local node, or a fleet node that reports no identity yet).
+        _self_id = str((data.get('nodeStatus') or {}).get('identity')
+                       or _identity_cache.get('address') or '').lower()
+        _ids = [str(n.get('identity') or '').lower() for n in fleet['nodes']]
+        if not _self_id:
+            fleet['self_in_fleet'] = None
+        elif _self_id in _ids:
+            fleet['self_in_fleet'] = True
+        else:
+            fleet['self_in_fleet'] = None if '' in _ids else False
         data['fleet'] = fleet
     else:
         # v1.4.59: a fleet lost by a reinstall — the dashboard offers it back.
@@ -11520,6 +11687,18 @@ def save_fleet_config():
                 base = _re.sub(r'[^a-z0-9]', '-', (n.get('label', f'node{i}')).lower())
                 n['id'] = base.strip('-') or f'node{i}'
 
+            # v1.4.85: "Add this toolkit's own node" sends self: true. This toolkit
+            # fills in its own API key and pins its own certificate, so neither has
+            # to pass through the browser.
+            if n.pop('self', False):
+                if not API_KEY:
+                    return jsonify({'error': 'This toolkit has no API key to reach itself with.'}), 400
+                n['toolkit_api_key'] = API_KEY
+                if str(n.get('toolkit_url', '')).lower().startswith('https://') and not n.get('tls_cert_pem'):
+                    try:
+                        n['tls_cert_pem'] = Path(TLS_CERT).read_text()
+                    except Exception as e:
+                        return jsonify({'error': f'Could not read this toolkit\'s certificate: {e}'}), 500
             if not n.get('toolkit_api_key'):
                 prev = by_id.get(n.get('id')) or by_url.get(n.get('toolkit_url'))
                 prev_key = (prev or {}).get('toolkit_api_key') or ''
@@ -11881,6 +12060,13 @@ def fleet_node_proxy(node_id, endpoint):
         # viewed. It fetched from the master and showed the master's count on
         # every fleet node's page.
         'api/payment-errors',
+        # v1.4.85: the fleet master can set the update branch of every node. The
+        # node's own route still decides: only 'main' or 'dev', never a branch
+        # behind the running version, never over local changes — and update.sh,
+        # which acts on the choice as root, accepts those two words and nothing
+        # else. Whoever is logged in on the master can already update and restart
+        # every node through this proxy.
+        'toolkit/branch',
     }
     endpoint_base = endpoint.split('?')[0]
     if (endpoint_base not in ALLOWED
@@ -13585,178 +13771,35 @@ def get_settle_history():
         if not beneficiary:
             beneficiary = setup_config.get('beneficiary_address', '')
 
-        # Fetch on-chain MYST balance
-        # Supports both Etherscan key (via v2 API chainid=137) and Polygonscan key
-        # Re-reads setup.json each call so key changes take effect without restart
-        # Cached 1 hour — rate-limited state cached 5 min
-        MYST_CONTRACT = '0x1379e8886a944d2d9d440b3d88df536aea08d9f3'
+        # On-chain MYST balance and transfers, from the background cache (v1.4.85).
+        # setup.json is re-read on every call so a new key works without a restart.
+        MYST_CONTRACT = MYST_POLYGON_CONTRACT
+        onchain_txs = []
+        onchain_error = None        # why the transfer list is old or missing, for the card
+        onchain_as_of = None        # unix time of the list shown
+        wallet_refreshing = False
         if beneficiary:
-            import time as _time
-            global _polygonscan_cache
-            _live_api_key = ''
             try:
                 _live_cfg = json.loads(setup_config_path.read_text()) if setup_config_path.exists() else {}
                 _live_api_key = _live_cfg.get('polygonscan_api_key', '')
             except Exception:
                 _live_api_key = setup_config.get('polygonscan_api_key', '')
-
-            now_ts = _time.time()
-            # v1.4.84: why the balance is missing, for the card. It said "rate limited —
-            # add polygonscan_api_key" for every failure, also with a key configured.
-            wallet_error = None if _live_api_key else 'no_key'
-            _cache_age = now_ts - _polygonscan_cache['timestamp']
-            _cache_match = _polygonscan_cache['address'] == beneficiary
-            if _cache_match and _polygonscan_cache['balance'] is not None and _cache_age < POLYGONSCAN_CACHE_TTL:
-                wallet_balance_myst = _polygonscan_cache['balance']
-                logger.debug(f'Wallet balance: cached {wallet_balance_myst} MYST ({int(_cache_age)}s old)')
-            elif _cache_match and _polygonscan_cache['balance'] is None and _cache_age < 300:
-                logger.debug('Wallet balance: rate-limited recently, skipping (5 min cooldown)')
-                wallet_error = wallet_error or 'rate_limit'
+            if not _live_api_key:
+                wallet_error = 'no_key'
             else:
-                def _fetch_balance(api_key):
-                    """Try Etherscan v2 (chainid=137) first, fallback to Polygonscan."""
-                    # Strategy 1: Etherscan v2 API with Polygon chainid — works with Etherscan keys
-                    if api_key:
-                        try:
-                            r = requests.get(
-                                'https://api.etherscan.io/v2/api',
-                                params={
-                                    'chainid': '137',
-                                    'module': 'account',
-                                    'action': 'tokenbalance',
-                                    'contractaddress': MYST_CONTRACT,
-                                    'address': beneficiary,
-                                    'tag': 'latest',
-                                    'apikey': api_key,
-                                },
-                                timeout=10
-                            )
-                            if r.status_code == 200:
-                                d = r.json()
-                                if d.get('status') == '1' and str(d.get('result', '')).isdigit():
-                                    return round(int(d['result']) / 1e18, 6), None
-                                msg = str(d.get('message', '')) + str(d.get('result', ''))
-                                if 'rate limit' in msg.lower():
-                                    return None, 'rate_limit'
-                                logger.warning(f'Wallet balance: Etherscan answered {d.get("message")} '
-                                               f'{str(d.get("result", ""))[:80]}')
-                                return None, 'error'
-                            logger.warning(f'Wallet balance: Etherscan HTTP {r.status_code}')
-                            return None, 'error'
-                        except requests.exceptions.Timeout:
-                            logger.warning('Wallet balance: Etherscan did not answer within 10 s')
-                            return None, 'timeout'
-                        except Exception as e:
-                            logger.warning(f'Wallet balance: Etherscan request failed: {e}')
-                            return None, 'error'
-
-                    # api.polygonscan.com was removed here: since the Etherscan V2 migration
-                    # it only returns a 301 redirect (dead endpoint). Etherscan V2 above with
-                    # chainid=137 accepts both Etherscan and legacy Polygonscan API keys.
-                    return None, 'error'
-
-                bal, err = _fetch_balance(_live_api_key)
-                if bal is None and _live_api_key:
-                    wallet_error = err
-                if bal is not None:
-                    wallet_balance_myst = bal
-                    _polygonscan_cache.update({'balance': bal, 'timestamp': now_ts, 'address': beneficiary})
-                elif err == 'rate_limit':
-                    # Keep the last good cached balance on rate-limit instead of blanking
-                    # it — overwriting with None used to leave a dead, never-true check here.
-                    _prev_bal = _polygonscan_cache.get('balance')
-                    _polygonscan_cache.update({'timestamp': now_ts, 'address': beneficiary})
-                    if _prev_bal is not None:
-                        wallet_balance_myst = _prev_bal
-                    logger.debug('Wallet balance: rate limited on both APIs — keeping last cached balance')
-                else:
-                    # v1.4.84: keep the last good balance on any failure, as on a rate limit.
-                    _prev_bal = _polygonscan_cache.get('balance')
-                    if _prev_bal is not None and _cache_match:
-                        wallet_balance_myst = _prev_bal
+                _wallet_kick(beneficiary, _live_api_key)
+                wallet_refreshing = _wallet_refresh['running']
+                if _polygonscan_cache['address'] == beneficiary:
+                    wallet_balance_myst = _polygonscan_cache['balance']
+                if wallet_balance_myst is None and not wallet_refreshing:
+                    wallet_error = _wallet_refresh['balance_error']
+                if _onchain_tx_cache['address'] == beneficiary and _onchain_tx_cache['txs'] is not None:
+                    onchain_txs = list(_onchain_tx_cache['txs'])
+                    onchain_as_of = _onchain_tx_cache['at']
+                if not wallet_refreshing:
+                    onchain_error = _wallet_refresh['tx_error']
 
         total_settled = round(sum(s['amount_myst'] for s in settlements if not s['error']), 6)
-
-        # Fetch on-chain token transfers from Polygonscan/Etherscan
-        # More complete than TequilAPI — shows all 40 blockchain transactions
-        onchain_txs = []
-        onchain_error = None        # v1.4.84: why the list is old or missing, for the card
-        onchain_as_of = None        # unix time of the list shown
-        if beneficiary and _live_api_key:
-            import time as _time
-            now_ts = _time.time()
-            _c = _onchain_tx_cache
-            _c_match = _c['address'] == beneficiary and _c['txs'] is not None
-
-            def _fetch_tokentx(api_key):
-                """(list, None) on success — an empty list when the wallet has no
-                transfers — or (None, reason): timeout, rate_limit, error."""
-                # Etherscan v2 (chainid=137 = Polygon). The legacy api.polygonscan.com
-                # fallback was removed — it only returns a 301 redirect since the
-                # Etherscan V2 migration. V2 accepts legacy Polygonscan keys too.
-                try:
-                    r = requests.get('https://api.etherscan.io/v2/api', params={
-                        'chainid': '137', 'module': 'account', 'action': 'tokentx',
-                        'contractaddress': MYST_CONTRACT, 'address': beneficiary,
-                        'sort': 'desc', 'apikey': api_key,
-                    }, timeout=10)
-                except requests.exceptions.Timeout:
-                    logger.warning('Wallet transfers: Etherscan did not answer within 10 s')
-                    return None, 'timeout'
-                except Exception as e:
-                    logger.warning(f'Wallet transfers: Etherscan request failed: {e}')
-                    return None, 'error'
-                if r.status_code != 200:
-                    logger.warning(f'Wallet transfers: Etherscan HTTP {r.status_code}')
-                    return None, 'error'
-                try:
-                    d = r.json()
-                except Exception:
-                    logger.warning('Wallet transfers: Etherscan answered with something that is not JSON')
-                    return None, 'error'
-                if d.get('status') == '1' and isinstance(d.get('result'), list):
-                    return d['result'], None
-                msg = f"{d.get('message', '')} {d.get('result', '')}"
-                if 'no transactions found' in msg.lower():
-                    return [], None
-                if 'rate limit' in msg.lower():
-                    logger.warning('Wallet transfers: Etherscan rate limit')
-                    return None, 'rate_limit'
-                logger.warning(f'Wallet transfers: Etherscan answered {msg[:120]}')
-                return None, 'error'
-
-            if _c_match and now_ts - _c['at'] < ONCHAIN_TX_TTL:
-                onchain_txs, onchain_as_of = list(_c['txs']), _c['at']
-            else:
-                try:
-                    raw_txs, onchain_error = _fetch_tokentx(_live_api_key)
-                except Exception as e:
-                    raw_txs, onchain_error = None, 'error'
-                    logger.warning(f'Wallet transfers: {e}')
-                if raw_txs is not None:
-                    ben_lower = beneficiary.lower()
-                    import datetime as _dt
-                    for tx in raw_txs:
-                        try:
-                            val_wei = int(tx.get('value', 0) or 0)
-                            ts = int(tx.get('timeStamp', 0) or 0)
-                            tx_hash = tx.get('hash', '')
-                            onchain_txs.append({
-                                'date':             _dt.datetime.fromtimestamp(ts, _dt.timezone.utc).strftime('%Y-%m-%d %H:%M') if ts else '—',
-                                'amount_myst':      round(val_wei / 1e18, 6),
-                                'direction':        'in' if tx.get('to', '').lower() == ben_lower else 'out',
-                                'tx_hash':          tx_hash,
-                                'polygonscan_url':  f'https://polygonscan.com/tx/{tx_hash}' if tx_hash else None,
-                                'from':             tx.get('from', ''),
-                                'to':               tx.get('to', ''),
-                            })
-                        except Exception:
-                            pass
-                    _c.update({'address': beneficiary, 'txs': list(onchain_txs), 'at': now_ts})
-                    onchain_as_of = now_ts
-                elif _c_match:
-                    # Etherscan failed: show the last good list, marked with its age.
-                    onchain_txs, onchain_as_of = list(_c['txs']), _c['at']
 
         total_onchain = round(sum(t['amount_myst'] for t in onchain_txs if t['direction'] == 'in'), 6)
 
@@ -13796,6 +13839,7 @@ def get_settle_history():
             'wallet_error':     wallet_error if wallet_balance_myst is None else None,
             'onchain_error':    onchain_error,
             'onchain_as_of':    onchain_as_of,
+            'wallet_refreshing': wallet_refreshing,
             'polygonscan_wallet': f'https://polygonscan.com/token/{MYST_CONTRACT}?a={beneficiary}' if beneficiary else None,
         }), 200
 

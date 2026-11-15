@@ -1283,11 +1283,15 @@ const UpdateWaiter = ({ onBack }) => {
 // records it; the next update (button or hourly auto-update) does the switch.
 // Declared at module scope: a component inside the main function's fleet branch
 // is invisible to the node view (the toggleAutoUpdate / nodeIsBehind trap).
-const BranchSelector = ({ localUrl, authHeaders, onChanged }) => {
+// v1.4.85: on the fleet page it also takes fleetTargets ([{id, label}]) and offers to
+// set the branch of every node at once, through the fleet proxy. Each node's own
+// route still checks the choice; the result is shown per node.
+const BranchSelector = ({ localUrl, authHeaders, onChanged, fleetTargets }) => {
   const [info, setInfo] = useState(null);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState(null);   // { ok, text }
+  const [fleetResults, setFleetResults] = useState(null);   // [{ label, ok, text }]
 
   const load = useCallback(() => {
     if (!localUrl) return;
@@ -1301,6 +1305,33 @@ const BranchSelector = ({ localUrl, authHeaders, onChanged }) => {
 
   if (!info) return null;
   const pending = info.wanted && info.wanted !== info.current;
+
+  const chooseForFleet = async (branch) => {
+    if (busy || !fleetTargets || fleetTargets.length === 0) return;
+    if (!confirm('Set the update branch of all ' + fleetTargets.length + ' fleet nodes to ' + branch + '? ' +
+      'Each node switches at its next update — the update button, or its hourly auto-update.' +
+      (branch === 'dev' ? ' dev is the test branch: fixes land there before a release.' : ''))) return;
+    setBusy(true);
+    setNote(null);
+    setFleetResults(null);
+    const results = await Promise.all(fleetTargets.map(async (n) => {
+      try {
+        const r = await fetch(`${localUrl}/fleet/node/${encodeURIComponent(n.id)}/proxy/toolkit/branch`, {
+          method: 'POST',
+          headers: { ...(authHeaders || {}), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ branch }),
+        });
+        const d = await r.json().catch(() => ({}));
+        return { label: n.label || n.id, ok: !!d.ok, text: d.ok ? d.message : (d.error || `HTTP ${r.status}`) };
+      } catch (e) {
+        return { label: n.label || n.id, ok: false, text: 'Request failed: ' + (e?.message || e) };
+      }
+    }));
+    setFleetResults(results);
+    setBusy(false);
+    load();
+    if (onChanged) onChanged();
+  };
 
   const choose = async (branch) => {
     if (busy) return;
@@ -1375,6 +1406,35 @@ const BranchSelector = ({ localUrl, authHeaders, onChanged }) => {
           )}
           {note && (
             <div className={`text-[11px] ${note.ok ? 'text-emerald-400' : 'text-red-400'}`}>{note.text}</div>
+          )}
+          {fleetTargets && fleetTargets.length > 0 && (
+            <div className="mt-2 pt-2 border-t border-slate-700/60">
+              <div className="text-xs font-semibold text-slate-300 mb-1">Every node in the fleet</div>
+              <div className="text-[11px] text-slate-400 mb-2">
+                Sets the branch on all {fleetTargets.length} nodes. Each switches at its next update.
+              </div>
+              <div className="flex gap-2 mb-1">
+                {(info.branches || []).map(b => (
+                  <button
+                    key={b}
+                    disabled={busy}
+                    onClick={() => chooseForFleet(b)}
+                    className="flex-1 text-xs rounded px-2 py-1.5 border text-slate-300 border-slate-600 hover:bg-slate-800 transition disabled:opacity-50"
+                  >
+                    {'all → ' + b}
+                  </button>
+                ))}
+              </div>
+              {fleetResults && (
+                <div className="space-y-0.5 max-h-40 overflow-y-auto">
+                  {fleetResults.map((r, i) => (
+                    <div key={i} className={`text-[11px] ${r.ok ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {(r.ok ? '✓ ' : '✗ ') + r.label + ': ' + r.text}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
         </div>
       )}
@@ -1452,6 +1512,9 @@ const MysteriumDashboard = () => {
   // v1.4.77: true only after GET /fleet/config returned a real list for the open dialog.
   const [fleetConfigLoaded, setFleetConfigLoaded] = useState(false);
   const [fleetRemoveError, setFleetRemoveError] = useState('');
+  // v1.4.85: adding this master's own node to the fleet in one step.
+  const [selfAddBusy, setSelfAddBusy] = useState(false);
+  const [selfAddNote, setSelfAddNote] = useState('');
   const [healthBusy, setHealthBusy] = useState(false);   // scan in progress
   const [fixResults, setFixResults] = useState({});       // subsystem name → actions[]
   const [fixStamp, setFixStamp] = useState({});           // subsystem name → Date of that fix
@@ -2141,6 +2204,27 @@ const MysteriumDashboard = () => {
     } catch { return false; }
   };
 
+  // v1.4.85: when this fleet master sees a newer toolkit version, ask every node
+  // that does not report it yet to check again now. Each node caches its own check
+  // for five minutes, so the "update available" tag used to appear card by card.
+  // Once per node and version; the node itself allows one forced check per 30 s.
+  // At top level, before the early returns below (React error #310).
+  const fleetRecheckedRef = useRef(new Set());
+  useEffect(() => {
+    const latest = updateInfo?.update_available ? updateInfo.latest : null;
+    const nodes = metrics?.fleet?.nodes || [];
+    if (!latest || nodes.length === 0 || !backendUrlRef.current) return;
+    nodes.forEach(n => {
+      const known = n.toolkit_update?.latest;
+      const key = n.id + '@' + latest;
+      if (!n.id || known === latest || fleetRecheckedRef.current.has(key)) return;
+      fleetRecheckedRef.current.add(key);
+      fetch(`${backendUrlRef.current}/fleet/node/${encodeURIComponent(n.id)}/proxy/api/update-check?refresh=1`,
+            { headers: authHeaderRef.current || {} })
+        .catch(e => console.warn('fleet update re-check failed:', n.id, e?.message || e));
+    });
+  }, [updateInfo, metrics?.fleet?.nodes]);
+
   // ============ UI: LOADING ============
   if (setupMode === 'loading') {
     return (
@@ -2688,11 +2772,12 @@ const MysteriumDashboard = () => {
                         {fleetUpdateBadge(updateInfo).text}
                       </span>
                     )}
-                    {/* v1.4.68: the fleet master's own install — remote nodes choose
-                        their branch on their own dashboard. */}
+                    {/* v1.4.68: the fleet master's own install. v1.4.85: its popup can
+                        also set the branch of every fleet node. */}
                     <BranchSelector
                       localUrl={backendUrlRef.current}
                       authHeaders={authHeaderRef.current}
+                      fleetTargets={fleetNodes.map(n => ({ id: n.id, label: n.label }))}
                       onChanged={() => {
                         fetch('/api/update-check').then(r => r.ok ? r.json() : null)
                           .then(d => { if (d) setUpdateInfo(d); })
@@ -3095,6 +3180,46 @@ const MysteriumDashboard = () => {
               <span>Nodes: <span className="text-slate-300">{metrics.fleet.fleet_nodes}</span></span>
             </div>
 
+            {metrics.fleet?.self_in_fleet === false && (
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-300 bg-slate-800/60 border border-slate-600/50 rounded px-3 py-2">
+                <span>This toolkit's own node is not in the fleet, so it has no card here.</span>
+                <button
+                  disabled={selfAddBusy}
+                  onClick={async () => {
+                    // The full saved list goes back with the new entry — the backend
+                    // refuses a save that would drop a configured node (v1.4.77).
+                    // self: true lets the backend fill in its own key and certificate.
+                    setSelfAddBusy(true);
+                    setSelfAddNote('');
+                    try {
+                      const cfgR = await fetch(`${backendUrlRef.current}/fleet/config`, { headers: authHeaderRef.current });
+                      if (!cfgR.ok) throw new Error('could not read the fleet list (HTTP ' + cfgR.status + ')');
+                      const cfg = await cfgR.json();
+                      if (!Array.isArray(cfg.nodes)) throw new Error('could not read the fleet list');
+                      const keep = cfg.nodes.map(n => { const c = { ...n }; delete c.has_api_key; delete c.api_key_hint; return c; });
+                      const id = keep.some(n => n.id === 'this-toolkit') ? 'this-toolkit-' + Date.now() : 'this-toolkit';
+                      const entry = { id, label: 'This toolkit', toolkit_url: window.location.origin, self: true };
+                      const r = await fetch(`${backendUrlRef.current}/fleet/config`, {
+                        method: 'POST',
+                        headers: { ...authHeaderRef.current, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ nodes: [...keep, entry] }),
+                      });
+                      const d = await r.json().catch(() => ({}));
+                      if (!r.ok || !d.success) throw new Error(d.error || ('HTTP ' + r.status));
+                      setTimeout(fetchMetrics, 1500);
+                    } catch (e) {
+                      setSelfAddNote('Could not add it: ' + (e?.message || e));
+                    } finally {
+                      setSelfAddBusy(false);
+                    }
+                  }}
+                  className="text-xs rounded px-2 py-1 border border-emerald-500/40 text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20 disabled:opacity-50"
+                >
+                  {selfAddBusy ? 'Adding…' : '⊕ Add this toolkit\'s own node'}
+                </button>
+                {selfAddNote && <span className="w-full text-red-300">{selfAddNote}</span>}
+              </div>
+            )}
             {fleetRemoveError && (
               <div className="mb-3 flex items-start justify-between gap-3 text-xs text-red-300 bg-red-950/40 border border-red-500/30 rounded px-3 py-2">
                 <span>✗ {fleetRemoveError}</span>
@@ -8372,6 +8497,17 @@ const SettlementHistoryCard = ({ backendUrl, authHeaders }) => {
     }
   }, [backendUrl]);
 
+  // v1.4.85: the backend answers at once and refreshes the Polygon data in the
+  // background. Ask again while it does — at most six times, four seconds apart —
+  // so the card fills in by itself instead of waiting for a click on ↻.
+  const walletPollsRef = useRef(0);
+  useEffect(() => {
+    if (!data?.wallet_refreshing) { walletPollsRef.current = 0; return; }
+    if (walletPollsRef.current >= 6) return;
+    const t = setTimeout(() => { walletPollsRef.current += 1; load(); }, 4000);
+    return () => clearTimeout(t);
+  }, [data]);
+
   // Prefer on-chain transactions (Polygonscan) over TequilAPI settlements.
   // Show only incoming transfers (actual settlements into the wallet); outgoing
   // transfers — e.g. moving MYST out to another wallet to top up a service — are not
@@ -8442,7 +8578,7 @@ const SettlementHistoryCard = ({ backendUrl, authHeaders }) => {
               : hasData
                 ? <div className="text-slate-500 text-xs">
                     unavailable
-                    <span className="block text-slate-700 text-[10px]">{etherscanWhy(data?.wallet_error)}</span>
+                    <span className="block text-slate-700 text-[10px]">{data?.wallet_refreshing ? 'loading Polygon data…' : etherscanWhy(data?.wallet_error)}</span>
                     {beneficiary && (
                       <a href={polyWalletUrl || `https://polygonscan.com/token/0x1379e8886a944d2d9d440b3d88df536aea08d9f3?a=${beneficiary}`}
                         target="_blank" rel="noreferrer"
@@ -8475,6 +8611,7 @@ const SettlementHistoryCard = ({ backendUrl, authHeaders }) => {
           <span>Total: <span className="text-emerald-300 font-semibold">{totalDisplay.toFixed(4)} MYST</span></span>
           <span className="text-slate-700">({txSource})</span>
           {onchainNote && <span className="text-amber-500/80 text-[10px]">{onchainNote}</span>}
+          {data?.wallet_refreshing && <span className="text-slate-600 text-[10px]">updating Polygon data…</span>}
         </div>
       )}
 
