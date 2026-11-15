@@ -4,6 +4,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.84
+
+- fix: **the On-Chain Wallet card counted settlements up to 20 times.** When Polygon data was not available, the card listed the node's settle history — paged until an empty page. The node never sends one: asked for a page past the last, it returns the last page again. The last page was collected up to 20 times; one node showed 867 settlements and 6068 MYST settled against 1813 MYST ever earned. Paging now stops at the node's own page count, and at a page that repeats.
+- fix: **the transaction list and Network Rewards no longer vanish when Etherscan hangs.** Etherscan, which supplies the Polygon data, sometimes does not answer for tens of seconds. The card then fell back to the settle history and the Network Rewards block disappeared until the next good answer. The last good list is now kept, reused for ten minutes, and shown with its time when Etherscan fails ("as of 15:20 — Etherscan not responding").
+- fix: **the wallet card names the real reason Polygon data is missing.** Every failure said "Polygonscan rate limited — add polygonscan_api_key to setup.json", also with a key configured. It now says whether Etherscan did not answer, hit its rate limit, failed, or whether the key is missing — and only the last asks for a key. The reason is logged as a warning instead of at debug level.
+- fix: **"View on Polygonscan" opens your MYST on Polygon.** The link used the MYST contract on Ethereum and opened an empty page.
+
 ## v1.4.83
 
 - fix: **Fedora and RHEL are offered the Docker install.** The recommended option there was a DNF install that ran Mysterium's install script — which supports Debian and Ubuntu only — and then asked for an `.rpm` link, but Mysterium publishes no RPM packages. It could only fail. Docker is the official route on these systems and is now the recommended option. The "Official script" option is shown only on Debian and Ubuntu based systems, and no longer calls itself universal.

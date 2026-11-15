@@ -8381,6 +8381,20 @@ const SettlementHistoryCard = ({ backendUrl, authHeaders }) => {
   const displayTxs    = hasOnchain ? onchainTxs : (data?.settlements || []);
   const totalDisplay  = hasOnchain ? (data?.total_onchain || 0) : (data?.total_settled || 0);
   const txSource      = hasOnchain ? 'on-chain (Polygonscan)' : 'TequilAPI settle history';
+  // v1.4.84: say why Polygon data is old or missing. Etherscan sometimes hangs; the
+  // backend then keeps the last good list and reports the reason.
+  const etherscanWhy  = (r) => r === 'no_key' ? 'add polygonscan_api_key to setup.json'
+    : r === 'rate_limit' ? 'Etherscan rate limit — try again in a few minutes'
+    : r === 'timeout' ? 'Etherscan not responding — try again later'
+    : 'Etherscan request failed — try again later';
+  const onchainAsOf   = data?.onchain_as_of
+    ? new Date(data.onchain_as_of * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : null;
+  const onchainNote   = data?.onchain_error
+    ? (hasOnchain && onchainAsOf
+        ? `as of ${onchainAsOf} — ${etherscanWhy(data.onchain_error)}`
+        : etherscanWhy(data.onchain_error))
+    : null;
   const txCount       = hasOnchain ? onchainTxs.length : (data?.settlements?.length || 0);
   const walletBalance = data?.wallet_balance;
   const beneficiary   = data?.beneficiary || '';
@@ -8428,9 +8442,9 @@ const SettlementHistoryCard = ({ backendUrl, authHeaders }) => {
               : hasData
                 ? <div className="text-slate-500 text-xs">
                     unavailable
-                    <span className="block text-slate-700 text-[10px]">Polygonscan rate limited — add polygonscan_api_key to setup.json</span>
+                    <span className="block text-slate-700 text-[10px]">{etherscanWhy(data?.wallet_error)}</span>
                     {beneficiary && (
-                      <a href={`https://polygonscan.com/token/0x4B0181102A0112A2ef11AbEE5563bb4a3176c9d7?a=${beneficiary}`}
+                      <a href={polyWalletUrl || `https://polygonscan.com/token/0x1379e8886a944d2d9d440b3d88df536aea08d9f3?a=${beneficiary}`}
                         target="_blank" rel="noreferrer"
                         className="text-cyan-600 hover:text-cyan-400 text-[10px]">View on Polygonscan ↗</a>
                     )}
@@ -8455,11 +8469,12 @@ const SettlementHistoryCard = ({ backendUrl, authHeaders }) => {
 
       {/* Total settled summary */}
       {data && (
-        <div className="flex items-center gap-3 text-xs text-slate-500 mb-3 pb-3 border-b border-slate-700/40">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 mb-3 pb-3 border-b border-slate-700/40">
           <span>{txCount} transactions</span>
           <span>·</span>
           <span>Total: <span className="text-emerald-300 font-semibold">{totalDisplay.toFixed(4)} MYST</span></span>
           <span className="text-slate-700">({txSource})</span>
+          {onchainNote && <span className="text-amber-500/80 text-[10px]">{onchainNote}</span>}
         </div>
       )}
 
@@ -8495,7 +8510,11 @@ const SettlementHistoryCard = ({ backendUrl, authHeaders }) => {
         <div className="space-y-1 max-h-64 overflow-y-auto pr-1">
           {displayTxs.length === 0 && (
             <div className="text-xs text-slate-600 text-center py-4">
-              {data ? 'No transactions found — add polygonscan_api_key to setup.json for on-chain data' : 'Loading…'}
+              {data
+                ? (data.onchain_error || data.wallet_error === 'no_key'
+                    ? `No transactions found — ${etherscanWhy(data.onchain_error || data.wallet_error)}`
+                    : 'No transactions found')
+                : 'Loading…'}
             </div>
           )}
           {displayTxs.length > 0 && !hasOnchain && displayTxs.every(t => (t.amount_myst || 0) === 0) && (
