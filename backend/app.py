@@ -1468,6 +1468,13 @@ class VpnDayCounter:
             return (cls._rx, cls._tx) if cls._date == today else None
 _tier_slow_last = 0
 TIER_SLOW_INTERVAL = 600    # 10 minutes — reduced API calls (was 300)
+# v1.4.86: a light liveness check between slow-tier runs. Node status came from the
+# slow tier only, so a stopped node stayed "Online" with frozen uptime and clients
+# — and /health said node_connected: true — for up to ten minutes. When the
+# node's answer changes (up <-> down) the slow tier runs at once.
+LIVE_CHECK_INTERVAL = 30
+_live_check_last = 0.0
+_live_last_ok = None
 _last_medium_unsettled = None   # last unsettled MYST seen on medium tier (settle detection)
 
 # ============ DATA RETENTION ============
@@ -1785,6 +1792,7 @@ def record_db_success(db_name):
 _local_node_id = ''         # Cached local node identity for DB writes (set by slow tier)
 _sysmetrics_backfilled = False  # v1.4.5: one-shot guard for SystemMetricsDB.backfill_node_id
 _identity_cache = {'address': '', 'ts': 0}  # Cache identity to reduce /identities API calls
+_registration_cache = {'identity': '', 'status': ''}  # v1.4.86: kept once Registered
 
 # Uptime tracking — persisted to disk so 30-day stats survive restarts
 UPTIME_FILE    = Path('config/uptime_log.json')   # list of epoch timestamps (online pings)
@@ -4649,6 +4657,17 @@ class MetricsCollector:
             return node_url
 
     @staticmethod
+    def node_alive():
+        """True when any configured node answers /healthcheck within 2 s (v1.4.86)."""
+        for url in NODE_API_URLS:
+            try:
+                if requests.get(f'{url}/healthcheck', timeout=2).status_code == 200:
+                    return True
+            except Exception:
+                pass
+        return False
+
+    @staticmethod
     def get_node_status():
         """Get node status from TequilAPI — checks all configured nodes"""
         try:
@@ -4754,8 +4773,30 @@ class MetricsCollector:
                 except Exception:
                     pass
 
+                # v1.4.86: the identity's registration status. The quality card said
+                # "Start VPN" for every node missing from discovery; on a fresh node
+                # the real reason is that the onboarding is not done. Asked on each
+                # slow-tier run until the answer is Registered, then kept.
+                registration_status = ''
+                if identity_addr:
+                    global _registration_cache
+                    if (_registration_cache['identity'] == identity_addr
+                            and _registration_cache['status'] == 'Registered'):
+                        registration_status = 'Registered'
+                    else:
+                        try:
+                            primary_url = primary.get('url', NODE_API_URL)
+                            reg = requests.get(f'{primary_url}/identities/{identity_addr}',
+                                               headers=headers, timeout=3)
+                            if reg.status_code == 200:
+                                registration_status = reg.json().get('registration_status', '') or ''
+                                _registration_cache = {'identity': identity_addr, 'status': registration_status}
+                        except Exception as _reg_e:
+                            logger.debug(f'Registration status lookup failed: {_reg_e}')
+
                 return {
                     'status': 'online',
+                    'registration_status': registration_status,
                     'uptime': primary.get('uptime', '0s'),
                     'version': primary.get('version', 'unknown'),
                     'nat_type': nat_type,
@@ -5019,6 +5060,10 @@ class MetricsCollector:
             'channel_address': identity_data.get('channel_address', ''),
             'channels': identity_data.get('channels', []),
             'fee_quote': identity_data.get('fee_quote'),
+            # v1.4.86: did the identity API answer? The card said "Identity API
+            # unavailable" whenever unsettled and session tokens were 0 — which is
+            # simply a new node.
+            'identity_reachable': bool(identity_ok),
         }
 
     # VPN interface name patterns (myst0..myst14+, wg0..wgN, tun0..tunN)
@@ -7420,6 +7465,17 @@ class MetricsCollector:
             except Exception as e:
                 logger.warning(f"Medium tier error: {e}")
 
+        # ---- LIVENESS (every 30s) — one /healthcheck, forces the slow tier on a change ----
+        global _live_check_last, _live_last_ok
+        if now - _live_check_last >= LIVE_CHECK_INTERVAL:
+            _live_check_last = now
+            _alive = MetricsCollector.node_alive()
+            if _live_last_ok is not None and _alive != _live_last_ok:
+                logger.info(f"Node {'came back' if _alive else 'stopped answering'} — refreshing node status now")
+                _tier_slow_last = 0
+                _tier_medium_last = 0
+            _live_last_ok = _alive
+
         # ---- SLOW TIER (every 5min) — blockchain/identity ----
         if now - _tier_slow_last >= TIER_SLOW_INTERVAL or not _tier_slow_cache:
             try:
@@ -8596,8 +8652,11 @@ def _fleet_nodes_for_ui(nodes):
         slim = {k: n.get(k) for k in keep}
         slim['earnings'] = {'daily': e.get('daily'), 'unsettled': e.get('unsettled')}
         slim['sessions'] = {'active': s.get('active')}
+        # v1.4.86: the quality score too, so a drop shows on the fleet page.
         slim['node_quality'] = {'uptime_24h_local': q.get('uptime_24h_local'),
-                                'uptime_24h_net': q.get('uptime_24h_net')}
+                                'uptime_24h_net': q.get('uptime_24h_net'),
+                                'quality_score': q.get('quality_score'),
+                                'monitoring_failed': q.get('monitoring_failed')}
         out.append(slim)
     return out
 

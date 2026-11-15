@@ -4,6 +4,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 Releases before v1.4.0 are in [CHANGELOG-archive.md](CHANGELOG-archive.md).
 
+## v1.4.86
+
+- fix: **a stopped node shows as offline within 30 seconds.** Node status was read every ten minutes, so after `systemctl stop` the dashboard kept showing "Online" with frozen uptime and clients, and `/health` kept saying `node_connected: true`, for up to ten minutes. The toolkit now asks the node's `/healthcheck` every 30 seconds and reads the full status again as soon as the answer changes — when the node stops, and when it comes back.
+- new: **the quality score on every fleet card.** Each card shows the node's Discovery quality score out of 3 ("Q: 2.80"), amber below 2 and red below 1 or when monitoring failed. A drop like the one of 11 November, when three home nodes fell from about 3 to 0.11, now shows on the fleet page.
+- fix: **a new node is told to finish its onboarding, not to start its VPN.** The Node Quality card said "Start VPN" for every node missing from Mysterium's discovery network. On a new node the reason is that its identity is not registered yet; the card now shows the registration status and points to the onboarding in NodeUI. The dVPN advice remains for registered nodes.
+- fix: **"Identity API unavailable" only when it is.** The warning appeared whenever a node had no unsettled earnings and no session tokens — which is every new node — and went away with its first paid session. It now appears only when the node's identity API did not answer; a new node shows "No earnings yet".
+
 ## v1.4.85
 
 - fix: **the wallet card opens at once and fills in by itself.** It waited for Etherscan while the page loaded — up to ten seconds for the balance and ten for the transfers — and a failed call was not remembered, so every page load during an Etherscan hang waited again. The card also loaded only once. Etherscan is now asked in the background: the card gets the last known data immediately, shows "updating Polygon data…" while a refresh runs and asks again by itself. After a failed call the next attempt waits three minutes.

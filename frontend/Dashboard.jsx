@@ -3293,8 +3293,8 @@ const MysteriumDashboard = () => {
                         <span className="text-emerald-300 font-semibold">{(Number(n.earnings?.unsettled)||0).toFixed(4)} MYST</span>
                         {n.sessions?.active > 0 && <span className="text-slate-400">{n.sessions.active} sessions</span>}
                       </div>
-                      {/* Today earnings + uptime + efficiency */}
-                      <div className="flex gap-3 text-[10px] mt-0.5">
+                      {/* Today earnings + uptime + efficiency + quality */}
+                      <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] mt-0.5">
                         {n.earnings?.daily != null && (
                           <span className="text-cyan-400/80">
                             Today: <span className="font-semibold">{Number(Number(n.earnings?.daily||0)).toFixed(4)}</span> MYST
@@ -3319,6 +3319,19 @@ const MysteriumDashboard = () => {
                                   {' \u2192 ' + (eff || 0).toFixed(4) + '/day at 100%'}
                                 </span>
                               )}
+                            </span>
+                          );
+                        })()}
+                        {/* v1.4.86: the Discovery quality score, out of 3. On 11 Nov the
+                            home nodes fell from ~3 to 0.11 and the fleet page did not show it. */}
+                        {(n.node_quality?.quality_score != null || n.node_quality?.monitoring_failed) && (() => {
+                          const qs = n.node_quality?.quality_score;
+                          const qFailed = n.node_quality?.monitoring_failed === true;
+                          const qcls = qFailed || (qs != null && qs < 1) ? 'text-red-400/80'
+                            : qs != null && qs < 2 ? 'text-amber-400/80' : 'text-emerald-400/70';
+                          return (
+                            <span className={qcls} title="Mysterium Discovery quality score, 0–3">
+                              {'Q: ' + (qs != null ? Number(qs).toFixed(2) : '—') + (qFailed ? ' · monitoring failed' : '')}
                             </span>
                           );
                         })()}
@@ -7305,10 +7318,20 @@ const NodeQualityCard = ({ nodeQuality: q, nodeStatus, backendUrl, authHeaders, 
       {isDiscoveryOffline && (
         <div className="mb-3 px-3 py-2.5 rounded text-xs border bg-amber-500/10 border-amber-500/30 text-amber-300 flex items-start gap-2">
           <span className="text-amber-400 mt-0.5">⚠</span>
-          <span>
-            <strong>Discovery monitoring unavailable</strong> — the node is not registered in the Mysterium discovery network.
-            This typically happens when the <strong>VPN (dvpn)</strong> service is stopped. Start VPN to restore quality tracking and discovery visibility.
-          </span>
+          {/* v1.4.86: a fresh node is missing from discovery because its identity is
+              not registered yet — "start VPN" sent its operator the wrong way. */}
+          {nodeStatus?.registration_status && nodeStatus.registration_status !== 'Registered' ? (
+            <span>
+              <strong>Identity not registered yet</strong> ({nodeStatus.registration_status}) — the node joins the
+              Mysterium network once its identity is registered. Finish the onboarding in NodeUI (port 4449 on the
+              node's machine); registration can take a few minutes after that.
+            </span>
+          ) : (
+            <span>
+              <strong>Discovery monitoring unavailable</strong> — the node is not listed in the Mysterium discovery network.
+              This typically happens when the <strong>VPN (dvpn)</strong> service is stopped. Start VPN to restore quality tracking and discovery visibility.
+            </span>
+          )}
         </div>
       )}
 
@@ -8417,9 +8440,19 @@ const EarningsCard = ({ earnings, backendUrl, authHeaders }) => {
           Daily/weekly/monthly paused until API recovers. No snapshot recorded during this period.
         </div>
       )}
-      {!isRateLimited && safeEarnings.unsettled <= 0 && safeEarnings.session_total <= 0 && (
+      {/* v1.4.86: only when the identity API really did not answer. Zero unsettled and
+          zero session tokens is what a new node looks like. Older backends do not
+          send identity_reachable: keep their behaviour. */}
+      {!isRateLimited && (earnings?.identity_reachable === false
+        || (earnings?.identity_reachable === undefined && safeEarnings.unsettled <= 0 && safeEarnings.session_total <= 0)) && (
         <div className="mb-2 p-2 bg-amber-500/10 border border-amber-500/30 rounded text-xs text-amber-300">
           ⚠ Identity API unavailable. Check node connectivity.
+        </div>
+      )}
+      {!isRateLimited && earnings?.identity_reachable === true && safeEarnings.unsettled <= 0
+        && safeEarnings.session_total <= 0 && Number(safeEarnings.lifetime || 0) <= 0 && (
+        <div className="mb-2 p-2 bg-slate-700/30 border border-slate-600/40 rounded text-xs text-slate-400">
+          No earnings yet — normal for a new node. They appear after its first paid sessions.
         </div>
       )}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-4 text-xs mb-2 pb-3 border-b border-slate-600/40">
